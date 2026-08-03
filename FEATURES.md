@@ -1,7 +1,15 @@
-# Dramatic Shape Voxel Mod
+# Terrarium — the manual
+
+Every row, every control, every rule. See [README.md](README.md) for what this
+is, where it came from and the legal position; this file is the reference.
+
+> Terrarium is a fork of the [Dramatic Shape Voxel
+> Mod](https://github.com/DramaticShape/DramaticShapeVoxelMod) by Dramatic
+> Shape. Most of what is described below is his work — this document grew out
+> of his README and keeps its shape.
 
 A mod for the [Pokémon Gen 1 Recompilation
-Project](https://github.com/bryanthaboi/pokemon-gen1-recomp-project).
+Project](https://github.com/bryanthaboi/gen1recomp).
 
 The overworld as a 3D diorama. Terrain is extruded into real geometry,
 occlusion comes from a depth buffer rather than a y-sort, characters stand

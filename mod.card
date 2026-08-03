@@ -1,9 +1,21 @@
 -- Sharing metadata (25-community-and-ecosystem.md 3.2).  Read by tooling
 -- and the manager detail pane; never by the loader's merge.
 return {
-  summary = "The overworld as a 3D diorama, and battles fought on it: real occlusion, tilt-shift, over-the-shoulder fights -- plus screen-space AO, water reflections and light shafts, and wild Pokemon standing in the grass instead of a dice roll on every step.",
-  author = "DramaticShape",
-  contact = "https://github.com/DramaticShape/DRAMATIC_SHAPE",
+  summary = "Terrarium: a little world under glass, with its own weather and its own hours. The overworld as a 3D diorama and battles fought on it -- real occlusion, tilt-shift, over-the-shoulder fights -- plus a six-phase day/night cycle with a painted sky and stars, rain and snow that stay on the ground, and wild Pokemon standing in the grass instead of a dice roll on every step. A fork of DramaticShape's Dramatic Shape Voxel Mod, tuned for low-end hardware.",
+  -- Attribution, and it matters more since the fork was renamed: the diorama,
+  -- the battles and the shape of this are DramaticShape's work. `author` names
+  -- who maintains THIS tree; `upstream` names whose mod it is a fork of, and
+  -- the two are not the same person.
+  --
+  -- TODO(breno): `contact` still points at the ORIGINAL repository, because
+  -- this fork has not been published yet. Replace it with your own URL the
+  -- moment you create the GitHub repo -- leaving it as-is sends anyone who
+  -- clicks it in the mod manager to somebody else's project to report your
+  -- bugs. (The old value here, .../DRAMATIC_SHAPE, was a dead link: the real
+  -- upstream repository is .../DramaticShapeVoxelMod.)
+  author = "breno -- a fork of DramaticShape's Dramatic Shape Voxel Mod",
+  upstream = "https://github.com/DramaticShape/DramaticShapeVoxelMod",
+  contact = "https://github.com/DramaticShape/DramaticShapeVoxelMod",
   tags = { "graphics", "3d", "voxel", "render-pipeline", "presentation",
            "battle", "lighting", "post-processing", "encounters",
            "gameplay" },

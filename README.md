@@ -1,13 +1,29 @@
-# Dramatic Shape Voxel Mod — mobile fork
+# Terrarium
 
-A fork of the **[Dramatic Shape Voxel Mod](https://github.com/DramaticShape/DramaticShapeVoxelMod)**
-for the [Pokémon Gen 1 Recompilation Project](https://github.com/bryanthaboi/gen1recomp),
-tuned to run on hardware the original build could not, and grown from there.
+A little world under glass: it has its own weather, its own hours, and things
+living in it.
 
-The overworld becomes a 3D diorama: terrain extruded into real geometry, cast
-shadows, a day/night cycle with a painted sky, weather that leaves puddles and
-snow on the ground, and wild Pokémon standing in the grass where you can see
-them.
+> ### This is a fork, and the original is not mine
+>
+> **Terrarium is a fork of the [Dramatic Shape Voxel Mod](https://github.com/DramaticShape/DramaticShapeVoxelMod)
+> by [Dramatic Shape](https://github.com/DramaticShape).** The name is
+> different because the fork grew its own set of features, **not** because it
+> is a separate work — the diorama, the depth-buffered occlusion, the shadow
+> map, the tilt-shift pass and the over-the-shoulder battles are all his, and
+> without them there is nothing here to fork.
+>
+> **If you are choosing between them, go and look at his first:**
+> https://github.com/DramaticShape/DramaticShapeVoxelMod
+>
+> It keeps the mod id `DRAMATIC_SHAPE`, so it **replaces** the original rather
+> than sitting beside it. Do not install both.
+
+A mod for the [Pokémon Gen 1 Recompilation
+Project](https://github.com/bryanthaboi/gen1recomp). The overworld becomes a
+3D diorama: terrain extruded into real geometry, cast shadows that stretch
+through the afternoon, a six-phase day/night cycle with a painted sky and
+stars, weather that leaves puddles and snow on the ground, and wild Pokémon
+standing in the grass where you can see them.
 
 > **This is a fan-made modification. It is not a game, and it contains no part
 > of any Nintendo product.** Please read [Legal](#legal) before anything else.
@@ -81,7 +97,7 @@ instead — it is excellent, and this fork exists because of it.
 
 ---
 
-## What this fork adds to the original
+## What Terrarium adds to the original
 
 The base is Dramatic Shape's **1.3.0**: the voxel diorama, the depth-buffered
 occlusion, the leaning sprite slabs, the shadow map, the tilt-shift pass and
@@ -177,8 +193,16 @@ The most recent work went here, and it is measured rather than eyeballed:
 Drop the folder into your Gen1Recomp `mods/` directory, or import the packaged
 zip through the launcher's mods tab.
 
-The mod id is `DRAMATIC_SHAPE` — the same as the original — so **it replaces
-the original rather than sitting beside it. Do not install both.**
+**Name the installed folder `DRAMATIC_SHAPE`, not `Terrarium`.** The repository
+is called Terrarium; the mod it installs is still id `DRAMATIC_SHAPE`, and the
+probes in `tests/` are launched by paths of the form
+`mods/DRAMATIC_SHAPE/tests/<probe>.lua`. Keeping the folder on the id is the
+one place the old name still has to survive.
+
+That shared id is also why **it replaces the original rather than sitting
+beside it. Do not install both** — they claim the same hotkeys and register
+the same render pipelines, and the id makes them mutually exclusive by
+construction instead of letting them fight.
 
 Every feature is a row on the OPTIONS menu with an OFF. If something is too
 slow, too bright or too much, turn that row off; nothing here is load-bearing

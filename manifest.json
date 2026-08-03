@@ -1,6 +1,6 @@
 {
   "id": "DRAMATIC_SHAPE",
-  "name": "Dramatic Shape Voxel Mod (mobile)",
+  "name": "Terrarium (a Dramatic Shape Voxel Mod fork)",
   "version": "1.16.0-mobile.rain",
   "api": 2,
   "entry": "main.lua",
