@@ -1,0 +1,99 @@
+# ------------------------------------------------------------------ generated
+
+# Bytecode from the authoring tools in tools/ and
+# assets/docs/buidling_to_voxel/ -- generated on whatever machine ran them.
+__pycache__/
+*.py[cod]
+
+# agent worktrees and local scratch
+.claude/
+
+# Private working notes: briefs written to an assistant, task prompts, local
+# to-do. These carry absolute paths from the authoring machine (and with them
+# a username), and they are notes to one person rather than documentation for
+# anybody else. Kept on disk, kept out of the repository.
+PROMPT_*.md
+NOTES.md
+TODO.local.md
+
+# graphify's own output: a derived knowledge graph of this repo, rebuilt with
+# `graphify . --code-only` whenever it is wanted. Nothing in it is source.
+graphify-out/
+
+
+# ------------------------------------------------ GAME DATA -- NEVER COMMIT
+#
+# This mod contains no Pokemon game data and must never start containing any.
+# Gen1Recomp reads a ROM the player dumps from their own cartridge; this
+# repository is Lua, generated art and documentation, and nothing else.
+#
+# A ROM PATCH IS NOT SAFE EITHER. A .bps / .ips / .ups file is a derivative of
+# the copyrighted ROM it patches -- it is the diff of someone else's game --
+# and publishing one is the most reliable way there is to get a fan project
+# taken down. Patches used while working stay on the working machine.
+#
+# If you ever need to hand one to somebody, hand them a link to where its
+# author published it, never the file.
+*.gb
+*.gbc
+*.gba
+*.nes
+*.sfc
+*.smc
+*.nds
+*.rom
+*.bin
+*.bps
+*.ips
+*.ups
+*.xdelta
+assets/ground/source/*.zip
+
+# Save data: a player's own progress, and on some platforms their name.
+*.sav
+*.srm
+*.sgm
+*.rtc
+*.state
+*.state[0-9]
+saves/
+save/
+
+
+# --------------------------------------------------------------- probe output
+#
+# The probes write to whatever DS_PROBE_DIR points at. When that is pointed
+# inside the tree by accident, this keeps the screenshots and logs out of the
+# history -- they are evidence for one run, not source.
+*.log
+probe-out/
+probe_out/
+tests/out/
+
+# The legacy probe harness twenty-one dead probes used to load. It does not
+# exist in this tree or in the build; listed so a stray copy is never
+# committed as though it were the real one.
+tests/drivers/
+
+
+# ---------------------------------------------------------- heavy working art
+#
+# The generator's contact sheets the ground strips are recut from -- about
+# nine megabytes of paper (see assets/ground/README.md). Already kept out of
+# the packaged mod by .modkitignore, so this only matches that policy.
+#
+# DELETE THE LINE BELOW if you would rather a fresh clone be able to recut the
+# ground art without asking you for the sheets.
+assets/ground/source/*.png
+
+
+# ------------------------------------------------------------------- OS junk
+Thumbs.db
+ehthumbs.db
+desktop.ini
+.DS_Store
+*~
+*.bak
+*.orig
+*.tmp
+*.swp

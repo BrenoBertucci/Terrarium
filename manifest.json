@@ -1,0 +1,20 @@
+{
+  "id": "DRAMATIC_SHAPE",
+  "name": "Dramatic Shape Voxel Mod (mobile)",
+  "version": "1.16.0-mobile.rain",
+  "api": 2,
+  "entry": "main.lua",
+  "profile": "content",
+  "category": "GRAPHICS",
+  "game_version": "0.0.0-dev || >=0.1.37 <2.0.0",
+  "priority": 100,
+  "dependencies": [],
+  "optional_dependencies": [],
+  "conflicts": [],
+  "permissions": [
+    "engine_internals",
+    "filesystem"
+  ],
+  "affects_link": false,
+  "description": "A full 3D diorama overworld: extruded terrain, depth-buffered occlusion, voxel characters and a tilt-shift miniature pass -- and battles fought on the map itself, shot over the shoulder at the nearest clear ground with a slow parallax drift and a depth-of-field pass. Plus a screen-space RTX row: ambient occlusion in the corners the sky cannot reach, real reflections marched across the water's own swell, and light shafts toward the sun -- every one of them a ray walked through the depth buffer the 3D pass already filled. And wild Pokemon you can SEE: the map's own encounter table decides who is standing in the grass right now, wandering their own patch in their own art, and the fight starts when you walk into one -- so a route can be picked through, hunted, or crossed without a single battle. Plus ambient life on the diorama -- butterflies and ground birds by day, dragonflies over the water, fireflies through the night, leaves on the wind, civilian NPCs that glance as you pass -- and Pokemon loose in the streets of every town: most out for a stroll, and the one that STARES wants to battle at your own lead's level. Plus an AUTO-FARM row: pick a party slot and a bot trains that Pokemon, hunting the grass, always picking the strongest move against what it faces, and answering the learn-a-move prompt by value so a good move is never thrown away for a useless one. Registers two render pipelines and claims hotkeys 3, 5, 6, 7, 8 and 9 -- 3 and 5 displace the engine's TILT and GBC FX keys, both still reachable on the OPTIONS menu. Plus an ECOLOGY row: Gen 2's time-of-day encounters built out of Gen 1's one table -- the nocturnal half of the dex comes up after dark and the birds and caterpillars by day, by weighting the map's own ten slot buckets rather than by adding or removing anything, and rain brings water Pokemon up onto the bank out of the map's own water roster. Plus a GROUND row for what the weather leaves behind: puddles that gather through a shower and are still there ten minutes later wearing the sky's own colour, snow settling in drifts, and footprints behind everybody walking on it. Bakes one 16x16 overworld sheet per species it meets into the engine's own derived-asset folder, from the front pic the game already ships. Plus a SHELTER row: when a shower comes down hard the town's wandering civilians walk to the nearest door and stand in it until it passes, and the street Pokemon go inside and are gone until the sky clears -- trainers, shopkeepers and anybody a script is talking to stay exactly where the map put them. And a ROUTINE row: civilians look around, turn toward the sign or door they are standing beside, and stand in pairs facing each other having a conversation, instead of facing one way until the player arrives."
+}

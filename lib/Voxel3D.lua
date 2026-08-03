@@ -1,0 +1,1832 @@
+-- Voxel world mode: the 3D pass -- shader, depth buffer and camera.
+--
+-- World space is world PIXELS, so every coordinate the 2D paths already
+-- compute drops straight in with no unit conversion:
+--
+--   +X  map east   (world-pixel x)
+--   +Y  up         (0 is the ground plane)
+--   +Z  map south  (world-pixel y)
+--
+-- A character at rest faces +Z, i.e. toward a camera parked to the south,
+-- which is what "facing down" means in the 2D game -- and a character card
+-- is drawn in exactly that pose, leaning back rather than yawing.
+--
+-- The camera orbits the view centre at Voxel.angle: 0 is straight down
+-- (what the flat 2D view already is) and 50 degrees leans toward the
+-- horizon. Distance and field of view are tied to Voxel.FOCAL, which is the
+-- same constant Tilt projects with, so a given angle frames the world
+-- identically in both modes -- switching between them changes the geometry,
+-- not the framing.
+--
+-- Every GPU object is pcall-guarded and `available()` reports the result:
+-- headless test runs and any driver without depth-canvas support fall back
+-- to the existing tilt/flat paths rather than erroring.
+
+-- the mod namespace (see main.lua): V.require loads a sibling module
+local V = ...
+
+local Mat4 = V.require("Mat4")
+local Voxel = V.require("VoxelState")
+local ShadowMap = V.require("ShadowMap")
+local VoxelGrid = V.require("VoxelGrid")
+local WorldCurve = V.require("WorldCurve")
+local Sky = V.require("Sky")
+local DayNight = V.require("DayNight")
+local GlassMask = V.require("GlassMask")
+local Quality = V.require("Quality")
+local Wind = V.require("Wind")
+local Water = V.require("Water")
+local Light = V.require("Light")
+-- Last, and it has to be: RayFX pulls in Sky and DayNight, and DayNight
+-- reaches back here for the shadow rig. Everything it wants is already
+-- memoised by the time this line runs, so the cycle is never entered.
+local RayFX = V.require("RayFX")
+
+local Voxel3D = {}
+
+-- Vertex format shared by terrain chunks and character models: a position,
+-- the map-canvas / sprite-sheet pixel it samples, and a per-vertex darken
+-- factor that gives a face its angle to the sun without a normal or a
+-- light uniform. Cast shadows are a separate thing entirely -- see
+-- ShadowMap, which the pixel shader below samples on top of this.
+Voxel3D.FORMAT = {
+  { "VertexPosition", "float", 3 },
+  { "VertexTexCoord", "float", 2 },
+  { "VertexShade", "float", 1 },
+}
+
+-- Face shading by direction id: top faces stay
+-- full brightness, sides step down so an extruded block reads as solid
+-- instead of a flat sticker, and the faces turned away from the sun are
+-- darkest. The sun hangs in the SOUTHEAST (see ShadowMap), so south and
+-- east are the lit flanks and north and west the shaded ones -- east and
+-- west used to share one value back when the sun sat due northwest and the
+-- two were symmetric about it.
+--
+-- This is still worth baking even now that the shadow pass throws real
+-- shadows: a face turned away from the sun is dark because of its ANGLE,
+-- which no shadow map measures, and the two compound the way they should
+-- -- an away-facing wall that is also occluded goes darker still.
+Voxel3D.FACE_SHADE = {
+  [1] = 0.84,   -- +X east (toward the sun)
+  [2] = 0.72,   -- -X west (away)
+  [3] = 1.00,   -- +Y up
+  [4] = 0.55,   -- -Y down
+  [5] = 0.90,   -- +Z south (toward the camera, and toward the sun)
+  [6] = 0.68,   -- -Z north (away)
+}
+
+local SHADER = [[
+  varying float vShade;       // how dark this face draws, always positive
+  // 1 on a face that points at the sky, 0 on every other one. It rides in
+  // the SIGN of VertexShade rather than in an attribute of its own: the
+  // meshers negate the shade of an up-facing quad and this splits the two
+  // apart again, so an honest face normal costs no extra float per vertex on
+  // a route that uploads twenty megabytes of them. Every corner of a quad
+  // carries the same sign, so this interpolates flat across the face.
+  varying float vUp;
+  // World pixels, for patterns that must sit STILL on a surface while the
+  // camera moves. Same precision note as vGrid below, and for the same
+  // reason: what reads this wants the whole-number part of a coordinate that
+  // runs to a few thousand across a route, which a mediump varying would
+  // quantise away into bands.
+  varying LOVE_HIGHP_OR_MEDIUMP vec3 vWorld;
+  varying vec3 vSun;          // this fragment's place in the sun's view
+  varying float vWater;       // 1 on the water surface, 0 everywhere else
+  varying vec3 vWave;         // and the normal of the swell under it
+  varying float vSwellH;      // the swell's own height here, -1 .. 1
+#ifdef VOXEL_GRID
+  // model space, one unit per voxel -- see VoxelGrid. Precision matters
+  // here in a way it does not for a colour: the seam is the FRACTIONAL
+  // part of a coordinate that runs to a few thousand across a big route,
+  // so a mediump varying would quantise the fraction away entirely.
+  varying LOVE_HIGHP_OR_MEDIUMP vec3 vGrid;
+#endif
+#ifdef VERTEX
+  uniform mat4 vp;
+  uniform mat4 model;
+  uniform mat4 sunModel;      // where the SUN sees this vertex (see below)
+  uniform mat4 sunVP;         // world -> the shadow map's unit cube
+  uniform vec3 eye;
+  uniform float pull;
+  uniform vec3 curve;         // xy = the focus in world XZ, z = k; 0 = off
+  uniform float sway;         // wind reach at the tip, world px; 0 = planted
+  uniform vec2 windDir;       // its bearing in world XZ, unit length
+  uniform vec2 windFreq;      // phase gained per world pixel, per axis
+  uniform float windPhase;    // advanced by the clock
+  uniform float swell;        // water's rise at the crest, world px; 0 = flat
+  uniform vec2 swellA;        // two crossing wave trains, as phase per pixel
+  uniform vec2 swellB;
+  uniform float swellPhase;
+  attribute float VertexShade;
+  vec4 position(mat4 transform_projection, vec4 vertex_position) {
+    // magnitude is the shading, sign is the face normal's Y (see vUp). A
+    // shade is a product of positive factors with a floor well above zero,
+    // so zero is not a value any mesher can emit and the split is exact.
+    vShade = abs(VertexShade);
+    vUp = step(VertexShade, 0.0);
+#ifdef VOXEL_GRID
+    // MODEL space, deliberately: every mesh here is built a unit per
+    // voxel in its own frame, so the seams ride the model however it is
+    // posed rather than the world's grid sliding across a leaning sprite
+    vGrid = vertex_position.xyz;
+#endif
+    vec4 w = model * vertex_position;
+    // Taken here, before the wind, the swell, the curve and the camera-ward
+    // pull: those are all things done to where a vertex is DRAWN, and this is
+    // for where the surface is. A dither anchored to a bending grass blade
+    // would swim with it.
+    vWorld = w.xyz;
+    // WIND, and only on what is asked to take it (see Voxel3D.draw's
+    // `sway`; everything else passes zero and this costs one compare).
+    //
+    // The bend factor is the vertex's OWN y, which for a grass tuft is its
+    // height above the base of that tuft -- Structures builds the template
+    // at y = 0 and ChunkMesher offsets only X and Z when it stamps one into
+    // the world. So the base is planted and the tip gives, out of a number
+    // the mesh already carries, with no attribute added and nothing to look
+    // up. Squared, because a stem does not bend linearly: it holds near the
+    // root and folds near the top.
+    //
+    // The phase comes from the vertex's own WORLD position, which is the
+    // thing that makes this weather rather than a metronome -- every tuft
+    // on a route reaches its crest at a different moment, so the gust
+    // arrives at one edge of a meadow, crosses it, and leaves. A tile
+    // animation cannot do that at any price: it is one picture, shared by
+    // every cell drawing that tile, so they can only ever move as one.
+    //
+    // Two harmonics rather than one so the crest is not a clean sine
+    // rolling past -- real gusts have a shove in them.
+    if (sway > 0.0) {
+      float bend = clamp(vertex_position.y * 0.0625, 0.0, 1.0);
+      bend *= bend;
+      float p = dot(w.xz, windFreq) - windPhase;
+      w.xz += windDir * (sway * bend * (sin(p) + 0.35 * sin(p * 2.3 + 1.7)));
+    }
+    // THE WATER SURFACE, which is the only geometry in this world that
+    // stands below zero -- it is recessed to -2 so the shoreline shows a
+    // lip, and every other class sits at zero or above (see Water.lua).
+    // So the test is a compare on a number the mesh already carries, and
+    // costs no attribute and no memory.
+    //
+    // The displacement is a function of world XZ ALONE, which is what
+    // keeps the surface watertight: two quads meeting at a shared corner
+    // are moved by the same amount, so the mesh never opens a seam even
+    // though it is unindexed and they do not share a vertex.
+    //
+    // The normal comes free with it. The height is two sines, so its
+    // gradient is two cosines -- the exact analytic slope, not a
+    // difference of samples, and it is what the sparkle below reflects
+    // the sun off.
+    vWater = 0.0;
+    vWave = vec3(0.0, 1.0, 0.0);
+    vSwellH = 0.0;
+    if (swell > 0.0 && vertex_position.y < -1.0) {
+      vWater = 1.0;
+      float a = dot(w.xz, swellA) - swellPhase;
+      float b = dot(w.xz, swellB) + swellPhase * 0.7;
+      float h = sin(a) * 0.55 + sin(b) * 0.45;
+      w.y += swell * h;
+      // carried down raw (-1..1): the fragment cuts its cel bands from it,
+      // and a normalized height stays the same bands at every SWELL rung
+      vSwellH = h;
+      vec2 g = swellA * (cos(a) * 0.55) + swellB * (cos(b) * 0.45);
+      vWave = normalize(vec3(-g.x * swell, 1.0, -g.y * swell));
+    }
+    // The shadow lookup runs off `sunModel`, not `model`. For terrain the
+    // two are the same matrix, but a character is drawn as a slab LEANING
+    // back by the camera's pitch -- a trick played on the viewer, which
+    // the sun never saw: it lit the upright card. Looking up with the
+    // leaned position asks whether the sun reached a place the figure is
+    // not, and since the lean tips the body north and shadows now fall
+    // north, every sprite's own card fell across its front. Looking up
+    // with the card's position asks the question the sun actually
+    // answered. (The pull below is excluded for the same reason: it is a
+    // depth trick aimed at the camera's own buffer.)
+    vSun = (sunVP * (sunModel * vertex_position)).xyz;
+    // The curved world (see WorldCurve): drop every vertex by the square
+    // of how far its column stands from the camera's focus. Applied AFTER
+    // the shadow lookup above and clear of the wireframe's model space, so
+    // both are worked out on the flat world and the bend carries them
+    // along -- which is why neither has to know this exists. Along Y only,
+    // so a column moves as one piece: the world tips away and the
+    // buildings standing on it stay upright.
+    if (curve.z > 0.0) {
+      vec2 cd = w.xz - curve.xy;
+      w.y -= dot(cd, cd) * curve.z;
+    }
+    // camera-ward pull: move the vertex along ITS OWN ray to the eye.
+    // This is a pure depth bias -- the projection of a point moved along
+    // its eye ray is bit-identical, so there is no screen drift at all.
+    // (An earlier CPU version translated along the central view axis,
+    // which preserved only the screen centre and made off-centre sprites
+    // and grass swim against the ground while the camera scrolled.)
+    if (pull > 0.0) {
+      w.xyz += normalize(eye - w.xyz) * pull;
+    }
+    return vp * w;
+  }
+#endif
+#ifdef PIXEL
+  uniform Image sunMap;
+  uniform float sunDark;      // >0 = there is a map to sample; see Light.lua
+  uniform float sunBias;
+  uniform vec2 sunTexel;
+
+#ifdef SUN_SOFT
+  // How wide the blocker search looks, in shadow-map texels. It doubles as
+  // the ceiling on the filter, so it is also the widest any shadow edge can
+  // get -- past about eight texels the eight taps below start showing as
+  // eight, and the honest fix for that is more taps rather than a wider
+  // reach.
+#define SUN_SEARCH 7.0
+  // Texels of half-shadow per unit of stored depth between blocker and
+  // receiver. ShadowMap works it out per frame from the sun's apparent size,
+  // the frustum's own depth and the rung's texel -- none of which this
+  // shader can see -- so what arrives is one number that turns a depth gap
+  // straight into a filter width. See ShadowMap.softness.
+  uniform float sunSoft;
+#endif
+
+  // the two-channel pack ShadowMap writes: high byte, then low
+  float sunDepth(vec2 uv) {
+    vec4 c = Texel(sunMap, uv);
+    return c.r + c.g * (1.0 / 255.0);
+  }
+
+#ifdef SUN_SOFT
+  // One tap of the blocker search: (that texel's depth, 1) when something
+  // stands between this fragment and the sun there, and (0, 0) when nothing
+  // does -- so four of them sum straight into a total and a count.
+  //
+  // A function rather than a macro because the shading language here is the
+  // ES dialect, which does not take a backslash line continuation: a
+  // multi-line macro will not compile at all.
+  vec2 blockerTap(vec2 base, vec2 off, float z) {
+    float t = sunDepth(base + off);
+    return t < z ? vec2(t, 1.0) : vec2(0.0);
+  }
+#endif
+
+  // The LIT FRACTION: 1.0 in full sun, 0.0 in full shadow. Four taps half a texel
+  // out on the diagonals: a 2x2 box filter, which is what turns the
+  // shadow map's texel staircase into a one-pixel soft edge.
+  float sunlight(vec3 p) {
+    if (sunDark <= 0.0) return 1.0;
+    // outside the sun's frustum nothing was recorded, so nothing occludes
+    if (p.x < 0.0 || p.x > 1.0 || p.y < 0.0 || p.y > 1.0 || p.z > 1.0) {
+      return 1.0;
+    }
+    // Ease the shadows off at the frustum's rim. The map covers the ground
+    // the camera can see out to a cap, and past the low rungs -- 75 degrees
+    // especially -- the horizon is further than any box worth paying for.
+    // Without this the covered region simply ENDS, drawing a hard line
+    // across the middle distance where every shadow stops at once; with it
+    // the far field just loses them, which reads as distance.
+    vec2 e = min(p.xy, 1.0 - p.xy);
+    float edge = smoothstep(0.0, 0.06, min(e.x, e.y));
+    if (edge <= 0.0) return 1.0;
+    float z = p.z - sunBias;
+#ifdef SUN_ONE_TAP
+    // SHADOWS LOW: one tap, so the shadow wears the map's own texel
+    // staircase instead of a filtered edge. Four dependent texture fetches
+    // per fragment is the single most expensive line in this shader on a
+    // mobile part, and the edge they buy is landing inside one display
+    // pixel once the render scale is anything but FULL.
+    float lit = step(z, sunDepth(p.xy)) * 4.0;
+#elif defined(SUN_SOFT)
+    // SHADOWS SOFT: the shadow's edge SOFTENS WITH DISTANCE from whatever
+    // throws it. A sun is a disc rather than a point, so the further a
+    // receiver stands from its blocker the wider the band that can see
+    // part of the disc and not the rest -- which is why a lamp post has a
+    // crisp shadow at its foot and a woolly one at its far end, and why a
+    // shadow map's one fixed edge width never quite reads as sunlight.
+    //
+    // This is the cheap standard approximation of that, and it is a RAY
+    // MARCH in the same family as everything in RayFX: the sun's own depth
+    // record is a heightfield, and the question "how far away is what is
+    // blocking me" is answered by reading it rather than by knowing
+    // anything about the scene.
+    //
+    //   1. BLOCKER SEARCH. Four taps over a wide ring, keeping the depths
+    //      that are nearer the sun than this fragment -- those are the
+    //      things standing between it and the light. Their average is how
+    //      far up the ray the blocker sits.
+    //   2. PENUMBRA. The gap between blocker and receiver, over the
+    //      blocker's own distance: the similar-triangles estimate of how
+    //      wide the half-shadow is.
+    //   3. FILTER at that width. Eight taps on a disc, so a wide penumbra
+    //      is genuinely soft rather than a wide staircase.
+    //
+    // Twelve fetches against the four above. It is the top rung of the
+    // SHADOWS row and it is meant to be.
+    vec2 s = sunTexel * SUN_SEARCH;
+    vec2 found = blockerTap(p.xy, s * vec2( 1.0,  0.4), z)
+               + blockerTap(p.xy, s * vec2(-0.4,  1.0), z)
+               + blockerTap(p.xy, s * vec2(-1.0, -0.4), z)
+               + blockerTap(p.xy, s * vec2( 0.4, -1.0), z);
+    float blocker = found.x, hits = found.y;
+    float lit;
+    if (hits < 0.5) {
+      // nothing between this fragment and the sun anywhere in the search
+      // ring, which is most of a sunlit map
+      lit = 4.0;
+    } else {
+      blocker /= hits;
+      // A DIRECTIONAL light's penumbra grows with the GAP between blocker
+      // and receiver and with nothing else -- the sun's rays are parallel,
+      // so there is no distance-to-the-light in the geometry to divide by
+      // (that ratio is the spot-light form of this formula, and using it
+      // here would widen every shadow near the frustum's near plane and
+      // narrow it at the far one, for no reason a viewer could name).
+      // Clamped at one texel below, so a blocker sitting right on the
+      // surface -- a contact point -- keeps a crisp edge.
+      float w = clamp((z - blocker) * sunSoft, 1.0, SUN_SEARCH);
+      vec2 f = sunTexel * w;
+      // eight on a disc -- four out at the rim and four halfway in, so a
+      // wide penumbra fills rather than ringing. Halved at the end to put
+      // eight taps back onto the four-tap scale the caller reads.
+      lit = (step(z, sunDepth(p.xy + f * vec2( 0.92,  0.38)))
+           + step(z, sunDepth(p.xy + f * vec2( 0.38, -0.92)))
+           + step(z, sunDepth(p.xy + f * vec2(-0.92, -0.38)))
+           + step(z, sunDepth(p.xy + f * vec2(-0.38,  0.92)))
+           + step(z, sunDepth(p.xy + f * vec2( 0.50,  0.50)))
+           + step(z, sunDepth(p.xy + f * vec2( 0.50, -0.50)))
+           + step(z, sunDepth(p.xy + f * vec2(-0.50,  0.50)))
+           + step(z, sunDepth(p.xy + f * vec2(-0.50, -0.50)))) * 0.5;
+    }
+#else
+    float lit = step(z, sunDepth(p.xy + sunTexel * vec2(-0.5, -0.5)))
+              + step(z, sunDepth(p.xy + sunTexel * vec2( 0.5, -0.5)))
+              + step(z, sunDepth(p.xy + sunTexel * vec2(-0.5,  0.5)))
+              + step(z, sunDepth(p.xy + sunTexel * vec2( 0.5,  0.5)));
+#endif
+    // The LIT FRACTION now, not the darkening: 1 in full sun, 0 in full
+    // shadow. What a shadow costs is no longer decided here -- it is the
+    // difference between the two lights the caller split (see Light.lua),
+    // and sunDark survives only as the gate above that says whether there
+    // is a map worth sampling at all.
+    return 1.0 - edge * (1.0 - lit * 0.25);
+  }
+
+  // A stable 0..1 value per VOXEL of world space. Everything the snow varies
+  // by is cut from this, so a drift is a property of the place it lies in:
+  // it does not crawl when the camera pans, it does not swim when a mesh is
+  // rebuilt, and two maps meeting at a seam agree about it because they
+  // agree about where they are.
+  //
+  // Sin-free on purpose. The usual `fract(sin(dot(p, k)) * 43758.5)` costs a
+  // transcendental per call and mobile parts disagree about sin's precision
+  // at large arguments -- exactly where world coordinates live by the far
+  // side of a route -- so the same rock would hash differently on two
+  // drivers. This is multiply-and-fract throughout.
+  float voxelHash(vec3 p) {
+    p = fract(p * vec3(0.1031, 0.1030, 0.0973));
+    p += dot(p, p.yxz + 33.33);
+    return fract((p.x + p.y) * p.z);
+  }
+
+#ifdef VOXEL_GRID
+  uniform float gridDark;     // how far toward black a seam pulls; 0 = off
+  uniform float gridWidth;    // seam width, in display pixels
+
+  // How much of this fragment a voxel seam covers, 0 to 1.
+  float voxelSeam(vec3 p) {
+    // how much of `p` this fragment spans on screen, per axis: the
+    // conversion from model units to display pixels, measured rather than
+    // derived, so it holds under any camera pitch or zoom
+    vec3 w = fwidth(p);
+    vec3 d = abs(fract(p + 0.5) - 0.5);      // distance to the nearest plane
+    // The axis a face does not vary along is that face's own normal, and
+    // its distance is a constant zero -- take it at face value and every
+    // face floods solid. Push those axes out of reach instead of dividing
+    // by their zero.
+    vec3 live = step(1e-4, w);
+    vec3 px = d / max(w, vec3(1e-6)) + (1.0 - live) * 1e6;
+    float near = min(min(px.x, px.y), px.z);
+    // Fade out where a voxel is too small to hold a line. Survey zoom
+    // draws a world pixel at about a display pixel, and a wall seen nearly
+    // edge-on squashes one to nothing at any zoom -- either way the seams
+    // land closer together than they are wide, and drawn anyway they stop
+    // being a wireframe and become a flat 45% dimming of the whole scene.
+    // The tightest axis decides, which is the honest test of whether the
+    // grid can be resolved at all.
+    float span = 1.0 / max(max(w.x, max(w.y, w.z)), 1e-6);
+    float fade = clamp((span - 2.0) * 0.5, 0.0, 1.0);
+    // the textbook antialiased line: solid within the half-width, fading
+    // over the one pixel outside it
+    return fade * clamp(gridWidth * 0.5 + 0.5 - near, 0.0, 1.0);
+  }
+#endif
+
+  uniform vec3 ghostColor;    // the flat silhouette colour
+  uniform float ghost;        // 0 = shade normally, 1 = flatten to it
+  // The hour's light, split in two (see Light.lua). A surface always gets
+  // `skyTint`; `sunTint` is what the sun adds on top where it reaches. In
+  // FLAT the whole hour goes in skyTint and sunTint is zero, which is the
+  // single multiply this shader used to do.
+  uniform vec3 skyTint;
+  uniform vec3 sunTint;
+  uniform vec3 sunRay;        // the direction the light TRAVELS, normalized
+  uniform float sparkle;      // how far toward white a lit crest lifts
+  uniform vec2 glint;         // the slope window that catches it
+  uniform float foamPhase;    // the tide's clock, for the foam's lapping
+  uniform Image glassMask;    // opaque where the atlas texel is window glass
+  uniform vec2 glassSize;     // the mask's dimensions: tc -> atlas texels
+  uniform float glassNight;   // 0 = daylight .. 1 = the lamps are on
+  uniform vec3 lampColor;     // what the lamps BURN (DayNight.lampColor)
+  uniform float glassPhase;   // the glint's phase: advances with TRAVEL
+  uniform float glassGlint;   // and its strength: 0 while standing still
+  uniform float glassOn;      // 0 for sprite-sheet draws (see Voxel3D.glass)
+  // SNOW ON THE GEOMETRY ITSELF. 0..1, and it lands on the faces that point
+  // at the sky -- vUp, which is a real face normal rather than a guess read
+  // off how bright the face draws (see the `lie` line below for what that
+  // guess cost). Which is why this can lie on a tree, a stone wall, a roof
+  // and a ledge alike without knowing what any of them are: an up-facing
+  // surface is an up-facing surface.
+  //
+  // Sent per DRAW and defaulting to zero, like `sway` and `glassOn`, so the
+  // terrain wears it and the characters standing on the terrain do not.
+  uniform float snowTop;
+  uniform vec3 snowColor;
+  uniform float snowSide;     // how much of it a flank takes; 1 on the top
+
+  vec4 effect(vec4 color, Image tex, vec2 tc, vec2 sc) {
+    vec4 p = Texel(tex, tc);
+    // sprite sheets key GB OBJ color 0 to alpha 0; discarding rather than
+    // blending keeps those texels out of the depth buffer, so a model never
+    // carves a transparent hole out of whatever stands behind it
+    if (p.a < 0.5) discard;
+    // Two lights, not one. A shadow is not an absence of light, it is a
+    // place lit by a DIFFERENT light -- the sky, which is cool and comes
+    // from everywhere, rather than the sun, which is warm and comes from
+    // one direction. So the sky's share is unconditional and the sun's is
+    // gated on whether it reached this fragment, and a shadow ends up
+    // cooler rather than merely darker. In full sun the two sum back to
+    // the tint this line used to multiply by, so lit surfaces are where
+    // they always were and only the shadows moved.
+    // Held in a variable rather than inlined, and it is not tidiness: the
+    // snow below stands in this same light, and calling sunlight() a second
+    // time for it would pay the shadow map's four-to-twelve texture fetches
+    // twice per fragment -- the most expensive line in this shader, doubled,
+    // on every frame of a snowfall.
+    float lit = sunlight(vSun);
+    vec3 light = skyTint + sunTint * lit;
+    vec3 rgb = p.rgb * vShade * light;
+    // THE CEL WATER. Three effects, all analytic, all keyed off varyings
+    // the mesh already carries -- and all of them FLAT-shaded on purpose:
+    // this is a four-colour world drawn on a pixel grid, and a smooth
+    // gradient over it reads as an airbrush. Every boundary here is a hard
+    // step, softened only by the checkerboard dither the 8-bit sky already
+    // established as this mod's idiom for "between two colours".
+    //
+    // vWater tells the three zones apart with no new data: exactly 1 on
+    // the surface (every plane vertex is water), interpolating 1 -> 0 up a
+    // shoreline lip face (bottom edge attached to the water, top edge to
+    // the bank), 0 everywhere else. FLAT (swell 0) never sets it, so the
+    // old still plane is untouched.
+    if (vWater > 0.0 && sparkle > 0.0) {
+      float check = mod(floor(sc.x) + floor(sc.y), 2.0);
+      if (vWater > 0.98) {
+        // ON THE SURFACE: flat bands of brightness cut by the swell's own
+        // height. A crest is a shade lighter, a trough a shade deeper, and
+        // the two thresholds are dithered on the checker -- so the bands
+        // breathe with the interference pattern and read as cel-shaded
+        // water rather than as three painted stripes. Multiplies only:
+        // the tile's own art, the hour's tint and every palette mode keep
+        // their colours, just banded.
+        float h = vSwellH + (check - 0.5) * 0.16;
+        rgb *= 1.0 + step(0.34, h) * 0.13 - step(h, -0.40) * 0.15;
+        // A CREST TURNED INTO THE LIGHT, quantized: the swell's analytic
+        // normal (vWave) against the sun, through the same glint window as
+        // ever -- then snapped to three hard rings, because a cel
+        // highlight is a SHAPE, not a sheen. The sparkle still travels
+        // with the wave that carries it; it just has edges now.
+        float s = smoothstep(glint.x, glint.y, dot(vWave, -sunRay));
+        s = floor(s * 3.0 + 0.5) / 3.0;
+        rgb = mix(rgb, vec3(0.93, 0.97, 1.0), s * sparkle);
+      } else if (vWater > 0.45) {
+        // ON THE LIP, just above the waterline: FOAM. The band of high
+        // vWater on a shore face IS the water contact -- the face's bottom
+        // edge moves with the swell, so the foam line rides the tide for
+        // free. The edge laps back and forth on the tide's own clock and
+        // dissolves through the checker, which is what makes it read as
+        // drawn white pixels breaking against the bank rather than as a
+        // painted rim.
+        float lap = 0.10 * sin(foamPhase * 2.0 + sc.x * 0.23 + sc.y * 0.17);
+        float foam = step(0.70 + lap - check * 0.08, vWater);
+        rgb = mix(rgb, vec3(0.93, 0.97, 1.0), foam * 0.8);
+      }
+    }
+#ifdef VOXEL_GRID
+    // darken what is there rather than painting a colour, so a seam across
+    // dark grass and one across a white roof each stay in their own palette
+    rgb *= 1.0 - gridDark * voxelSeam(vGrid);
+#endif
+    // WINDOW GLASS, marked per atlas texel by the mask (see GlassMask).
+    // By day a thin diagonal glint crosses the panes WHILE THE VIEW MOVES
+    // -- the phase is fed by the camera's own travel and the strength dies
+    // within a beat of standing still, because a reflection is something
+    // the viewpoint does: still camera, still glass. It lifts the texel
+    // toward sky-white and leaves the art visible through it. After dark
+    // the pane is LIT: the texel's own shine pattern carried into a warm
+    // lamp colour, replacing the shaded answer above -- so a lit window
+    // ignores the sun, every shadow and the hour's tint, exactly as a
+    // window with a lamp behind it does.
+    // glassOn gates the whole thing per DRAW: the mask is shaped like the
+    // tileset atlas, and only meshes textured FROM that atlas may consult
+    // it -- a character samples its own sprite sheet, whose coordinates
+    // land on the mask's pane rectangles by accident and would stripe the
+    // cast with lamplight at night.
+    float glass = Texel(glassMask, tc).a * glassOn;
+    if (glass > 0.0) {
+      // the sweep lives in the PANE's own space (atlas texels), not the
+      // screen's: a pattern anchored to the screen has the world sliding
+      // through it at zoom speed whenever the camera pans, which strobed --
+      // worst where the pan and the phase ran opposite ways. Anchored to
+      // the glass, panning moves nothing; only the phase does, a fraction
+      // of a texel per step, the same in every walking direction.
+      float sweep = sin(tc.x * glassSize.x * 0.8 - glassPhase);
+      float glint = pow(max(sweep, 0.0), 20.0) * 0.55 * glassGlint;
+      vec3 pane = mix(rgb, vec3(0.93, 0.97, 1.0), glint * glass);
+      float shine = dot(p.rgb, vec3(0.299, 0.587, 0.114));
+      // NOT EVERY WINDOW IS THE SAME LAMP. A hash on the pane's own block in
+      // the atlas -- six texels across, the width the mask scans for -- gives
+      // each pane a fixed offset in brightness, so a wall of windows reads as
+      // a wall of rooms rather than as one light stamped out repeatedly. The
+      // hash is deliberately allowed to be imprecise: sin() of a large
+      // argument at the fragment default of mediump returns something close
+      // to noise, which is all a hash is asked for here, and it returns the
+      // SAME noise for the same pane on every driver and every frame -- which
+      // is the only property that matters.
+      vec2 paneId = floor(tc * glassSize / 6.0);
+      float jit = fract(sin(dot(paneId, vec2(12.9898, 78.233))) * 4375.85);
+      vec3 lamp = lampColor * (0.5 + 0.55 * shine) * (0.86 + 0.28 * jit);
+      rgb = mix(pane, lamp, glassNight * glass);
+    }
+    // The snow lying ON this surface, if it is one snow can lie on. A hard
+    // step rather than a smooth falloff: this is a four-colour world and the
+    // boundary between a snowed top and a bare side is a voxel edge, which
+    // is exactly where the step is. No geometry, no decal, no float -- the
+    // face the camera is already looking at simply goes white.
+    if (snowTop > 0.0) {
+      // The UP faces take all of it and the flanks take a share, which is
+      // the difference between a snowed world and a world with white lids on
+      // it. A bush is a rounded blob: from this camera almost every voxel of
+      // it you can see is a SIDE, so a top-face-only rule left every hedge in
+      // a white town standing green while the ground and the wall tops went
+      // pale -- correct about which face points up, wrong about what a
+      // snowfall looks like.
+      //
+      // A STEP on the face's own normal, not a ramp on its brightness.
+      //
+      // This used to read `smoothstep(0.60, 1.0, vShade)`, on the theory that
+      // a shade of 1.0 meant up and the darker a face drew the more it must
+      // be turned away. Two things were wrong with it and both showed. A
+      // BUILDING's facade is emitted at 1.0 because the south face IS the
+      // artwork, so a house tested as sky-facing and took the whole tint --
+      // every wall in a snowed town went white. And that same house's ROOF
+      // carries VOLUME_TOP_SHADE, which is darker than its walls, so the one
+      // surface the snow actually lands on took less of it than the wall
+      // underneath. A town in a snowfall came out as white boxes with grey
+      // lids, which is the exact inverse of a snowfall.
+      //
+      // vUp is the real answer: the meshers work each quad's own face normal
+      // out of its geometry and hand it over in the sign of the shade. So a
+      // roof, a ledge, the ground and the crown of a tree take all of it; a
+      // wall, a facade and a tree's front take SNOW_SIDE, whatever brightness
+      // any of them happen to draw at.
+      float lie = mix(snowSide, 1.0, vUp);
+      float depth = snowTop * lie;      // how deep it lies on this face
+
+      // ------- the two noises every layer below is cut from
+      //
+      // Both are voxel-quantized samples of WORLD space, so neither is a
+      // gradient and neither moves: a drift belongs to the place it lies in.
+      // It does not crawl when the camera pans, does not swim when a mesh is
+      // rebuilt, and two maps meeting at a seam agree about it because they
+      // agree about where they are. (A screen-space dither -- which is where
+      // the swell's checker lives, because a swell is already moving -- would
+      // stand still and let the world slide through it, and every roof in the
+      // frame would crawl as you walked.)
+      //
+      // All three axes go into the hash, which is what lets one line serve
+      // every face in the world: on a roof y barely moves and the pattern
+      // falls out of x and z, on a wall z is fixed and it falls out of x and
+      // y. Two axes would have given one of those a set of stripes.
+      //
+      // DRIFT is the shape of the fall at about five world pixels -- where it
+      // heaped, where the wind scoured it. GRAIN is per world pixel, and it
+      // does the dithering a four-colour machine would have done.
+      float drift = voxelHash(floor(vWorld * 0.2));
+      float grain = voxelHash(floor(vWorld));
+
+      // ------- LAYER 1: where it lies at all
+      //
+      // The drift moves the THRESHOLD rather than the amount, and that is the
+      // difference between snow arriving and snow fading in. A hollow needs a
+      // deeper fall before it takes any and a heap takes it early -- so as the
+      // weather works, patches appear and then GROW into each other across a
+      // roof, instead of the whole surface going evenly paler all at once.
+      // The grain breaks each rung, so the edge of a patch is dithered rather
+      // than a clean curve, which is the only edge this world knows how to
+      // draw. It is one rung wide on purpose: the levels sit a third apart, so
+      // a smaller wobble would round both halves of the dither into the same
+      // level and do nothing at all.
+      float cover = depth * (0.72 + drift * 0.56) + (grain - 0.5) * 0.34;
+      // Four rungs, and the top one is 0.86 rather than 1. At a full 1 a
+      // covered roof loses its own art entirely and the town turns to white
+      // blocks -- which is exactly why GroundFX.SNOW_TINT stops short of 1,
+      // and exactly what rounding up to the last rung had been quietly
+      // undoing. The tiles read through the snow at every depth now.
+      float lay = floor(clamp(cover, 0.0, 1.0) * 3.0 + 0.5) / 3.0 * 0.86;
+
+      if (lay > 0.0) {
+        // ------- LAYER 2: snow standing in the world's own light
+        //
+        // This is what separates snow from white paint, and it was the whole
+        // of the old look's problem: snowColor went on as a flat constant
+        // AFTER the shading, so a covered roof was the same colour at noon, in
+        // a building's shadow and at midnight. Nothing else in the frame
+        // behaves that way, and the eye reads a surface that ignores the light
+        // as a surface that has been painted rather than covered. Through the
+        // hour's light it goes blue where only the sky reaches it, warm under
+        // a low sun, dark after dusk -- and a shadow thrown across a white
+        // field is finally visible, because there is something for it to fall
+        // on.
+        vec3 snow = snowColor * light;
+
+        // ------- LAYER 3: the drift has FORM
+        //
+        // A crest catches more of the sky and a hollow sits back from it. Two
+        // hard steps rather than a gradient, because this is relief and not a
+        // sheen -- and it is what stops a fully covered roof reading as one
+        // flat tone even when the cover really is total.
+        snow *= 0.88 + 0.10 * step(0.45, drift) + 0.14 * step(0.78, drift);
+
+        // ------- LAYER 4: and where the sun lands on a crest, it GLITTERS
+        //
+        // A few per cent of the covered pixels, gated on the sun actually
+        // reaching this fragment -- which is what makes it dynamic with no
+        // clock to drive it: walk a shadow across a snowed roof and the
+        // glitter goes out under it and comes back on the far side, and the
+        // whole field lights up and dies as the day turns. Up-faces only, and
+        // only once the fall is deep enough to have a surface of its own: a
+        // dusting does not sparkle.
+        //
+        // Brighter than the snow AROUND it rather than a fixed white, and
+        // that distinction is the whole of whether this works after dark. The
+        // sun rig hangs the moon on the same lamp, so `lit` is high at
+        // midnight wherever the moon reaches -- and a constant white here
+        // would have put noon-bright specks across a field that is otherwise
+        // deep blue. Half again the local snow keeps a highlight proportional
+        // to whatever is lighting it, and clamps out at the top end by day,
+        // which is what a highlight does anyway.
+        float spark = step(0.93, grain) * step(0.62, drift)
+                      * step(0.55, lit) * vUp * step(0.5, depth);
+        snow = mix(snow, snowColor * light * 1.5, spark);
+
+        rgb = mix(rgb, snow, lay);
+      }
+    }
+    // The hidden player is a SHAPE, not a dimmed picture of itself. Tinting
+    // through `color` could only multiply the sprite's own pixels, which
+    // darkens each one by its own amount and keeps the character's internal
+    // detail; replacing the colour outright is what makes it read as one
+    // solid silhouette. Last in the chain, so neither the sun nor a voxel
+    // seam can mottle it.
+    rgb = mix(rgb, ghostColor, ghost);
+    return vec4(rgb, 1.0) * color;
+  }
+#endif
+]]
+
+-- Compilations of SHADER, keyed by the defines they were built with: the
+-- voxel wireframe, and the one-tap sun. The wireframe needs shader
+-- derivatives (fwidth), the one piece of this a driver can refuse, so it
+-- is a separate build rather than a branch -- a refusal costs the grid and
+-- nothing else. The sun tap count is a define for a different reason: a
+-- uniform branch would still cost the four fetches on any driver that
+-- schedules both sides, which is most of them.
+-- Each entry is nil = untried, false = unavailable.
+local shaders = {}
+local activeShader = nil      -- the variant this pass bound
+
+-- Scene canvases, one per NAMED SLOT. There are exactly two callers and
+-- they want different sizes -- the free-roam pass renders at the window's
+-- pixel dimensions, the overworld battle at the GB's 160x144 -- and a
+-- single cached canvas made every battle entry and exit reallocate one.
+-- A slot reallocates only when its OWN size changes, which is a window
+-- resize, so the pair is stable for a session.
+local slots = {}
+local canvas, canvasW, canvasH = nil, 0, 0   -- the slot this pass bound
+local active = false
+
+-- ------- rendering under the panel's resolution
+--
+-- The engine composites a pipeline's canvas with draw(canvas, 0, 0, 0,
+-- 1/dpiX, 1/dpiY), which only covers the window when the canvas is at the
+-- panel's PIXEL resolution -- so what a caller asks for is not negotiable,
+-- and handing back a smaller one would land the diorama in the corner at a
+-- fraction of the screen (the bug main.lua's sceneSize exists to have
+-- fixed).
+--
+-- So the reduction happens INSIDE the pass and is undone on the way out:
+-- the 3D scene draws into a canvas `RES` times smaller on each axis, and
+-- endScene scales that back up into a full-size one that the rest of the
+-- frame -- the FX overlay, the tilt-shift pass, the engine's own composite
+-- -- sees exactly as it always did. Nothing downstream learns about this,
+-- which is the point: project() keeps reporting full-size coordinates and
+-- the overlay keeps drawing at ctx.scale.
+--
+-- Nearest on the way up, deliberately. The world under it is pixel art at
+-- a fixed grid and the mode's whole argument is that the grid stays crisp;
+-- a bilinear stretch would turn a half-resolution diorama into a smeared
+-- one, where nearest turns it into a chunkier one. Chunkier is the right
+-- failure for this art.
+--
+-- At RES FULL the two sizes are equal, no present slot is ever allocated,
+-- and the extra blit does not happen at all -- so the desktop path is the
+-- one it always was rather than the same one plus a copy.
+local renderW, renderH = 0, 0
+local presentName = nil
+
+-- ------- the depth buffer, kept where something can read it
+--
+-- The pass has always attached a depth buffer, because occlusion in this
+-- mode is a depth test rather than a y-sort. What it has never done is keep
+-- one anything could SAMPLE: `{ canvas, depth = true }` asks LOVE for an
+-- internal attachment, which the GPU may store however it likes and no
+-- shader can bind.
+--
+-- The screen-space pass (lib/RayFX.lua) is entirely a set of questions
+-- asked of that buffer, so it needs the readable kind: a real depth canvas,
+-- attached as `depthstencil`. Everything else about the pass is unchanged --
+-- same test, same write, same clear.
+--
+-- Three things are guarded here, all the usual way. The FORMAT is tried
+-- down a ladder, stencil-bearing first so the clear below can go on asking
+-- for a stencil clear exactly as it always has. The ALLOCATION can fail, in
+-- which case the pass falls back to the internal buffer and RayFX quietly
+-- finds nothing to read. And the whole thing is skipped when nothing wants
+-- it: with RTX at OFF this allocates nothing and the frame is the one it
+-- always was.
+local DEPTH_FORMATS = { "depth24stencil8", "depth24", "depth32f", "depth16" }
+local depthOK = nil            -- nil = untried, false = this driver will not
+local sceneDepth = nil         -- the buffer this pass bound, if readable
+local sceneName = nil          -- and which slot it belongs to
+
+local function depthCanvas(name, w, h)
+  if depthOK == false then return nil end
+  local key = name .. "#depth"
+  local held = slots[key]
+  if held and held.w == w and held.h == h then return held.canvas end
+  local made = nil
+  for _, fmt in ipairs(DEPTH_FORMATS) do
+    local ok, c = pcall(love.graphics.newCanvas, w, h,
+                        { format = fmt, readable = true })
+    if ok and c then made = c; break end
+  end
+  if not made then
+    depthOK = false
+    return nil
+  end
+  depthOK = true
+  -- nearest, and it is not a preference: a linearly blended depth is the
+  -- average of two distances, which is a distance to nothing. Every march
+  -- in RayFX wants the texel as it was stored.
+  pcall(made.setFilter, made, "nearest", "nearest")
+  pcall(made.setWrap, made, "clamp", "clamp")
+  -- and read as a plain number rather than through a hardware compare,
+  -- which is the other thing a depth texture can be bound as
+  pcall(made.setDepthSampleMode, made)
+  if held and held.canvas and held.canvas.release then
+    pcall(held.canvas.release, held.canvas)
+  end
+  slots[key] = { canvas = made, w = w, h = h }
+  return made
+end
+
+local function slotCanvas(name, w, h)
+  local held = slots[name]
+  if held and held.w == w and held.h == h then return held.canvas end
+  local ok, c = pcall(love.graphics.newCanvas, w, h)
+  if not ok then return nil end
+  c:setFilter("nearest", "nearest")
+  if held and held.canvas and held.canvas.release then
+    pcall(held.canvas.release, held.canvas)
+  end
+  slots[name] = { canvas = c, w = w, h = h }
+  return c
+end
+
+local IDENTITY = Mat4.identity()
+
+-- Whether the driver admits to supporting derivatives. Only a hint --
+-- the compile below is the real test -- but it saves building a shader
+-- that was never going to work, and it is how LOVE reports the ES2
+-- extension the grid rides on.
+local function derivativesOK()
+  if not (love.graphics and love.graphics.getSupported) then return false end
+  local ok, caps = pcall(love.graphics.getSupported)
+  return ok and caps and caps.shaderderivatives == true
+end
+
+-- The scene shader. `grid` asks for the wireframe variant, and nil comes
+-- back when that one will not build -- callers then fall back to the plain
+-- one rather than losing the whole 3D pass.
+function Voxel3D.shader(grid)
+  grid = grid and true or false
+  local oneTap = not Quality.softShadows()
+  local soft = Quality.pcss()
+  local key = (grid and "g" or "-")
+              .. (oneTap and "1" or (soft and "p" or "4"))
+  if shaders[key] == nil then
+    if grid and not derivativesOK() then
+      shaders[key] = false
+    else
+      local src = (grid and "#define VOXEL_GRID 1\n" or "")
+                  .. (oneTap and "#define SUN_ONE_TAP 1\n" or "")
+                  .. ((soft and not oneTap) and "#define SUN_SOFT 1\n" or "")
+                  .. SHADER
+      local ok, sh = pcall(love.graphics.newShader, src)
+      shaders[key] = ok and sh or false
+      -- A variant that will not build falls back silently, which is the
+      -- contract -- but silently is also how a typo in a define-gated branch
+      -- stays hidden for a release. The driver's own log is the only thing
+      -- that ever says why, so it is kept where a probe can read it.
+      if not ok then Voxel3D.shaderError = tostring(sh) end
+    end
+  end
+  return shaders[key] or nil
+end
+
+-- Whether the 3D path can run at all. False on a headless test run (no
+-- love.graphics), without shader support, or where a depth canvas cannot be
+-- created -- every caller treats that as "stay on the 2D path".
+function Voxel3D.available()
+  if not (love.graphics and love.graphics.newCanvas
+          and love.graphics.setDepthMode) then
+    return false
+  end
+  return Voxel3D.shader() ~= nil
+end
+
+-- Build a mesh in the shared format. `verts` is the LOVE vertex list and
+-- `map` the triangle index list. Returns nil when meshes are unavailable,
+-- which the callers treat the same way they treat a missing model.
+function Voxel3D.newMesh(verts, map)
+  if #verts == 0 then return nil end
+  local ok, mesh = pcall(love.graphics.newMesh, Voxel3D.FORMAT, verts,
+                         "triangles", "static")
+  if not ok then return nil end
+  if map and #map > 0 then pcall(mesh.setVertexMap, mesh, map) end
+  return mesh
+end
+
+-- The quad corner offsets and UV corners for one face direction, in the
+-- order the vertex map below stitches into two triangles. Corners are unit
+-- offsets from the voxel's (x, y, z) minimum corner.
+Voxel3D.FACE_CORNERS = {
+  [1] = { { 1, 0, 0 }, { 1, 0, 1 }, { 1, 1, 1 }, { 1, 1, 0 } },  -- +X
+  [2] = { { 0, 0, 1 }, { 0, 0, 0 }, { 0, 1, 0 }, { 0, 1, 1 } },  -- -X
+  [3] = { { 0, 1, 0 }, { 1, 1, 0 }, { 1, 1, 1 }, { 0, 1, 1 } },  -- +Y
+  [4] = { { 0, 0, 1 }, { 1, 0, 1 }, { 1, 0, 0 }, { 0, 0, 0 } },  -- -Y
+  [5] = { { 0, 0, 1 }, { 1, 0, 1 }, { 1, 1, 1 }, { 0, 1, 1 } },  -- +Z
+  [6] = { { 1, 0, 0 }, { 0, 0, 0 }, { 0, 1, 0 }, { 1, 1, 0 } },  -- -Z
+}
+
+-- Append the six indices of quad `n` (0-based) to a triangle index list.
+function Voxel3D.pushQuad(map, n)
+  local b = n * 4
+  map[#map + 1] = b + 1
+  map[#map + 1] = b + 2
+  map[#map + 1] = b + 3
+  map[#map + 1] = b + 1
+  map[#map + 1] = b + 3
+  map[#map + 1] = b + 4
+end
+
+-- ---------------------------------------------------------------- camera --
+
+-- An explicit camera, replacing the orbit below for as long as it is set:
+-- { eye = {x,y,z}, focus = {x,y,z}, fov = radians, curve = k or nil }.
+--
+-- The orbit is the free-roam camera and it is described entirely by ONE
+-- number, the pitch, because that is all a camera following the player over
+-- their own map ever needs. A staged shot -- the overworld battle's
+-- over-the-shoulder rig (see BattleCam) -- is a placed camera: it has a yaw,
+-- it does not sit above its focus, and its framing comes from the arena
+-- rather than from the view size. Rather than widen the orbit into
+-- something that could express both and be the wrong shape for each, a
+-- caller with a camera of its own simply hands it over.
+--
+-- Everything downstream is unchanged by this: the shader uniforms, project()
+-- and the overlay all read Voxel3D.vp / Voxel3D.eye, which are set the same
+-- way either way.
+Voxel3D.camera = nil
+
+-- View and projection for a `vw` x `vh` world-pixel view centred on
+-- (cx, cy) in world pixels. Returns the combined matrix.
+function Voxel3D.viewProjection(cx, cy, vw, vh)
+  local cam = Voxel3D.camera
+  if cam then
+    local eye, focus = cam.eye, cam.focus
+    Voxel3D.eye = eye
+    -- kept beside the eye for horizonY: where the sky's pale end goes is a
+    -- question about which way this camera looks, and only these two answer it
+    Voxel3D.focus = focus
+    local dx = eye[1] - focus[1]
+    local dy = eye[2] - focus[2]
+    local dz = eye[3] - focus[3]
+    local dist = math.max(1, math.sqrt(dx * dx + dy * dy + dz * dz))
+    local proj = Mat4.perspective(cam.fov, vw / vh,
+                                  math.max(1, dist * 0.05), dist * 4 + 4096)
+    -- the same clip-space Y flip the orbit needs, for the same reason: we
+    -- bypass LOVE's transform_projection and canvas coordinates run Y down
+    proj = Mat4.mul(Mat4.scale(1, -1, 1), proj)
+    -- world up, so the horizon stays level -- a placed camera that rolled
+    -- with its own pitch would tip the whole arena
+    return Mat4.mul(proj, Mat4.lookAt(eye, focus, { 0, 1, 0 }))
+  end
+
+  local a = Voxel.angle
+  local focal = Voxel.FOCAL
+  local dist = focal * vh
+  -- the FOV that makes a straight-down camera at `dist` frame exactly `vh`
+  -- world pixels, which is the framing the flat view already has
+  local fov = 2 * math.atan(1 / (2 * focal))
+
+  local focus = { cx, 0, cy }
+  local eye = { cx, dist * math.cos(a), cy + dist * math.sin(a) }
+  -- exposed for camera-facing billboards (VoxelScene yaws sprites at it)
+  Voxel3D.eye = eye
+  Voxel3D.focus = focus
+  -- perpendicular to the view direction in the YZ plane: north is screen-up
+  -- when looking straight down, +Y is screen-up when looking level. Never
+  -- parallel to the view direction, so there is no degenerate a = 0 case.
+  local up = { 0, math.sin(a), -math.cos(a) }
+
+  local proj = Mat4.perspective(fov, vw / vh,
+                                math.max(1, dist * 0.05), dist * 4 + 4096)
+  -- Flip clip-space Y. Mat4.perspective emits textbook GL clip space with
+  -- +Y up, but we bypass LOVE's own transform_projection, and LOVE's canvas
+  -- coordinates run Y DOWN -- so without this the entire scene composites
+  -- vertically mirrored: north at the bottom and buildings extruding
+  -- downward. Winding flips with it, which is free here because the pass
+  -- draws with culling off.
+  proj = Mat4.mul(Mat4.scale(1, -1, 1), proj)
+  return Mat4.mul(proj, Mat4.lookAt(eye, focus, up))
+end
+
+-- ------- the horizon
+--
+-- Where the ground plane's vanishing line lands, in canvas pixels down from the
+-- top edge, or nil when this camera has no horizon to find.
+--
+-- Not a fraction picked by eye. A direction ALONG the ground is a point at
+-- infinity, and putting one through the same matrix the geometry is drawn with
+-- gives the line every ground plane in the scene converges on -- so the sky's
+-- pale end meets the horizon at any pitch, fov, window shape or zoom, and rides
+-- the camera tween instead of having to be retuned against it.
+--
+-- The world CURVE is not in it, and cannot be: it bends distant ground down in
+-- the vertex shader, so the ground's apparent edge sits BELOW this line by
+-- however much the bend took. What shows in between is the haze the sky's fill
+-- already is, which is what a curved-away horizon should look like.
+--
+-- nil in two cases, both meaning "no horizon in this frame": a camera looking
+-- straight down, whose forward direction has no horizontal part to send to
+-- infinity, and one whose vanishing line is behind it.
+function Voxel3D.horizonY(h)
+  local m, eye, focus = Voxel3D.vp, Voxel3D.eye, Voxel3D.focus
+  if not (m and eye and focus and h and h > 0) then return nil end
+  local dx = focus[1] - eye[1]
+  local dz = focus[3] - eye[3]
+  local len = math.sqrt(dx * dx + dz * dz)
+  if len < 1e-6 then return nil end
+  dx, dz = dx / len, dz / len
+  -- a DIRECTION, so its w is zero and the matrix's translation column drops
+  -- out; the clip-space Y flip is already baked into m, so this comes out in
+  -- canvas coordinates rather than needing one
+  local y = m[5] * dx + m[7] * dz
+  local w = m[13] * dx + m[15] * dz
+  if w <= 1e-6 then return nil end
+  return (y / w * 0.5 + 0.5) * h
+end
+
+-- ------- the hour's light
+--
+-- What the scene shader multiplies every surface by (see dayTint in the
+-- shader). Set per pass by whoever knows what map is being drawn --
+-- VoxelScene for free-roam, BattleScene for the arena -- because "is this
+-- outdoors" is the map's question, not this pass's. Neutral until somebody
+-- answers it, so a caller that never does draws exactly what it always drew.
+Voxel3D.tint = { 1, 1, 1 }
+
+-- The window-glass pass, set the same way and for the same reason: the
+-- MASK belongs to the map's tileset (GlassMask.texture) and how lit the
+-- panes are belongs to the hour and to being outdoors at all
+-- (DayNight.windowLight). nil / 0 -- the defaults -- draw no glass effect.
+Voxel3D.glassMask = nil
+Voxel3D.glassNight = 0
+
+-- What the lamps behind that glass burn, in 0..1 -- pushed in from outside
+-- exactly like glassNight, and for the same reason: the hour is the
+-- caller's to know (DayNight.lampColor). The default is the constant this
+-- used to be hardcoded to, so a caller that never sets it draws precisely
+-- what it drew before.
+Voxel3D.lampColor = { 1.0, 0.84, 0.5 }
+
+-- the glint, fed by the camera's TRAVEL rather than by a clock (see
+-- VoxelScene.glintStep): the phase is radians already wrapped to 2pi, and
+-- the strength is 0 whenever the view has been still for a beat
+Voxel3D.glassPhase = 0
+Voxel3D.glassGlint = 0
+
+-- The sun or moon disc's place on this camera's canvas, or nil when the
+-- body is set, on the southern half of the sky, or behind the camera.
+--
+-- The direction comes from DayNight (true bearing, squashed elevation) and
+-- goes through the SAME matrix the geometry is drawn with, as a point at
+-- infinity -- exactly how horizonY finds the vanishing line. So the disc's
+-- azimuth is honest: it stands over the point on the horizon its shadows
+-- point away from, at every pitch, fov, window shape and zoom.
+--
+-- Must run after beginScene has set Voxel3D.vp for this frame's camera.
+function Voxel3D.skyBody(w, h)
+  local m = Voxel3D.vp
+  local b = m and DayNight.body()
+  if not b then return nil end
+  local x = m[1] * b.dx + m[2] * b.dy + m[3] * b.dz
+  local y = m[5] * b.dx + m[6] * b.dy + m[7] * b.dz
+  local ww = m[13] * b.dx + m[14] * b.dy + m[15] * b.dz
+  if ww <= 1e-6 then return nil end
+  local amt, color = DayNight.glow()
+  return {
+    x = (x / ww * 0.5 + 0.5) * w,
+    y = (y / ww * 0.5 + 0.5) * h,
+    moon = b.moon,
+    glowAmt = amt,
+    glowColor = color,
+  }
+end
+
+-- ----------------------------------------------------------------- scene --
+
+-- Begin the 3D pass into a `w` x `h` pixel canvas centred on world
+-- (cx, cy), covering `vw` x `vh` world pixels. Returns false when the pass
+-- could not start, in which case the caller must not call endScene.
+-- `sky` is an optional {r, g, b, a} in 0..1 to clear the void to, for the
+-- pitch where the horizon is in frame (VoxelScene.skyFor). nil leaves the
+-- void transparent, which is what every rung below it wants.
+-- `slot` names which cached canvas to render into (see `slots` above);
+-- omitted is the free-roam world pass.
+function Voxel3D.beginScene(w, h, cx, cy, vw, vh, sky, slot)
+  -- the wireframe variant when the player has it on AND it built; either
+  -- answer falls through to the plain scene rather than to no scene
+  local grid = VoxelGrid.enabled()
+  local sh = grid and Voxel3D.shader(true) or nil
+  if not sh then
+    grid, sh = false, Voxel3D.shader()
+  end
+  if not sh then return false end
+  local name = slot or "world"
+  -- the size the scene is RASTERISED at, against the size the caller (and
+  -- the engine's composite behind it) is owed. See the slot block above.
+  local div = Quality.scale()
+  local rw = math.max(1, math.floor(w / div))
+  local rh = math.max(1, math.floor(h / div))
+  local c = slotCanvas(name, rw, rh)
+  if not c then return false end
+  canvas = c
+  renderW, renderH = rw, rh
+  -- Full size, not rw/rh: this pair is read by project(), which anchors the
+  -- overworld's 2D FX closures, and those draw into the canvas endScene
+  -- hands back -- the full-size one.
+  canvasW, canvasH = w, h
+  presentName = (rw ~= w or rh ~= h) and (name .. "#present") or nil
+  sceneName = name
+  -- kept for the screen-space pass, which needs to know what a reflected
+  -- ray that left the frame was looking at. Captured HERE rather than read
+  -- back later because `sky` is shadowed further down by the light split.
+  Voxel3D.skyFill = sky
+  -- a depth buffer is what makes occlusion real: walk behind a building and
+  -- the building wins, with no y-sorting anywhere. Readable when something
+  -- downstream is going to ask it questions (see depthCanvas above), and
+  -- the plain internal one otherwise -- including whenever the readable
+  -- kind could not be bound, which is a driver fact rather than a frame's.
+  local depth = RayFX.wanted() and depthCanvas(name, rw, rh) or nil
+  local ok = false
+  if depth then
+    ok = pcall(love.graphics.setCanvas, { canvas, depthstencil = depth })
+    if not ok then
+      depthOK = false
+      depth = nil
+    end
+  end
+  if not ok then
+    ok = pcall(love.graphics.setCanvas, { canvas, depth = true })
+  end
+  if not ok then
+    pcall(love.graphics.setCanvas)
+    return false
+  end
+  sceneDepth = depth
+  -- Ahead of the clear, because the sky's bands are placed off the ground
+  -- plane's vanishing line and that is a property of this matrix.
+  Voxel3D.vp = Voxel3D.viewProjection(cx, cy, vw, vh)
+  if sky then
+    love.graphics.clear(sky[1], sky[2], sky[3], sky[4] or 1, true, true)
+    -- The sky goes down here, in the one window in this function where a
+    -- rectangle is just a rectangle: the depth mode and the scene shader are
+    -- both set below. Sky.paint puts them aside anyway -- beginScene is not the
+    -- only thing that has ever left a shader bound.
+    --
+    -- w / vw is this frame's pixels per WORLD pixel, which is the size a diorama
+    -- pixel is on screen: the sky's dither grid is cut to that, so its squares
+    -- are the same size as the world's own and follow every resize and zoom.
+    -- The banded sky also hangs the hour's sun or moon (skyBody projects it
+    -- through this very camera); a flat sky has no bands and hangs nothing.
+    -- rw/rh, not w/h: the sky is painted INTO the scene canvas, so its
+    -- horizon row, its dither cell and the sun disc's place on it are all
+    -- questions about that canvas rather than about the panel. Passing the
+    -- panel's size here would put the horizon off the bottom of a
+    -- half-resolution frame and size the dither grid to squares the canvas
+    -- cannot hold.
+    Sky.paint(rw, rh, sky, Voxel3D.horizonY(rh), rw / math.max(1, vw or rw),
+              sky.bands and Voxel3D.skyBody(rw, rh) or nil)
+  else
+    love.graphics.clear(0, 0, 0, 0, true, true)
+  end
+  love.graphics.setDepthMode("lequal", true)
+  -- models mirror on X for right-facing and alternate walk steps, which
+  -- flips winding; hidden faces are already culled at build time, so there
+  -- is nothing to gain from backface culling and a real bug to avoid
+  love.graphics.setMeshCullMode("none")
+  love.graphics.setShader(sh)
+  love.graphics.setColor(1, 1, 1, 1)
+  pcall(sh.send, sh, "vp", "row", Voxel3D.vp)
+  pcall(sh.send, sh, "eye", Voxel3D.eye)
+  -- the sun's frame, filled by ShadowMap just before this pass opened.
+  -- Sent unconditionally: the sampler is declared either way, and leaving
+  -- one unbound is a driver-dependent crash rather than a fallback.
+  local map = ShadowMap.active()
+  pcall(sh.send, sh, "sunVP", "row", map and ShadowMap.uvVP or IDENTITY)
+  local tex = ShadowMap.texture()
+  if tex then pcall(sh.send, sh, "sunMap", tex) end
+  pcall(sh.send, sh, "sunDark", map and Voxel3D.SHADOW_ALPHA or 0)
+  pcall(sh.send, sh, "sunBias", ShadowMap.bias)
+  local texel = 1 / ShadowMap.res
+  pcall(sh.send, sh, "sunTexel", { texel, texel })
+  -- only the SOFT variant declares this one, so on every other rung the
+  -- send simply does not take -- which is right: a shader with one fixed
+  -- edge width has nothing to size
+  pcall(sh.send, sh, "sunSoft", ShadowMap.softness())
+  if grid then
+    pcall(sh.send, sh, "gridDark", VoxelGrid.DARK)
+    pcall(sh.send, sh, "gridWidth", VoxelGrid.WIDTH)
+  end
+  -- ordinary shading until the silhouette pass asks for otherwise. Sent
+  -- every frame rather than once, because a scene that opened mid-ghost --
+  -- a driver hiccup between beginGhost and endGhost -- would otherwise
+  -- start out flattening everything it drew.
+  pcall(sh.send, sh, "ghost", 0)
+  pcall(sh.send, sh, "ghostColor", Voxel3D.GHOST_COLOR)
+  -- The hour's light, split into the sky's fill and the sun's own share.
+  -- `map` above already says whether there is a shadow map to gate the
+  -- directional term on -- with none, the whole tint goes into the fill
+  -- and the split collapses to the multiply it used to be.
+  local sky, sun = Light.split(Voxel3D.tint or { 1, 1, 1 },
+                               map and Voxel3D.SHADOW_ALPHA or 0,
+                               Voxel3D.skyAmount or 0)
+  pcall(sh.send, sh, "skyTint", sky)
+  pcall(sh.send, sh, "sunTint", sun)
+  -- and the water: the swell, its two wave trains, and the slope window a
+  -- crest has to reach to catch the sun. The window is measured FROM the
+  -- flat surface's own alignment with the light (-ray.y is what a level
+  -- pond scores), so it stays a window on the crests at any sun angle
+  -- rather than drifting off them as the hour moves.
+  local ray = ShadowMap.sunDir()
+  pcall(sh.send, sh, "sunRay", ray)
+  pcall(sh.send, sh, "swell", Water.swell())
+  pcall(sh.send, sh, "swellA", Water.WAVE_A)
+  pcall(sh.send, sh, "swellB", Water.WAVE_B)
+  pcall(sh.send, sh, "swellPhase", Water.phase())
+  -- the same clock again, under the name the FRAGMENT declares: the foam's
+  -- lapping edge rides the tide that moves the waterline it sits on
+  pcall(sh.send, sh, "foamPhase", Water.phase())
+  -- sparkleNow, not SPARKLE: the row's strength with the rain taken out of it
+  -- (Water.wet), so a shower dulls the pond's glint on the same tick it starts
+  pcall(sh.send, sh, "sparkle", Water.sparkleNow())
+  local flat = -ray[2]
+  pcall(sh.send, sh, "glint", { flat + Water.GLINT_LO, flat + Water.GLINT_HI })
+  -- the window glass: the tileset's mask (or the blank -- the sampler is
+  -- declared either way, and unbound is a driver-dependent crash), how lit
+  -- the panes are, and the movement-fed glint as the caller last set it
+  local mask = Voxel3D.glassMask or GlassMask.blank()
+  if mask then
+    pcall(sh.send, sh, "glassMask", mask)
+    local ok, mw, mh = pcall(mask.getDimensions, mask)
+    pcall(sh.send, sh, "glassSize", { ok and mw or 1, ok and mh or 1 })
+  end
+  pcall(sh.send, sh, "glassNight", Voxel3D.glassNight or 0)
+  pcall(sh.send, sh, "lampColor", Voxel3D.lampColor or { 1.0, 0.84, 0.5 })
+  pcall(sh.send, sh, "glassPhase", Voxel3D.glassPhase or 0)
+  pcall(sh.send, sh, "glassGlint", Voxel3D.glassGlint or 0)
+  -- on until a sprite pass says otherwise, reset per frame like `ghost`
+  pcall(sh.send, sh, "glassOn", 1)
+  -- the wind's bearing, wavelength and phase. Constant across the frame --
+  -- only `sway` varies per draw, and it is what decides whether a mesh
+  -- takes any of this at all
+  pcall(sh.send, sh, "windDir", Wind.DIR)
+  pcall(sh.send, sh, "windFreq", Wind.FREQ)
+  pcall(sh.send, sh, "windPhase", Wind.phase())
+  pcall(sh.send, sh, "sway", 0)
+  -- the curved world bends about the camera's focus, so the horizon keeps
+  -- a fixed distance ahead of the player rather than sitting on the map.
+  -- A placed camera may decline it outright (Voxel3D.camera.curve = 0).
+  local placed = Voxel3D.camera
+  Voxel3D.curveK = (placed and placed.curve) or WorldCurve.k(vh)
+  Voxel3D.curveX, Voxel3D.curveZ = cx, cy
+  pcall(sh.send, sh, "curve", { cx, cy, Voxel3D.curveK })
+  -- clip w at the focus point, the reference depth project() reports scale
+  -- against (so scale == 1 for anything standing at the view centre)
+  local m = Voxel3D.vp
+  Voxel3D.focusW = m[13] * cx + m[14] * 0 + m[15] * cy + m[16]
+  activeShader = sh
+  active = true
+  return true
+end
+
+-- Depth handling for the character pass. Gen 1 draws sprites over the
+-- background unconditionally, so characters render with the depth test
+-- forced to pass (still writing depth: the grass mesh drawn after them
+-- tests against it to overdraw feet). "test" restores normal occlusion.
+function Voxel3D.depth(mode)
+  if not active then return end
+  pcall(love.graphics.setDepthMode, mode == "always" and "always" or "lequal",
+        true)
+end
+
+-- ------------------------------------------------ the player's own ghost --
+
+-- The silhouette's colour, and how solid it is.
+--
+-- ONE flat grey rather than a dimmed copy of the sprite, so the shape reads
+-- at a glance instead of competing with whatever is showing through it --
+-- and translucent rather than opaque, so it stays a hint of where the
+-- player is rather than a hole punched in the building. The wall it is
+-- seen through still shows, which is what keeps it reading as "behind
+-- that" instead of "in front of it".
+Voxel3D.GHOST_COLOR = { 0.26, 0.26, 0.28 }
+Voxel3D.GHOST_ALPHA = 0.5
+
+-- Draw a character AGAIN wherever the ordinary draw LOST the depth test.
+--
+-- Honest occlusion is the point of this mode -- walk behind the Mart and the
+-- Mart is genuinely in front of you -- but a player who cannot see their own
+-- character has lost track of where they are standing, which the flat game
+-- never allowed. So the figure is drawn a second time with the test
+-- INVERTED: "greater" passes exactly where "lequal" failed, and LOVE hands
+-- the compare straight to glDepthFunc, so the two are true complements.
+-- Every texel of the sprite is therefore drawn once and once only -- solid
+-- where it is visible, translucent where it is not -- with no seam where
+-- they meet and no double-blending anywhere.
+--
+-- Nothing is drawn at all when nothing is in the way, and no code here ever
+-- asks whether the player is occluded: the depth buffer already knows, and
+-- the test is the question.
+--
+-- Depth WRITES are off. This pass is behind the scenery by definition, and
+-- writing would file the hidden figure's depth in front of the building
+-- hiding it -- the grass pass at the end of the frame reads that buffer.
+--
+-- The caller redraws through the ordinary character path, so the ghost keeps
+-- the same mesh, matrix and camera-ward PULL as the real draw. The pull
+-- matching is what keeps the leaning-over-a-near-wall case out of here: pull
+-- already won that fight for the solid draw, so this pass finds nothing left
+-- to paint and a character merely standing close to a wall does not shimmer
+-- a ghost over it.
+function Voxel3D.beginGhost()
+  if not active then return end
+  pcall(love.graphics.setDepthMode, "greater", false)
+  love.graphics.setColor(1, 1, 1, Voxel3D.GHOST_ALPHA)
+  if activeShader then
+    pcall(activeShader.send, activeShader, "ghostColor", Voxel3D.GHOST_COLOR)
+    pcall(activeShader.send, activeShader, "ghost", 1)
+  end
+end
+
+-- Flatten whatever is drawn next to one solid colour, or nil to stop.
+--
+-- The same `ghost` path the silhouette uses, WITHOUT beginGhost's inverted
+-- depth test and half alpha -- this is for something drawn normally that
+-- simply wants to come out one colour, which is what a hit flash on a sprite
+-- is. beginScene resets the uniform every frame, so a pass that forgets to
+-- clear it cannot leak into the next one.
+-- `amount` is how far toward that colour, 0..1; omitted is all the way.
+-- Anything short of 1 leaves the sprite's own shading showing through, which
+-- is the difference between a hit flash and a white cut-out.
+function Voxel3D.flatten(color, amount)
+  if not (active and activeShader) then return end
+  local sh = activeShader
+  if color then
+    pcall(sh.send, sh, "ghostColor", color)
+    pcall(sh.send, sh, "ghost", math.max(0, math.min(1, amount or 1)))
+  else
+    pcall(sh.send, sh, "ghost", 0)
+  end
+end
+
+-- Whether what is drawn next carries the voxel wireframe. false for the
+-- length of a draw, true to put it back.
+--
+-- The wireframe reads a mesh's OWN model space and darkens its integer
+-- planes (see VoxelGrid), which is only a wireframe because every mesh in
+-- this mode is built ONE UNIT PER VOXEL: terrain in world pixels, a
+-- character card in the sprite's own pixels. A mesh whose model space does
+-- not mean that gets no wireframe out of the same shader -- it gets
+-- whichever of its integer planes happen to fall inside it, which is a
+-- stray line rather than a seam.
+--
+-- So this is not a style switch. It is how a mesh that is not on the voxel
+-- grid says so, and the alternative -- rescaling such a mesh until its
+-- units happen to be voxels -- would change what it IS to satisfy a
+-- shading pass.
+--
+-- Sent rather than branched because the plain scene shader has no such
+-- uniform, and the send simply does not take there -- which is right: with
+-- no wireframe compiled in there is nothing to suppress.
+function Voxel3D.seams(on)
+  if not (active and activeShader) then return end
+  pcall(activeShader.send, activeShader, "gridDark",
+        on and VoxelGrid.DARK or 0)
+end
+
+-- Whether what is drawn next may consult the glass mask. false for the
+-- length of a sprite-sheet pass, true to put it back.
+--
+-- Same shape as seams(), for the same reason: the mask means "this ATLAS
+-- texel is window glass", so it is only an answer for meshes textured from
+-- the tileset atlas. A sprite sheet's coordinates land wherever they land
+-- on it, and at night that painted lamplight stripes down whoever was
+-- standing in the wrong part of their own sheet.
+function Voxel3D.glass(on)
+  if not (active and activeShader) then return end
+  pcall(activeShader.send, activeShader, "glassOn", on and 1 or 0)
+end
+
+function Voxel3D.endGhost()
+  if not active then return end
+  pcall(love.graphics.setDepthMode, "lequal", true)
+  love.graphics.setColor(1, 1, 1, 1)
+  -- back to ordinary shading before anything else draws; leaving it set
+  -- would flatten the grass pass that follows into one grey sheet
+  if activeShader then
+    pcall(activeShader.send, activeShader, "ghost", 0)
+  end
+end
+
+-- -------------------------------------------------------------- shadows --
+
+-- The sun. One direction, shared by everything that needs to know where
+-- the light comes from: the shadow map, the flat fallback below, and the
+-- baked contact shading in ChunkMesher. Both shears are negative, which
+-- hangs it in the SOUTHEAST and throws every shadow northwest -- up and to
+-- the left on screen.
+Voxel3D.SHADOW_KX = ShadowMap.KX   -- west drift per pixel of height
+Voxel3D.SHADOW_KZ = ShadowMap.KZ   -- north drift per pixel of height
+-- Snow lying on the world's own up-faces: how much, set per PASS by whoever
+-- is drawing (VoxelScene, from GroundFX's cover), and what colour. Zero by
+-- default so a caller that never heard of it draws exactly what it always
+-- did. Slightly blue rather than white: snow under an overcast sky is lit by
+-- the sky, and pure white here would be the one thing in the frame not
+-- standing in the same light as everything else.
+Voxel3D.snowTop = 0
+Voxel3D.SNOW_COLOR = { 0.93, 0.95, 0.99 }
+-- What a face that does NOT point up still takes. A third: enough that a
+-- hedge reads as snowed rather than as green with a lid, little enough that
+-- a wall keeps its own art down its flank.
+Voxel3D.SNOW_SIDE = 0.34
+
+Voxel3D.SHADOW_EPS = 0.25     -- float above the ground to dodge z-fighting
+Voxel3D.SHADOW_ALPHA = 0.40   -- how far into black a shadowed surface goes
+
+-- Whether real shadows are running this frame. False headless and on any
+-- driver the sun pass could not start on, which is when VoxelScene falls
+-- back to the flat decals below.
+function Voxel3D.shadowsActive()
+  return ShadowMap.active()
+end
+
+-- The upright card a character presents to the sun: its 16x16 sprite quad
+-- (corners (0,0,0)..(16,16,0), feet at y = 0) standing on the middle of
+-- the cell whose top-left is world (px, py), feet at height `y`.
+--
+-- This is the caster the shadow pass draws -- deliberately NOT the leaning
+-- slab the camera sees. The slab tips back by the camera's pitch to read
+-- face-on, which is a trick played on the viewer; letting the sun see it
+-- too would shrink every shadow to nothing as the camera flattened toward
+-- top-down. The sun sees the figure standing up, at every tilt.
+--
+-- The z-flatten matters when this is used the other way round, as the
+-- lookup transform a lit slab reads its own shadowing with (Voxel3D.draw's
+-- `sunModel`): it collapses the slab's side relief onto the card plane, so
+-- every vertex asks about the exact surface the sun recorded rather than
+-- one a few pixels behind it, and a figure cannot fringe itself. On the
+-- caster itself it is a no-op -- that quad is already flat.
+function Voxel3D.casterMatrix(px, py, y, mirror)
+  local m = Mat4.translate(px + 8, y, py + 8)
+  if mirror then m = Mat4.mul(m, Mat4.scale(-1, 1, 1)) end
+  return Mat4.mul(Mat4.mul(m, Mat4.translate(-8, 0, 0)),
+                  Mat4.scale(1, 1, 0))
+end
+
+-- FALLBACK ONLY (no shadow map: headless, or a driver that cannot make the
+-- canvas). Character drop shadows as decals -- the sprite frame squashed
+-- flat onto its ground plane and drawn translucent black. It can only ever
+-- paint the floor, which is the whole reason ShadowMap exists.
+--
+-- Flattening is measured from the ground plane, so a hop slides the whole
+-- shadow along the sun line while it stays glued to the ground -- the
+-- classic jump-shadow tell.
+function Voxel3D.shadowMatrix(px, py, gh, lift, mirror)
+  local card = Voxel3D.casterMatrix(px, py, gh + (lift or 0), mirror)
+  -- flatten about the ground plane: y' = 0, x/z shear by height above it
+  local squash = { 1, Voxel3D.SHADOW_KX, 0, 0,
+                   0, 0,                 0, 0,
+                   0, Voxel3D.SHADOW_KZ, 1, 0,
+                   0, 0,                 0, 1 }
+  local m = Mat4.mul(squash, Mat4.mul(Mat4.translate(0, -gh, 0), card))
+  return Mat4.mul(Mat4.translate(0, gh + Voxel3D.SHADOW_EPS, 0), m)
+end
+
+-- The decal pass draws between terrain and characters: depth-tested so a
+-- building still hides a shadow behind it, but NOT depth-writing -- the
+-- grass tufts drawn at the end of the frame must keep beating the ground
+-- plane, and one quad per entity has no self-overlap to guard against.
+function Voxel3D.beginShadows()
+  if not active then return end
+  pcall(love.graphics.setDepthMode, "lequal", false)
+  love.graphics.setColor(0, 0, 0, Voxel3D.SHADOW_ALPHA)
+end
+
+function Voxel3D.endShadows()
+  if not active then return end
+  pcall(love.graphics.setDepthMode, "lequal", true)
+  love.graphics.setColor(1, 1, 1, 1)
+end
+
+-- The same footing, for a caller that brings its OWN colour: the puddles
+-- and the snow the weather leaves on the ground (lib/GroundFX.lua). Split
+-- from the pair above rather than shared with it, because the one thing
+-- those two lines exist to do -- set the shadow's flat black -- is the one
+-- thing a coloured decal must not inherit; a sky-blue puddle drawn through
+-- beginShadows would come out black and read as a hole in the road.
+-- `write` asks for depth WRITES as well as the test, and exactly one caller
+-- wants them: the puddles. The screen-space pass downstream needs a puddle
+-- pixel's own POSITION -- the plane it reflects off is reconstructed out of
+-- the depth buffer -- and a decal that does not write is not in that buffer:
+-- the pixel still reports the road underneath it, so a puddle drawn this way
+-- would reflect off the road's plane rather than its own. (WHICH pixels are
+-- puddle is a separate question, and no longer a question about depth at
+-- all -- see the alpha tag below.)
+--
+-- Safe for the same reason the shadow decals could not afford it: everything
+-- drawn after a decal that matters -- the characters, the tall grass, the
+-- flowers -- is pulled camera-ward by six world pixels or more, and a puddle
+-- floats seven tenths of one. The pull wins by an order of magnitude, so the
+-- grass still overdraws feet and a walker still stands in front of the water
+-- they are standing in.
+function Voxel3D.beginDecals(write)
+  if not active then return end
+  pcall(love.graphics.setDepthMode, "lequal", write and true or false)
+end
+
+function Voxel3D.endDecals()
+  if not active then return end
+  pcall(love.graphics.setDepthMode, "lequal", true)
+  love.graphics.setColor(1, 1, 1, 1)
+end
+
+-- ------- THE ALPHA TAG: how a decal tells the screen pass what it IS
+--
+-- The screen pass has one image and one depth buffer to work from, so for as
+-- long as this row has existed a surface's CLASS has had to be guessed out of
+-- its geometry. For the sea that guess is sound -- it is the only thing in
+-- the world standing in a band below zero. For a puddle it never was: the
+-- guess was the fraction of its height (0.7, the float below), and a
+-- character is a card leaned back by the camera's pitch whose height climbs
+-- its own face and crosses point-seven a dozen times. The probe took that
+-- apart, and two further guesses at geometry -- flatness, a strict normal --
+-- failed with it. The answer is not a third guess. It is to stop guessing.
+--
+-- The channel it goes in is the scene canvas's own ALPHA, and it is free for
+-- two reasons that hold together:
+--
+--   NOTHING ELSE IS USING IT for geometry. The canvas is rgba8 and its alpha
+--   is meaningful -- the void is transparent, which is why the composite in
+--   endScene copies rather than blends -- but every drawn pixel in it is at
+--   exactly 1.0 and cannot be at anything else.
+--
+--   AND NOTHING ELSE CAN LAND ON IT BY ACCIDENT, which is the part that
+--   makes this a mask rather than a fourth guess. The alpha blend equation
+--   is dst.a = src.a + dst.a * (1 - src.a), so a decal painted at 0.90 over
+--   ground at 1.0 still resolves to exactly 1.0, and so does one at 0.78,
+--   and so does an additive spark. Every ordinary draw SATURATES this
+--   channel. A value that is neither 1.0 nor 0.0 can only have been put
+--   there deliberately, outside the blend.
+--
+-- Which is the whole of the pair below: mask the colour write down to the
+-- alpha channel alone, set the blend to replace so dst.a IS src.a, and draw
+-- the decal a second time. The first draw's composited colour is untouched
+-- -- the mask blocks RGB -- and the only thing that changes in the finished
+-- frame is the byte RayFX reads.
+--
+-- 254 of 255 rather than something further from 1.0, and the cost is worth
+-- naming: this value survives the pass (RayFX hands src.a back out) and ends
+-- up as the pixel's own opacity at the engine's composite, so a tagged pixel
+-- is 0.4% see-through. That is under half a step of the 8-bit art it is
+-- drawn over. The reader tests for it exactly rather than for "less than
+-- one" -- see RayFX.PUDDLE_TAG, which is this same number written down in
+-- the file that reads it, the same way PUDDLE and the decal's float height
+-- are written down twice.
+Voxel3D.PUDDLE_TAG = 254 / 255
+
+local stampBlend, stampAlphaMode = nil, nil
+
+-- Open the stamp. Returns false when the mark would go nowhere, and the
+-- caller should then skip the extra draw entirely rather than paint an
+-- untagged copy of its layer.
+--
+-- Gated on the readable depth buffer, which is exactly the frame's answer to
+-- "will a screen pass run at all" (see endScene): at RTX OFF nothing is
+-- allocated, nobody reads alpha, and the tag is a draw call spent on a byte
+-- no one looks at. It is also the honest guard for a driver that refused the
+-- depth format -- there, too, RayFX finds nothing to read.
+--
+-- A caller that sets its own colour per draw (GroundFX does, one setColor
+-- per layer) must pass `tag` as that colour's ALPHA. The colour set here is
+-- only the default for a caller that does not.
+function Voxel3D.beginAlphaStamp(tag)
+  if not active then return false end
+  if not sceneDepth then return false end
+  local g = love.graphics
+  -- Not in the shipped LOVE of every host this mod runs on, and a missing
+  -- colour mask is not worth a crash: no mask, no tag, no reflection.
+  if not (g.setColorMask and g.getColorMask) then return false end
+  if not pcall(g.setColorMask, false, false, false, true) then return false end
+  stampBlend, stampAlphaMode = g.getBlendMode()
+  -- replace, so the channel takes src.a rather than the blend's saturating
+  -- sum -- the whole point. premultiplied to match: with RGB masked off
+  -- there is nothing for an alphamultiply to multiply, and every other
+  -- replace in this codebase is written this way.
+  pcall(g.setBlendMode, "replace", "premultiplied")
+  -- The test stays, the WRITE goes off. The layer being stamped has already
+  -- laid its own depth down, so this second draw meets itself at exactly
+  -- equal depth -- lequal passes it, and writing again would be re-writing
+  -- the same numbers.
+  pcall(g.setDepthMode, "lequal", false)
+  g.setColor(0, 0, 0, tag or Voxel3D.PUDDLE_TAG)
+  return true
+end
+
+function Voxel3D.endAlphaStamp()
+  local g = love.graphics
+  pcall(g.setColorMask, true, true, true, true)
+  pcall(g.setBlendMode, stampBlend or "alpha", stampAlphaMode or "alphamultiply")
+  stampBlend, stampAlphaMode = nil, nil
+  pcall(g.setDepthMode, "lequal", true)
+  g.setColor(1, 1, 1, 1)
+end
+
+-- Draw one mesh with `model` (a Mat4) applied. Texture may be nil to keep
+-- whatever the mesh already carries. `pull` moves every vertex toward the
+-- eye along its own ray (see the shader) -- the artifact-free depth bias
+-- the character and grass passes ride in front of the terrain.
+--
+-- `sunModel` is where the SHADOW PASS put this same geometry, and defaults
+-- to `model` because for everything but a character the two are one matrix.
+-- A character is drawn leaning and cast upright, so it must hand over the
+-- upright transform or it reads its own shadow as falling on itself.
+-- `sway` is the wind's reach at the top of whatever this mesh is, in world
+-- pixels, and it defaults to ZERO -- sent on every draw rather than only on
+-- the ones that want it, so a swaying pass can never leak into the terrain
+-- that follows it.
+function Voxel3D.draw(mesh, texture, model, pull, sunModel, sway)
+  if not (active and mesh) then return end
+  -- the variant beginScene actually bound, not whichever one is default:
+  -- sending a uniform to the other shader would go nowhere
+  local sh = activeShader
+  if not sh then return end
+  if texture then mesh:setTexture(texture) end
+  -- LOVE defaults matrix uniforms to column-major; Mat4 is row-major
+  pcall(sh.send, sh, "model", "row", model or IDENTITY)
+  pcall(sh.send, sh, "sunModel", "row", sunModel or model or IDENTITY)
+  pcall(sh.send, sh, "pull", pull or 0)
+  pcall(sh.send, sh, "sway", sway or 0)
+  -- the snow lying on this mesh's up-faces, read from the field the caller
+  -- set rather than passed as an argument: every existing call site would
+  -- have needed a new parameter for a value that is the same for a whole
+  -- pass, and `sway` is the cautionary tale for what happens when one of
+  -- them forgets (it is sent on every draw for exactly that reason)
+  pcall(sh.send, sh, "snowTop", Voxel3D.snowTop or 0)
+  pcall(sh.send, sh, "snowColor", Voxel3D.SNOW_COLOR)
+  pcall(sh.send, sh, "snowSide", Voxel3D.SNOW_SIDE)
+  love.graphics.draw(mesh)
+end
+
+-- Draw one terrain GROUP -- a map's chunked mesh (see ChunkMesher) --
+-- submitting only the cells that meet `b`, a world XZ box {x0, z0, x1, z1}
+-- in the group's own space. nil draws every cell, which is what a caller
+-- that cannot work out a box should pass: over-drawing is slow, and
+-- under-drawing is a hole in the world.
+--
+-- Same three uniforms Voxel3D.draw sends, sent ONCE for the whole group.
+-- Every cell of a map shares its model, its sun transform and its pull --
+-- they are one mesh cut up, not several objects -- and a send per chunk
+-- would hand a good part of the chunking's saving straight back.
+function Voxel3D.drawGroup(group, texture, model, pull, sunModel, b)
+  if not (active and group and group.chunks) then return end
+  local sh = activeShader
+  if not sh then return end
+  pcall(sh.send, sh, "model", "row", model or IDENTITY)
+  pcall(sh.send, sh, "sunModel", "row", sunModel or model or IDENTITY)
+  pcall(sh.send, sh, "pull", pull or 0)
+  -- terrain is planted by definition: buildings do not lean
+  pcall(sh.send, sh, "sway", 0)
+  local chunks = group.chunks
+  for i = 1, #chunks do
+    local ch = chunks[i]
+    -- `+ ch.ymax` on the north edge: the box is drawn on the GROUND, and a
+    -- cell whose ground is past it can still be in frame if something tall
+    -- stands on it -- see the note where ymax is measured
+    if not b or (ch.x1 >= b[1] and ch.x0 <= b[3]
+                 and ch.z1 + ch.ymax >= b[2] and ch.z0 <= b[4]) then
+      if texture then ch.mesh:setTexture(texture) end
+      love.graphics.draw(ch.mesh)
+    end
+  end
+end
+
+-- Project a world point to canvas pixels: returns (x, y, scale), or nil
+-- when the point is behind the camera. `scale` is how much bigger a thing
+-- at that depth appears than one at the focus point, so a caller can size
+-- with it -- or ignore it and draw unscaled, which is what tilt mode's
+-- billboards do.
+--
+-- This is what lets the overworld's FX closures (the "!" bubble, the heal
+-- machine, the Fly bird, the fishing rod) draw in voxel mode completely
+-- unchanged: they stay ordinary 2D draws, anchored to wherever their ground
+-- point lands under the same camera the 3D pass used.
+function Voxel3D.project(wx, wy, wz)
+  local m = Voxel3D.vp
+  if not m then return nil end
+  -- the same drop the vertex shader applies, or every FX anchored to a
+  -- ground point floats off its own feet the moment that ground bends
+  wy = wy - WorldCurve.drop(Voxel3D.curveK or 0, Voxel3D.curveX or 0,
+                            Voxel3D.curveZ or 0, wx, wz)
+  local cx = m[1] * wx + m[2] * wy + m[3] * wz + m[4]
+  local cy = m[5] * wx + m[6] * wy + m[7] * wz + m[8]
+  local cw = m[13] * wx + m[14] * wy + m[15] * wz + m[16]
+  if cw <= 1e-6 then return nil end
+  -- viewProjection already flipped clip-space Y into LOVE's Y-down canvas
+  -- convention, so both axes map the same way here -- no second flip
+  local x = (cx / cw * 0.5 + 0.5) * canvasW
+  local y = (cy / cw * 0.5 + 0.5) * canvasH
+  return x, y, (Voxel3D.focusW or cw) / cw
+end
+
+-- Re-bind the scene canvas for ordinary 2D drawing (no depth test), so
+-- screen-space overlays can be composited into the same image the 3D pass
+-- just filled. Pairs with endScene, which unbinds it.
+function Voxel3D.beginOverlay()
+  if not canvas then return false end
+  love.graphics.setShader()
+  love.graphics.setDepthMode()
+  local ok = pcall(love.graphics.setCanvas, canvas)
+  if not ok then return false end
+  love.graphics.setColor(1, 1, 1, 1)
+  return true
+end
+
+-- Close the overlay begun by beginOverlay.
+function Voxel3D.endOverlay()
+  love.graphics.setCanvas()
+  active, activeShader = false, nil
+end
+
+-- End the pass and hand back the rendered canvas, at the size the caller
+-- asked beginScene for -- which is the size the engine's composite needs,
+-- whatever resolution the scene was actually rasterised at (see the slot
+-- block above).
+function Voxel3D.endScene()
+  if not active then return nil end
+  love.graphics.setShader()
+  love.graphics.setDepthMode()
+  love.graphics.setMeshCullMode("none")
+  love.graphics.setCanvas()
+  active, activeShader = false, nil
+  local small = canvas
+  if not small then return small end
+
+  -- ------- fake ray tracing, at the resolution the scene was rasterised at
+  --
+  -- Here rather than as a worldPresent pipeline, for two reasons that both
+  -- come down to what the pass needs to see.
+  --
+  -- It needs the DEPTH BUFFER, which stops existing the moment this
+  -- function hands the colour canvas back -- nothing downstream of here has
+  -- ever been given one, and giving one to the pipeline registry would mean
+  -- inventing a way to carry it.
+  --
+  -- And it needs the SMALL image. At RES 1/2 what leaves this function is
+  -- an upscale; marching a ray across it is paying four times over to walk
+  -- through detail that was never rendered, and the depth buffer it would
+  -- be marching against is the small one anyway.
+  --
+  -- Both callers get it for free by being callers: the battle arena renders
+  -- through this same pair into a slot of its own, and the pass follows the
+  -- slot. nil back means the rung is OFF or the effect could not run, and
+  -- the scene carries on exactly as it is.
+  if sceneDepth then
+    local lit = RayFX.apply({
+      canvas = small,
+      depth = sceneDepth,
+      vp = Voxel3D.vp,
+      eye = Voxel3D.eye,
+      slot = sceneName,
+      w = renderW,
+      h = renderH,
+      sky = Voxel3D.skyFill,
+      -- the sun's own place on THIS canvas, for the shafts to march at --
+      -- the same projection the sky hung its disc with, asked again at
+      -- render resolution
+      body = Voxel3D.skyBody(renderW, renderH),
+      -- the bend this frame was drawn with. The depth buffer records the
+      -- BENT world, so the pass has to be told how to take the bend back
+      -- off before it asks what class a surface is -- see RayFX.WATER_Y.
+      curve = { Voxel3D.curveX or 0, Voxel3D.curveZ or 0,
+                Voxel3D.curveK or 0 },
+    })
+    if lit then small = lit end
+  end
+
+  -- whatever came out of that is what the overlay draws into and what a
+  -- caller with no present step is handed
+  canvas = small
+  if not presentName then return small end
+  local out = slotCanvas(presentName, canvasW, canvasH)
+  -- A present canvas that could not be made is not worth losing the frame
+  -- over: hand back the small one and let it composite wrong for a frame
+  -- rather than dropping to the flat 2D path on a transient allocation
+  -- failure. The next frame retries.
+  if not out then return small end
+  local prevBlend, prevAlpha = love.graphics.getBlendMode()
+  local ok = pcall(function()
+    love.graphics.setCanvas(out)
+    -- replace, not alpha blend: this is a copy, and the scene's own alpha
+    -- is meaningful -- the void is transparent at every rung below the one
+    -- that paints a sky, and blending would premultiply it away
+    love.graphics.setBlendMode("replace", "premultiplied")
+    love.graphics.setColor(1, 1, 1, 1)
+    love.graphics.draw(small, 0, 0, 0,
+                       canvasW / renderW, canvasH / renderH)
+  end)
+  love.graphics.setCanvas()
+  love.graphics.setBlendMode(prevBlend or "alpha", prevAlpha)
+  if not ok then return small end
+  -- the overlay draws into what we just handed back, not into the small one
+  canvas = out
+  return out
+end
+
+function Voxel3D.canvas()
+  return canvas
+end
+
+-- Drop the GPU objects (window resize, hot reload).
+function Voxel3D.invalidate()
+  for name, held in pairs(slots) do
+    if held.canvas and held.canvas.release then
+      pcall(held.canvas.release, held.canvas)
+    end
+    slots[name] = nil
+  end
+  canvas, canvasW, canvasH = nil, 0, 0
+  renderW, renderH, presentName = 0, 0, nil
+  -- the depth buffers went out with the slots above; `depthOK` deliberately
+  -- does NOT reset, because whether this driver can make a readable one is
+  -- a fact about the driver rather than about the window that just resized
+  sceneDepth, sceneName = nil, nil
+  ShadowMap.invalidate()
+  -- the sky is part of this pass and holds a shader of its own
+  Sky.invalidate()
+  -- and the glass masks are textures of this context too
+  GlassMask.invalidate()
+  -- and the screen-space pass keeps a canvas per slot of its own
+  RayFX.invalidate()
+end
+
+return Voxel3D

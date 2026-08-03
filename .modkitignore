@@ -1,0 +1,53 @@
+# Files that stay in the repo and out of the distributed package.
+# Exact relative paths, one per line -- modkit matches literally, no globs.
+
+# The SDK suite and the probes it grew out of. A shipped test that requires
+# an engine module reads as a private require against the archive
+# (CONTRIBUTING-mods.md "What the PR must contain", 2).
+#
+# Eleven names were removed from this list when the twenty-one dead probes
+# were deleted: they all loaded `tests/drivers/util.lua`, a harness that
+# exists neither in this tree nor in any build, so every one of them failed
+# on its first line. modkit matches literally, so an entry for a file that
+# is gone is not an error -- it is just a lie about what the package
+# excludes, which is worse.
+tests/dramatic_shape_test.lua
+
+# Authoring tools. These run by hand on a machine that has imported its own
+# ROM, read the local cache, and emit assets/voxels/*.lua; the carved models
+# are what a player installs, the carving is not.
+tools/build_voxels.py
+tools/contact_sheets.py
+tools/building_images.py
+tools/building_voxels.py
+tools/voxel-survey.md
+assets/docs/buidling_to_voxel/sprite_extract.py
+assets/docs/buidling_to_voxel/voxel_build_verify.py
+
+# assets/docs/**.md stays in: data/voxel_heights.lua points a modder at the
+# building catalogue, and the methodology is where the geometry's provenance
+# is written down.
+
+# The generator sheets the ground art was cut from. A contact sheet is a
+# megabyte and a half of paper around six sixteen-pixel drawings; the strips
+# in assets/ground/ are what the mod loads, and these are what they were cut
+# from (tools/sheet2strip.ps1). Kept in the repo so the art can be recut,
+# out of the package so a player does not download nine megabytes of them.
+assets/ground/source/snowleve.png
+assets/ground/source/snowlevearvore.png
+assets/ground/source/snowmedioarvore.png
+assets/ground/source/snowpesado.png
+assets/ground/source/snowpesadoarvore.png
+
+# The sheet converter itself: it runs by hand on an authoring machine and
+# needs PowerShell and System.Drawing, neither of which a player has.
+tools/sheet2strip.ps1
+
+# The probes for the newest features, on the same rule as the suite above.
+tests/ecology_ground_probe.lua
+tests/rayfx_water_probe.lua
+tests/comforts_probe.lua
+tests/puddle_debug.lua
+tests/daynight_dial_probe.lua
+tests/night_probe.lua
+tests/shadow_length_probe.lua
