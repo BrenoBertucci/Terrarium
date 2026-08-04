@@ -9,18 +9,18 @@
 --
 -- This makes the roll VISIBLE.  The same encounter table, rolled the same
 -- way with the same probability buckets, decides which Pokemon are standing
--- in the grass RIGHT NOW -- as ordinary map objects, wearing their own art,
--- wandering their own patch -- and the fight starts when you walk into one.
--- So the grass becomes a place with things in it: you can see what is
--- there, go round the Zubat, go after the Abra, or walk the route without
--- fighting anything at all.
+-- in the grass -- and on the water -- RIGHT NOW as ordinary map objects,
+-- wearing their own art, wandering their own patch -- and the fight starts
+-- when you walk into one.  So a meadow and a pond are both places with
+-- things in them: you can see what is there, go round the Zubat, go after
+-- the Magikarp (once you Surf), or walk the route without fighting.
 --
 -- Three settings' worth of that, on the WILD row:
 --
---   ROAM  wild Pokemon stand in the grass and the random roll is off.
---         What you fight is what you walked into.
---   MIX   they stand in the grass AND the roll still happens, so the
---         grass can still surprise you.
+--   ROAM  wild Pokemon stand in the grass and on the water; the random
+--         roll is off.  What you fight is what you walked into.
+--   MIX   they stand there AND the roll still happens, so the terrain can
+--         still surprise you.
 --   OFF   nothing here runs; the game rolls the dice exactly as it always
 --         did.
 --
@@ -164,16 +164,22 @@ end
 -- the same records, so a map that can produce a wild battle by walking can
 -- produce one standing here and no map that cannot gets one anyway.
 --
--- Water is only populated while SURFING.  The ponds a route is drawn with
--- are scenery to somebody on foot -- there is no way to reach what is
--- standing on them, and a Tentacool bobbing across an unreachable pond is
--- set dressing that costs a sprite.  Step onto the water and they are
--- there; step off and they leave with the pass that notices.
+-- Water is ALWAYS populated when the map has a water encounter table -- the
+-- same rule grass already has.  Earlier this was gated on the player
+-- Surfing, on the grounds that a Tentacool on an unreachable pond was set
+-- dressing; it is, and it is also the only way the pond makes sense next
+-- to a meadow full of visible Rattata.  What you can SEE and what you can
+-- REACH stay different questions: on foot they bob on the water as scenery,
+-- and the fight only starts when you walk into one (which still needs Surf,
+-- because Collision.canMove refuses water to a walker).  Step off the water
+-- and the grass ones stay; the water ones stay too -- they live there.
 local function terrainsFor(ow)
   local Game = game()
   local map = ow.map
+  -- A city can have Super Rod water and NO encounter table at all
+  -- (Vermilion, Cerulean).  Do not bail on a missing encDef -- grass and
+  -- Surf water need it, the rod fallback does not.
   local encDef = Game.data.encounters and Game.data.encounters[map.id]
-  if not encDef then return {} end
 
   -- The Pokemon Tower keeps its dice.
   --
@@ -198,7 +204,7 @@ local function terrainsFor(ow)
                    and map.def.index >= indoor.firstIndoorMap
                    and map.def.tileset ~= indoor.excludedTileset
 
-  if encDef.grass and (encDef.grass.rate or 0) > 0 then
+  if encDef and encDef.grass and (encDef.grass.rate or 0) > 0 then
     if isIndoor then
       -- caves, towers, the Mansion, the Power Plant: the whole floor is the
       -- encounter, so the whole floor is where they stand
@@ -207,8 +213,26 @@ local function terrainsFor(ow)
       out[#out + 1] = { kind = "grass", table_ = encDef.grass }
     end
   end
-  if ow.player.surfing and encDef.water and (encDef.water.rate or 0) > 0 then
+  if encDef and encDef.water and (encDef.water.rate or 0) > 0 then
     out[#out + 1] = { kind = "water", table_ = encDef.water }
+  else
+    -- Maps with fishable water but no Surf encounter table (cities, docks)
+    -- still know what lives there: the Super Rod list.  Ecology.waterRoster
+    -- already prefers the Surf table and falls back to the rod, so a city
+    -- pond gets its Krabby / Shellder the same way a route pond gets its
+    -- Tentacool.  Built as a tiny equal-bucket table so pickSlot / Ecology
+    -- can draw it without a second code path.
+    local slots = Ecology.waterRoster(map.id)
+    if slots and #slots > 0 then
+      local buckets = {}
+      for i = 1, #slots do
+        buckets[i] = math.floor(i * 256 / #slots)
+      end
+      out[#out + 1] = {
+        kind = "water",
+        table_ = { rate = 1, slots = slots, buckets = buckets },
+      }
+    end
   end
   return out
 end
@@ -325,6 +349,30 @@ local function prune(ow)
   return kept
 end
 
+-- Which terrain is shortest of heads right now.  A route with both grass
+-- and water used to fill entirely with grass by pure luck of the coin --
+-- the count cap is shared -- and the pond sat empty next to a crowded
+-- meadow.  Biasing the next spawn at the thinner terrain keeps both
+-- inhabited without raising the cap or inventing a second population.
+local function pickTerrain(ow, terrains)
+  if #terrains == 1 then return terrains[1] end
+  local n = {}
+  for _, r in ipairs(live(ow)) do
+    n[r.kind] = (n[r.kind] or 0) + 1
+  end
+  local best, bestN = terrains[1], n[terrains[1].kind] or 0
+  for i = 2, #terrains do
+    local c = n[terrains[i].kind] or 0
+    if c < bestN then best, bestN = terrains[i], c end
+  end
+  -- a coin still decides when they are even, so one kind never locks the
+  -- other out once the counts have matched
+  if love.math.random() < 0.35 then
+    return terrains[love.math.random(#terrains)]
+  end
+  return best
+end
+
 -- One head per pass while walking: a route fills in over a second or two
 -- from off the edge rather than several appearing at once.  On ARRIVAL the
 -- same work runs until the map is populated, because there is a whole
@@ -339,7 +387,7 @@ local function pass(ow, seeding)
   local attempts = seeding and SEED_TRIES or 1
   for _ = 1, attempts do
     if kept >= want then return end
-    if trySpawn(ow, terrains[love.math.random(#terrains)], seeding) then
+    if trySpawn(ow, pickTerrain(ow, terrains), seeding) then
       kept = kept + 1
     end
   end

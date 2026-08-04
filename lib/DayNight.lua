@@ -279,6 +279,41 @@ DayNight.TINTS = {
   night = { 88, 104, 168 },
 }
 
+-- ------- how dark the night is allowed to get
+--
+-- SOFT is the night above: blue-filtered, readable everywhere, what this
+-- file shipped with.  DEEP takes another large step down so a town reads
+-- as lit windows and street lamps in real darkness rather than as a blue
+-- daytime.  Windows (glassNight) and street lamps (StreetLamps, flatten to
+-- lampColor) are exempt from this multiply -- they burn after the hour's
+-- tint -- so DEEP only works when something is lit; with LAMPS OFF a DEEP
+-- rural night is deliberately hard to read.
+--
+-- Only night and violet move.  Day/golden/dawn/dusk stay put: this row is
+-- about the dark half of the cycle, not a global dimmer.
+DayNight.darkSetting = ModSetting.new("nightDark", "N-DARK",
+                                      { "deep", "soft" },
+                                      { "DEEP", "SOFT" })
+
+DayNight.TINTS_DEEP = {
+  violet = { 88, 72, 120 },
+  night = { 36, 44, 80 },
+}
+
+-- Matching sky palettes so the dome and the ground agree when DEEP is on.
+-- Softer ladder than the soft night: same six-rung shape, every rung darker.
+DayNight.PALETTES_DEEP = {
+  violet = { { 140, 96, 128 }, { 104, 72, 120 }, { 72, 56, 112 },
+             { 48, 40, 96 }, { 28, 28, 72 }, { 12, 16, 48 } },
+  night = { { 48, 56, 96 }, { 32, 40, 80 }, { 24, 28, 64 },
+            { 16, 20, 48 }, { 8, 12, 36 }, { 4, 4, 24 } },
+}
+
+function DayNight.deepNight()
+  local ok, v = pcall(DayNight.darkSetting.get, DayNight.darkSetting)
+  return ok and v == "deep"
+end
+
 -- ------- the weather's share of the light
 --
 -- One number, 0..1, written from OUTSIDE this file (lib/Weather.lua sets it
@@ -438,8 +473,11 @@ local palCache = { key = nil, pal = nil }
 -- cloud in 32 rungs, so a building shower re-blends the sky about as often as
 -- the clock does rather than once per frame
 local function cacheKey(t)
-  return math.floor(t % DayNight.CYCLE) * 32
+  -- +1 bit for DEEP/SOFT so flipping N-DARK rebuilds the memo rather than
+  -- serving a soft sky under a deep tint (or the reverse) for a second
+  return math.floor(t % DayNight.CYCLE) * 64
          + math.floor(math.max(0, math.min(1, DayNight.overcast or 0)) * 31)
+         + (DayNight.deepNight() and 32 or 0)
 end
 
 function DayNight.palette(t)
@@ -448,11 +486,16 @@ function DayNight.palette(t)
   if palCache.key == key then return palCache.pal end
   local mix = DayNight.mix(t)
   local cloud = cloudAt(mix)
+  local deep = DayNight.deepNight()
   local pal = {}
   for i = 1, #DayNight.PALETTES.day do
     local r, g, b = 0, 0, 0
     for name, w in pairs(mix) do
-      local c = DayNight.PALETTES[name][i]
+      local bank = DayNight.PALETTES[name]
+      if deep and DayNight.PALETTES_DEEP[name] then
+        bank = DayNight.PALETTES_DEEP[name]
+      end
+      local c = bank[i]
       r = r + c[1] * w
       g = g + c[2] * w
       b = b + c[3] * w
@@ -485,9 +528,13 @@ function DayNight.tint(outdoor, t)
     -- a palette colour, and the lattice's 248 ceiling would make even noon
     -- fractionally dim
     local mix = DayNight.mix(t)
+    local deep = DayNight.deepNight()
     local r, g, b = 0, 0, 0
     for name, w in pairs(mix) do
       local c = DayNight.TINTS[name] or DayNight.TINTS.day
+      if deep and DayNight.TINTS_DEEP[name] then
+        c = DayNight.TINTS_DEEP[name]
+      end
       r = r + c[1] * w
       g = g + c[2] * w
       b = b + c[3] * w

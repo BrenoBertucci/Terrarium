@@ -94,6 +94,7 @@ local Ecology = V.require("Ecology")
 local AmbientSound = V.require("AmbientSound")
 local Interiors = V.require("Interiors")
 local CityLife = V.require("CityLife")
+local StreetLamps = V.require("StreetLamps")
 local Carry = V.require("Carry")
 local Shelter = V.require("Shelter")
 local Routines = V.require("Routines")
@@ -746,6 +747,24 @@ local SETTINGS = {
     .. "let CYCLE run it -- ten minutes of sun, ten of moon, with the "
     .. "shadows, the sky and the light following -- or SYNC it to the "
     .. "clock on the wall, so Kanto's evening falls when yours does." },
+  -- Night depth and street lamps travel together in the options list: DEEP
+  -- only reads as a city night when something is lit on the street, and
+  -- LAMPS only matter once the sky is dark enough to need them.
+  { DayNight.darkSetting,
+    "How dark night is. DEEP takes a large step down from the soft blue "
+    .. "night so a town reads as lit windows and street lamps in real "
+    .. "darkness -- the sky and the world's tint both drop. SOFT is the "
+    .. "older, more readable blue night. Windows and street-lamp heads "
+    .. "are exempt either way: they burn after the hour's multiply.",
+    full = true },
+  { StreetLamps.setting,
+    "Street lamps in towns and cities. ON plants three models of post "
+    .. "(classic, twin-head, globe) on sidewalk cells next to buildings, "
+    .. "deterministic per map so the same corner always has the same "
+    .. "lamp. After dusk the heads burn in the hour's lamp colour so a "
+    .. "DEEP night still has light on the street. Routes and forests get "
+    .. "none -- only outdoor maps without a grass encounter table.",
+    full = true },
 }
 
 local schema = {}

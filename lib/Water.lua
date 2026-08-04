@@ -113,6 +113,22 @@ function Water.swell()
   return n
 end
 
+-- Whether the tileset's own water roll (asm rrca/rlca, TerrainAtlas hshift)
+-- should rewrite the atlas this frame.
+--
+-- Under FLAT the plane does not move, so the classic tile animation is the
+-- only life the pond has and must keep running. Under CALM/SWELL the
+-- geometry already carries two wave trains; a whole-texel jump on top of
+-- that ~3 times a second is a second clock on the same surface and reads
+-- as a flash (measured: ~39% of water pixels flip on the impulse pairs).
+-- Hold the tile still whenever the surface is geometry-in-motion.
+--
+-- Only the voxel atlas path asks this (TerrainAtlas.animate). The 2D path
+-- overdraws animated cells on its own clock and never reaches here.
+function Water.tileRoll()
+  return Water.swell() <= 0
+end
+
 -- The sparkle the scene shader should use THIS frame -- the row's own strength
 -- with the rain taken out of it.
 function Water.sparkleNow()
@@ -137,6 +153,35 @@ function Water.phase()
     return (love.timer.getTime() * Water.RATE) % (math.pi * 2048)
   end
   return 0
+end
+
+-- ------- the surface under a point
+--
+-- The vertex shader displaces water by the same two sines of world XZ
+-- (Voxel3D.lua). Anything that stands ON the water -- a wild mon, the
+-- player mid-Surf -- has to ride that height or it floats a fixed pixel
+-- above a moving plane and reads as glued to the air. So the height is
+-- published here, byte for byte with the shader, and nothing else may
+-- invent a second wave.
+--
+-- BASE is the class recess (TileShape.water = -2): the still plane sits
+-- two world pixels under the shore lip. heightAt is the swell alone
+-- (zero under FLAT); surfaceAt is where a foot actually lands.
+Water.BASE = -2
+
+function Water.heightAt(wx, wz)
+  local swell = Water.swell()
+  if swell <= 0 then return 0 end
+  local phase = Water.phase()
+  local ax, az = Water.WAVE_A[1], Water.WAVE_A[2]
+  local bx, bz = Water.WAVE_B[1], Water.WAVE_B[2]
+  local a = wx * ax + wz * az - phase
+  local b = wx * bx + wz * bz + phase * 0.7
+  return swell * (math.sin(a) * 0.55 + math.sin(b) * 0.45)
+end
+
+function Water.surfaceAt(wx, wz)
+  return Water.BASE + Water.heightAt(wx, wz)
 end
 
 return Water

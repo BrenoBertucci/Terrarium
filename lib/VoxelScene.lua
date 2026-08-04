@@ -25,6 +25,9 @@ local DayNight = V.require("DayNight")
 local GroundFX = V.require("GroundFX")
 local Quality = V.require("Quality")
 local Wind = V.require("Wind")
+local Water = V.require("Water")
+local Roamer = V.require("Roamer")
+local StreetLamps = V.require("StreetLamps")
 local PaletteFX = require("src.render.PaletteFX")
 local Map = require("src.world.Map")
 
@@ -184,7 +187,26 @@ local function groundAt(map, cellX, cellY)
   -- warp fires as they step in -- lifting them onto the geometry read as
   -- climbing an invisible block
   if s.art == "stair" then return 0 end
+  -- Recessed water sits at TileShape.water (-2).  Callers that need the
+  -- LIVE surface (swell under a surfer / water roamer) ask Water.surfaceAt
+  -- with the entity's pixel position; this answer is only the still floor.
+  if s.h and s.h < 0 then return s.h end
   return s.h > 0 and s.h or 0
+end
+
+-- Ground under an entity this frame.  Water is the only class whose floor
+-- MOVES: the same two sines the mesh rides (Water.heightAt).  Anything
+-- with `surfing` set (the player mid-Surf, a water roamer) stands on the
+-- live surface at its own pixel centre so feet and plane rise together.
+-- Land uses the cell's static height; mid-step hop lift still comes from
+-- pose() as before.
+local function entityGround(map, e, px, py)
+  if e and (e.surfing or (e.roamer and e.kind == "water")) then
+    local ok, y = pcall(Water.surfaceAt, (px or 0) + 8, (py or 0) + 8)
+    if ok and y then return y end
+    return Water.BASE or -2
+  end
+  return groundAt(map, e.cellX, e.cellY)
 end
 
 -- Whether what stands on this cell has a FLAT top at groundAt's height, or a
@@ -256,10 +278,11 @@ end
 -- ground along the sun line (Voxel3D.shadowMatrix). Runs inside
 -- beginShadows, which supplies the translucent black; the texture is only
 -- consulted for its alpha, so no palette work is needed.
-local function drawShadow(sprite, px, py, facing, phase, flip, gh, lift)
+local function drawShadow(sprite, px, py, facing, phase, flip, gh, lift,
+                          waterline)
   local def = sprite.def
   local frame, mirror = frameFor(def, facing, phase, flip)
-  local mesh = SpriteBillboards.shadowQuad(def, frame)
+  local mesh = SpriteBillboards.shadowQuad(def, frame, waterline or 0)
   if not mesh then return end
   Voxel3D.draw(mesh, sprite:resolveImage(),
                Voxel3D.shadowMatrix(px, py, gh, lift, mirror))
@@ -325,7 +348,7 @@ end
 -- `lift` raises the figure off the ground plane (ledge hops arc UP in 3D,
 -- where the 2D path could only slide the sprite north).
 local function drawEntity(sprite, px, py, facing, phase, flip, gh, colors,
-                          lift)
+                          lift, waterline)
   local def = sprite.def
   local tex = sprite:resolveImage()
   if colors and not def.trueColor then
@@ -338,8 +361,11 @@ local function drawEntity(sprite, px, py, facing, phase, flip, gh, colors,
   -- LEANS BACK, pivoting at its feet, by exactly the camera's pitch, so
   -- at every tilt level the sprite reads face-on like the flat game.
   -- No camera-tracking yaw: every sprite leans in parallel.
+  -- waterline > 0: only the top of the card is built, origin at the
+  -- waterline (SpriteBillboards), so a swimming mon is cut by the pond
+  -- rather than standing on it.
   local frame, mirror = frameFor(def, facing, phase, flip)
-  local mesh = SpriteBillboards.mesh(def, frame)
+  local mesh = SpriteBillboards.mesh(def, frame, waterline or 0)
   if not mesh then return false end
   -- Camera-ward pull (applied per vertex in the shader, along each
   -- vertex's own eye ray, so it is a PURE depth bias with zero screen
@@ -509,21 +535,42 @@ local function posesOf(state, spriteColors)
   local me = nil
   for _, g in ipairs(state.ghosts or {}) do
     local sprite, vx, vy, facing, phase, flip = g.npc:pose()
+    local gpx, gpy = vx + g.ox, g.npc.py + g.oy
+    local waterRoamer = g.npc.roamer and g.npc.kind == "water"
+    local onWater = g.npc.surfing or waterRoamer
+    -- On water the swell is already in entityGround; pose()'s bob is for
+    -- the 2D blit only and must not be added again as lift.  Water roamers
+    -- also carry a waterline cut so only the top of the body is meshed.
     posed[#posed + 1] = {
-      sprite = sprite, px = vx + g.ox, py = g.npc.py + g.oy,
+      sprite = sprite, px = gpx, py = gpy,
       facing = facing, phase = phase, flip = flip,
-      gh = groundAt(g.map or state.map, g.npc.cellX, g.npc.cellY),
-      lift = g.npc.py - vy, colors = spriteColors(g.map or state.map),
+      gh = entityGround(g.map or state.map, g.npc, gpx, gpy),
+      lift = onWater and 0 or (g.npc.py - vy),
+      waterline = waterRoamer and Roamer.WATERLINE or 0,
+      colors = spriteColors(g.map or state.map),
     }
   end
   for _, e in ipairs(state.entities or {}) do
     if not (state.flyAnim and e == state.player) then
       local sprite, vx, vy, facing, phase, flip = e:pose()
+      local waterRoamer = e.roamer and e.kind == "water"
+      local onWater = e.surfing or waterRoamer
+      -- Grass roamers: pose() already leaned px (vx); recompute the same
+      -- lean on map-y so the 3D card sits at the leaned cell centre.  lift
+      -- is then only the breath/hop (drawPy - vy), never the wind twice.
+      local drawPx, drawPy = vx, e.py
+      if e.roamer and e.kind == "grass" then
+        local ok, _, lz = pcall(Wind.leanAt, e.px + 8, e.py + 8,
+                                Roamer.WIND_HEIGHT)
+        if ok and lz then drawPy = e.py + lz end
+      end
       posed[#posed + 1] = {
-        sprite = sprite, px = vx, py = e.py,
+        sprite = sprite, px = drawPx, py = drawPy,
         facing = facing, phase = phase, flip = flip,
-        gh = groundAt(state.map, e.cellX, e.cellY),
-        lift = e.py - vy, colors = colors,
+        gh = entityGround(state.map, e, drawPx, drawPy),
+        lift = onWater and 0 or (drawPy - vy),
+        waterline = waterRoamer and Roamer.WATERLINE or 0,
+        colors = colors,
       }
       if e == state.player then me = posed[#posed] end
     end
@@ -650,6 +697,7 @@ local function shadowSignature(terrain, nbMesh, posed, cx, cy, vw, vh)
     put(p.sprite.def.image)
     put(p.px); put(p.py); put(p.gh); put(p.lift or 0)
     put(p.facing); put(p.phase); put(p.flip and 1 or 0)
+    put(p.waterline or 0)
   end
   for i = n + 1, #sigBuf do sigBuf[i] = nil end
   return table.concat(sigBuf, ",")
@@ -714,7 +762,7 @@ local function castShadows(state, terrain, nbMesh, posed, cx, cy, vw, vh,
   for _, p in ipairs(posed) do
     local def = p.sprite.def
     local frame, mirror = frameFor(def, p.facing, p.phase, p.flip)
-    local mesh = SpriteBillboards.shadowQuad(def, frame)
+    local mesh = SpriteBillboards.shadowQuad(def, frame, p.waterline or 0)
     if mesh then
       ShadowMap.draw(mesh, p.sprite:resolveImage(),
                      ShadowMap.snug(
@@ -722,6 +770,11 @@ local function castShadows(state, terrain, nbMesh, posed, cx, cy, vw, vh,
                                             mirror)))
     end
   end
+  -- town street lamps cast from their poles (heads are small and would
+  -- speck the pavement).  Neighbour-map lamps are skipped: their sites are
+  -- in the neighbour's own coordinates and a wrong offset lands the shadow
+  -- on the wrong block.
+  pcall(StreetLamps.castShadows, state.map)
 
   ShadowMap.finish(sig)
 end
@@ -830,7 +883,7 @@ function VoxelScene.render(state, w, h, vw, vh, paletteFor)
     Voxel3D.beginShadows()
     for _, p in ipairs(posed) do
       drawShadow(p.sprite, p.px, p.py, p.facing, p.phase, p.flip, p.gh,
-                 p.lift)
+                 p.lift, p.waterline)
     end
     Voxel3D.endShadows()
   end
@@ -869,7 +922,7 @@ function VoxelScene.render(state, w, h, vw, vh, paletteFor)
   Voxel3D.seams(false)
   for _, p in ipairs(posed) do
     drawEntity(p.sprite, p.px, p.py, p.facing, p.phase, p.flip, p.gh,
-               p.colors, p.lift)
+               p.colors, p.lift, p.waterline)
   end
   -- back on for everything textured from the atlas again -- figures, grass
   -- and flowers all sample it, where the mask's coordinates are honest
@@ -942,6 +995,13 @@ function VoxelScene.render(state, w, h, vw, vh, paletteFor)
                  Mat4.translate(nb.ox, 0, nb.oy), fpull,
                  ShadowMap.snug(Mat4.translate(nb.ox, 0, nb.oy)), fsway)
   end
+
+  -- Street lamps last among the world props: poles take the hour's light,
+  -- heads flatten to lampColor after dusk so a DEEP night still has light
+  -- on the street.  Seams off -- these are not voxel-grid props.
+  Voxel3D.seams(false)
+  pcall(StreetLamps.draw, state.map, outdoor)
+  Voxel3D.seams(true)
 
   return Voxel3D.endScene()
 end

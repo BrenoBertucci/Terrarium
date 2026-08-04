@@ -97,4 +97,24 @@ function Wind.phase()
   return 0
 end
 
+-- How far a point at world XZ leans with the wind, in world pixels on each
+-- axis.  The same travelling wave the grass vertex shader rides
+-- (Voxel3D.lua: sway * bend * (sin p + 0.35 sin 2.3p)), so a mon standing
+-- in the meadow and the tuft next to it lean together rather than on two
+-- clocks.  `heightFrac` is 0 at the ground and 1 at the tip -- squared the
+-- same way the shader does, so the feet stay planted and the body gives.
+--
+-- Returns (dx, dz).  Zero under WIND OFF or a zero amount.
+function Wind.leanAt(wx, wz, heightFrac)
+  local sway = Wind.amount()
+  if sway <= 0 then return 0, 0 end
+  local h = tonumber(heightFrac) or 0.5
+  if h < 0 then h = 0 elseif h > 1 then h = 1 end
+  local bend = h * h
+  local phase = Wind.phase()
+  local p = wx * Wind.FREQ[1] + wz * Wind.FREQ[2] - phase
+  local amp = sway * bend * (math.sin(p) + 0.35 * math.sin(p * 2.3 + 1.7))
+  return Wind.DIR[1] * amp, Wind.DIR[2] * amp
+end
+
 return Wind

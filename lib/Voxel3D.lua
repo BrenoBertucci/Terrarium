@@ -95,6 +95,13 @@ local SHADER = [[
   varying float vWater;       // 1 on the water surface, 0 everywhere else
   varying vec3 vWave;         // and the normal of the swell under it
   varying float vSwellH;      // the swell's own height here, -1 .. 1
+  // Wave trains live in BOTH stages: the vertex displaces continuously so
+  // the mesh stays watertight, and the fragment re-evaluates height on a
+  // quantized world-XZ cell so cel band edges do not crawl (see the water
+  // block in effect()). Declared outside #ifdef VERTEX on purpose.
+  uniform vec2 swellA;        // two crossing wave trains, as phase per pixel
+  uniform vec2 swellB;
+  uniform float swellPhase;
 #ifdef VOXEL_GRID
   // model space, one unit per voxel -- see VoxelGrid. Precision matters
   // here in a way it does not for a colour: the seam is the FRACTIONAL
@@ -115,9 +122,6 @@ local SHADER = [[
   uniform vec2 windFreq;      // phase gained per world pixel, per axis
   uniform float windPhase;    // advanced by the clock
   uniform float swell;        // water's rise at the crest, world px; 0 = flat
-  uniform vec2 swellA;        // two crossing wave trains, as phase per pixel
-  uniform vec2 swellB;
-  uniform float swellPhase;
   attribute float VertexShade;
   vec4 position(mat4 transform_projection, vec4 vertex_position) {
     // magnitude is the shading, sign is the face normal's Y (see vUp). A
@@ -486,7 +490,16 @@ local SHADER = [[
     // the bank), 0 everywhere else. FLAT (swell 0) never sets it, so the
     // old still plane is untouched.
     if (vWater > 0.0 && sparkle > 0.0) {
-      float check = mod(floor(sc.x) + floor(sc.y), 2.0);
+      // Band / foam decisions snap to a CELL of the render buffer -- the
+      // same idiom the sky uses for its dither grid (Sky.lua: floor(sc/cell)).
+      // Without this, hard step()s ride a continuously moving swell field
+      // and crawl one fragment at a time: the "ants" on the pond, made
+      // worse at RES 1/2 where nearest upscale freezes every crawl step
+      // onto a display pixel. cell=2 is one display pixel at the default
+      // rung and still reads as the pixel grid at FULL.
+      float cell = 2.0;
+      vec2 gc = floor(sc / cell);
+      float check = mod(gc.x + gc.y, 2.0);
       if (vWater > 0.98) {
         // ON THE SURFACE: flat bands of brightness cut by the swell's own
         // height. A crest is a shade lighter, a trough a shade deeper, and
@@ -495,7 +508,20 @@ local SHADER = [[
         // water rather than as three painted stripes. Multiplies only:
         // the tile's own art, the hour's tint and every palette mode keep
         // their colours, just banded.
-        float h = vSwellH + (check - 0.5) * 0.16;
+        //
+        // Height for the BANDS is re-evaluated on a world-XZ cell, not taken
+        // from the interpolated vSwellH. Geometry still displaces smoothly
+        // (vertex, XZ-only -- watertight); only the cel paint snaps. Same
+        // idiom as the sky's floor(sc/cell): a hard step over a field that
+        // is constant inside a cell cannot crawl one fragment at a time.
+        // 2 world px is 1/8 of a map cell -- chunky enough to read as the
+        // pixel grid, fine enough that a pond still has many band cells.
+        float wcell = 2.0;
+        vec2 wz = floor(vWorld.xz / wcell) * wcell;
+        float wa = dot(wz, swellA) - swellPhase;
+        float wb = dot(wz, swellB) + swellPhase * 0.7;
+        float hQ = sin(wa) * 0.55 + sin(wb) * 0.45;
+        float h = hQ + (check - 0.5) * 0.16;
         rgb *= 1.0 + step(0.34, h) * 0.13 - step(h, -0.40) * 0.15;
         // A CREST TURNED INTO THE LIGHT, quantized: the swell's analytic
         // normal (vWave) against the sun, through the same glint window as
@@ -512,8 +538,10 @@ local SHADER = [[
         // free. The edge laps back and forth on the tide's own clock and
         // dissolves through the checker, which is what makes it read as
         // drawn white pixels breaking against the bank rather than as a
-        // painted rim.
-        float lap = 0.10 * sin(foamPhase * 2.0 + sc.x * 0.23 + sc.y * 0.17);
+        // painted rim. Phase is taken on the cell grid so the lap edge
+        // does not crawl independently of the foam step.
+        float lap = 0.10 * sin(foamPhase * 2.0 + gc.x * cell * 0.23
+                                          + gc.y * cell * 0.17);
         float foam = step(0.70 + lap - check * 0.08, vWater);
         rgb = mix(rgb, vec3(0.93, 0.97, 1.0), foam * 0.8);
       }

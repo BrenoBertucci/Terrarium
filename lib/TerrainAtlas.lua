@@ -33,6 +33,10 @@ local V = ...
 local Assets = require("src.render.Assets")
 local TileRenderer = require("src.render.TileRenderer")
 local PaletteFX = require("src.render.PaletteFX")
+-- Water.tileRoll decides whether the hshift water roll runs under swell
+-- (see Water.lua). Required here rather than pushed in: this file already
+-- owns the animation clock, and Water has no reverse dependency on us.
+local Water = V.require("Water")
 
 local TerrainAtlas = {}
 
@@ -533,20 +537,32 @@ function TerrainAtlas.animate(map, colors, base, baked)
   if not entry then return nil end
 
   local frame = animFrame()
+  -- Under a non-FLAT swell the water tile roll is held still (Water.tileRoll);
+  -- flowers (kind == "frames") keep advancing. The high bit folds the roll
+  -- state into `step` so flipping FLAT <-> CALM forces one clean repatch
+  -- back to offset 0 rather than leaving a stale shifted slot on the atlas.
+  local roll = true
+  do
+    local ok, r = pcall(Water.tileRoll)
+    if ok and r == false then roll = false end
+  end
   -- one number for the whole entry: every spec's own step, folded together,
   -- so a repatch happens when ANY of them turns over
-  local step = 0
+  local step = roll and 0 or 0x40000000
   for i, spec in ipairs(entry.specs) do
     local n = spec.kind == "hshift" and #spec.offsets or #spec.sequence
-    step = step + (math.floor(frame / (spec.period or 20)) % n) * (16 ^ i)
+    local st = math.floor(frame / (spec.period or 20)) % n
+    if spec.kind == "hshift" and not roll then st = 0 end
+    step = step + st * (16 ^ i)
   end
   if step ~= entry.step then
     entry.step = step
     local ok = pcall(function()
       for _, spec in ipairs(entry.specs) do
         local n = spec.kind == "hshift" and #spec.offsets or #spec.sequence
-        patch(entry.data, entry, spec,
-              math.floor(frame / (spec.period or 20)) % n)
+        local st = math.floor(frame / (spec.period or 20)) % n
+        if spec.kind == "hshift" and not roll then st = 0 end
+        patch(entry.data, entry, spec, st)
       end
       entry.image:replacePixels(entry.data)
     end)

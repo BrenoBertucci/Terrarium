@@ -35,7 +35,14 @@ local meshes = {}
 -- One flat 16x16 quad UV-mapped to a whole frame. A hair of inset keeps
 -- the sampler inside this frame rather than picking up the neighbouring
 -- one along the shared edge.
-local function buildCard(def, frame)
+--
+-- `cut` is how many pixels of the FEET are hidden (0 = full card). A water
+-- mon uses this so only the top of the body sticks out of the pond: the
+-- quad's local y=0 is the waterline (mid-sprite UV) and local y runs up to
+-- the head. Placed with its origin on Water.surfaceAt, the cut edge is the
+-- waterline and the mon reads as semi-submerged rather than standing on
+-- the surface like a paper cutout.
+local function buildCard(def, frame, cut)
   local ok, img = pcall(Assets.image, def.image)
   if not (ok and img) then return nil end
   local iw, ih = img:getDimensions()
@@ -43,17 +50,22 @@ local function buildCard(def, frame)
   if fy + 16 > ih then fy = 0 end
   local u0, u1 = 0.02 / iw, (16 - 0.02) / iw
   local v0, v1 = (fy + 0.05) / ih, (fy + 15.95) / ih
+  cut = math.floor(tonumber(cut) or 0)
+  if cut < 0 then cut = 0 elseif cut > 12 then cut = 12 end
+  local vis = 16 - cut
+  -- UV at the waterline: cut/16 of the way from feet (v1) toward head (v0)
+  local vCut = v1 + (v0 - v1) * (cut / 16)
   local verts = {
-    { 0, 0, 0, u0, v1, 1 }, { 16, 0, 0, u1, v1, 1 },
-    { 16, 16, 0, u1, v0, 1 }, { 0, 16, 0, u0, v0, 1 },
+    { 0, 0, 0, u0, vCut, 1 }, { 16, 0, 0, u1, vCut, 1 },
+    { 16, vis, 0, u1, v0, 1 }, { 0, vis, 0, u0, v0, 1 },
   }
   local indices = {}
   Voxel3D.pushQuad(indices, 0)
   return Voxel3D.newMesh(verts, indices)
 end
 
--- The card for one (sprite def, frame index), or nil (headless / no
--- image), cached like every other derived GPU object.
+-- The card for one (sprite def, frame index [, waterline cut]), or nil
+-- (headless / no image), cached like every other derived GPU object.
 --
 -- The solid draw, the sun pass and the player's occlusion silhouette all
 -- take THIS mesh. That the three agree is load-bearing, not tidiness: the
@@ -61,10 +73,12 @@ end
 -- the mesh would read as "behind something" and repaint the figure on open
 -- ground whether or not anything hides it; and the sun must see the same
 -- outline the camera does, or a shadow stops matching what casts it.
-function SpriteBillboards.mesh(def, frame)
-  local key = def.image .. "#" .. frame
+function SpriteBillboards.mesh(def, frame, cut)
+  cut = math.floor(tonumber(cut) or 0)
+  if cut < 0 then cut = 0 end
+  local key = def.image .. "#" .. frame .. (cut > 0 and ("#w" .. cut) or "")
   if meshes[key] == nil then
-    local ok, m = pcall(buildCard, def, frame)
+    local ok, m = pcall(buildCard, def, frame, cut)
     meshes[key] = (ok and m) or false
   end
   return meshes[key] or nil

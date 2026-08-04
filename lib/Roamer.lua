@@ -26,6 +26,8 @@ local V = ...
 
 local Collision = require("src.world.Collision")
 local SpriteRenderer = require("src.render.SpriteRenderer")
+local Water = V.require("Water")
+local Wind = V.require("Wind")
 
 local Roamer = {}
 Roamer.__index = Roamer
@@ -34,6 +36,16 @@ Roamer.__index = Roamer
 -- moved at walking pace read as another NPC; ambling is what tells the eye
 -- that this one is not on an errand.
 local STEP_FRAMES = 24
+
+-- How many pixels of a water mon's 16px card sit UNDER the waterline.
+-- The top of the body sticks out; the cut edge is the waterline (see
+-- SpriteBillboards.buildCard with cut, and VoxelScene's waterline pose).
+-- Five is enough to read as swimming without losing the species silhouette.
+Roamer.WATERLINE = 5
+
+-- Where on a grass mon the wind is felt (0 = feet, 1 = head).  Mid-body so
+-- the feet stay in the grass and the torso leans with the tufts around it.
+Roamer.WIND_HEIGHT = 0.55
 
 -- How a roamer answers the player being near.  Most do not -- a wild mon
 -- minding its own business is the baseline and the thing you are dodging --
@@ -150,13 +162,42 @@ function Roamer:update(map, entities)
   if self.frozen or self.dead then return end
   self.timer = self.timer - 1
   if self.timer > 0 then return end
-  self.timer = love.math.random(25, 110)
+  -- Water mon amble more slowly than land mon -- a fish crossing a pond is
+  -- not in a hurry -- and land mon keep the wider window.  A breeze shortens
+  -- the grass mon's pause: the meadow is restless, so they are too.
+  local wind = 0
+  if self.kind == "grass" then
+    local ok, a = pcall(Wind.amount)
+    if ok and a then wind = a end
+  end
+  if self.kind == "water" then
+    self.timer = love.math.random(40, 140)
+  else
+    local hi = math.max(20, 110 - math.floor(wind * 12))
+    local lo = math.max(12, 25 - math.floor(wind * 4))
+    self.timer = love.math.random(lo, hi)
+  end
   local dir = pickDir(self)
+  -- Under a real breeze, grass mon prefer the wind's own bearing about half
+  -- the time -- they lean into the gust rather than pacing a grid of coin
+  -- flips.  The wind DIR is world XZ; map facing maps x->left/right, z->up/down.
+  if wind > 0 and self.kind == "grass" and love.math.random() < 0.45 then
+    local dx, dz = Wind.DIR[1], Wind.DIR[2]
+    if math.abs(dx) > math.abs(dz) then
+      dir = dx > 0 and "right" or "left"
+    else
+      dir = dz > 0 and "down" or "up"
+    end
+  end
   self.facing = dir
   -- sometimes it only looks: a mon that turned its head is doing something,
   -- and a mon that stepped every single time it thought about it is a
-  -- machine
-  if love.math.random() < 0.35 then return end
+  -- machine.  Water mon look more than they swim (0.5 vs 0.35): a pond full
+  -- of things always moving reads as busy traffic, not as wildlife.  Wind
+  -- lowers the grass mon's look-only chance so a gale actually moves them.
+  local lookOnly = self.kind == "water" and 0.50
+                   or math.max(0.15, 0.35 - wind * 0.04)
+  if love.math.random() < lookOnly then return end
   local tx, ty = Collision.target(self.cellX, self.cellY, dir)
   if not Roamer.standable(self.kind, map, tx, ty) then return end
   if not Collision.canMove(map, entities, self, dir) then return end
@@ -174,23 +215,61 @@ end
 -- The same contract Player:pose and NPC:pose answer: the sheet, the
 -- position, the facing and the step phase this frame renders to.
 --
--- The y handed back is the VISUAL one, which is the seam a breath rides on:
--- a standing mon lifts a pixel and settles, and because the flat draw blits
--- at this y while the voxel pass turns the difference from the entity's own
--- y into vertical LIFT (VoxelScene's posesOf), the one line reads as a bob
--- in 2D and as the mon actually rising off the ground in 3D.
+-- The y handed back is the VISUAL one, which is the seam a breath rides on.
+-- On LAND a standing mon lifts a pixel and settles; on WATER the breath IS
+-- the swell -- the same two sines the surface rides (Water.heightAt), so
+-- the mon and the pond rise and fall together rather than the mon ticking
+-- on its own clock against a plane that has its own.  On GRASS the body
+-- also leans with Wind.leanAt, the same travelling wave the tufts ride, so
+-- a mon in the meadow and the grass around it move together.  The flat
+-- draw blits at this y; the voxel pass puts water mon on Water.surfaceAt
+-- with a waterline-cut card (VoxelScene) and applies the same lean offset.
 function Roamer:pose()
-  local vy = self.py
-  if not self.moving and math.floor(self.clock / 30) % 2 == 1 then
+  local px, py = self.px, self.py
+  local vy = py
+  if self.kind == "water" then
+    local ok, h = pcall(Water.heightAt, px + 8, py + 8)
+    if ok and h then vy = vy - h end
+  elseif self.kind == "grass" then
+    local ok, lx, lz = pcall(Wind.leanAt, px + 8, py + 8, Roamer.WIND_HEIGHT)
+    if ok and lx then
+      px = px + lx
+      py = py + lz
+      vy = py
+    end
+    if not self.moving and math.floor(self.clock / 30) % 2 == 1 then
+      vy = vy - 1
+    end
+  elseif not self.moving and math.floor(self.clock / 30) % 2 == 1 then
     vy = vy - 1
   end
-  return self.sprite, self.px, vy, self.facing,
+  return self.sprite, px, vy, self.facing,
          self:walkPhase(), self.stepFlip, false
 end
 
 function Roamer:draw(camX, camY)
   local sprite, px, py, facing, phase, flip = self:pose()
-  sprite:draw(px, py, camX, camY, facing, phase, flip)
+  if self.kind ~= "water" or not love or not love.graphics then
+    sprite:draw(px, py, camX, camY, facing, phase, flip)
+    return
+  end
+  -- 2D waterline: hide the bottom WATERLINE pixels of the 16x16 blit so
+  -- the mon is cut at the water the same way the 3D card is.  Scissor is
+  -- in screen pixels of the current canvas; if anything about the camera
+  -- scale disagrees, fall back to the full draw rather than a wrong crop.
+  local cut = Roamer.WATERLINE
+  local g = love.graphics
+  local sx = math.floor(px - camX)
+  local sy = math.floor(py - camY)
+  local ok = pcall(function()
+    local x, y, w, h = g.getScissor()
+    g.setScissor(sx, sy, 16, 16 - cut)
+    sprite:draw(px, py, camX, camY, facing, phase, flip)
+    if x then g.setScissor(x, y, w, h) else g.setScissor() end
+  end)
+  if not ok then
+    sprite:draw(px, py, camX, camY, facing, phase, flip)
+  end
 end
 
 return Roamer
