@@ -2157,7 +2157,15 @@ function Structures.buildObject(S, map, region, cluster,
         local u = (srcU[i] + 0.5) / atlasW
         local v = (srcV[i] + 0.5) / atlasH
         local function quad(c1, c2, c3, c4, shade)
-          quads[#quads + 1] = { c1, c2, c3, c4, u = u, v = v, shade = shade }
+          -- lod: marks this as a small-silhouette prop quad (per-source-pixel
+          -- prism). Kept for a future true distance LOD; ChunkMesher's
+          -- body-only path no longer drops these -- a neighbour must keep
+          -- its silhouette or the forest pops in when the seam promotes
+          -- the map (see runGeometry's objectQuads note). Every push in
+          -- this function routes through this one closure, so one tag
+          -- covers front/back/top/bottom/side faces alike.
+          quads[#quads + 1] = { c1, c2, c3, c4, u = u, v = v, shade = shade,
+                                lod = true }
         end
         quad({ x, y, z1 }, { x + 1, y, z1 }, { x + 1, y + 1, z1 },
              { x, y + 1, z1 }, OBJ_SHADE.front)

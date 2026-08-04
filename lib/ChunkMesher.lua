@@ -197,25 +197,43 @@ local function newTableSink()
   }
 end
 
-local TRI_ORDER = { 1, 2, 3, 1, 3, 4 }
+-- Indexed, 0-based: quad corners 1,2,3,4 (Voxel3D.FACE_CORNERS order)
+-- become two triangles (0,1,2) and (0,2,3) off the SAME four stored
+-- vertices -- the table-sink/quadsMesh path (Voxel3D.pushQuad) has done
+-- this for grass/flowers/figures since before this file's chunking existed;
+-- this is that same fan, just 0-based for the raw index Data LOVE's
+-- Mesh:setVertexMap(datatype, data, ...) overload expects (the Lua-table
+-- overload does the 1-based-to-0-based subtraction itself; the raw-Data one
+-- does not).
+--
+-- This only removes each quad's OWN duplicate corners (corners 1 and 3,
+-- which TRI_ORDER above used to repeat into the unindexed stream) -- it
+-- does not weld a quad to its neighbours, which still get their own
+-- independent 4 corners. The water surface's watertightness (see Voxel3D's
+-- SHADER note on vWater) depends on adjacent quads NOT sharing a vertex so
+-- their displacement -- a pure function of world XZ -- agrees at the seam
+-- either way; nothing here changes that.
+local QUAD_IDX = { 0, 1, 2, 0, 2, 3 }
 
 local function newFfiSink(cap0)
-  local cap = (cap0 or 4096) * 6
-  local buf = ffi.new("float[?]", cap * 6)
-  local n = 0
+  local capQuads = cap0 or 4096
+  local buf = ffi.new("float[?]", capQuads * 4 * 6)      -- 4 verts/quad
+  local ibuf = ffi.new("uint32_t[?]", capQuads * 6)      -- 6 indices/quad
+  local nQuads = 0
   local sink
   sink = {
     push = function(c, uv, shade, sky)
-      if n + 6 > cap then
-        local grown = ffi.new("float[?]", cap * 2 * 6)
-        ffi.copy(grown, buf, n * 6 * 4)
-        buf, cap = grown, cap * 2
+      if nQuads + 1 > capQuads then
+        local grownV = ffi.new("float[?]", capQuads * 2 * 4 * 6)
+        ffi.copy(grownV, buf, nQuads * 4 * 6 * 4)
+        local grownI = ffi.new("uint32_t[?]", capQuads * 2 * 6)
+        ffi.copy(grownI, ibuf, nQuads * 6 * 4)
+        buf, ibuf, capQuads = grownV, grownI, capQuads * 2
       end
       local flat = type(shade) ~= "table"
       local s = faceSign(c, sky)
-      local base = n * 6
-      for k = 1, 6 do
-        local i = TRI_ORDER[k]
+      local base = nQuads * 4 * 6
+      for i = 1, 4 do
         local cc, t = c[i], uv[i]
         buf[base] = cc[1]
         buf[base + 1] = cc[2]
@@ -225,10 +243,15 @@ local function newFfiSink(cap0)
         buf[base + 5] = s * (flat and shade or shade[i])
         base = base + 6
       end
-      n = n + 6
+      local ibase, vbase = nQuads * 6, nQuads * 4
+      for k = 1, 6 do
+        ibuf[ibase + k - 1] = vbase + QUAD_IDX[k]
+      end
+      nQuads = nQuads + 1
     end,
     finish = function()
-      if n == 0 then return nil end
+      if nQuads == 0 then return nil end
+      local n = nQuads * 4          -- vertex count
       -- upload in slices with budget ticks between: a route-sized mesh
       -- is ~10-20MB and one atomic setVertices was the last remaining
       -- frame spike. The mesh is not cached (so never drawn) until the
@@ -247,6 +270,32 @@ local function newFfiSink(cap0)
           data:release()
           i = i + count
           Budget.check()
+        end
+        -- the index buffer: LOVE auto-picks uint16 vs uint32 by vertex
+        -- count when setVertexMap gets a Lua table, but the raw-Data
+        -- overload (used here to avoid building a several-hundred-
+        -- thousand-entry Lua table) takes the width explicitly, so this
+        -- mirrors that same rule (vertex::getIndexDataTypeFromMax in
+        -- LOVE's own source) by hand.
+        local nIdx = nQuads * 6
+        Budget.check()
+        if n <= 65535 then
+          local u16 = ffi.new("uint16_t[?]", nIdx)
+          for k = 0, nIdx - 1 do
+            u16[k] = ibuf[k]
+            if k % 16384 == 0 then Budget.tick() end
+          end
+          local bytes = nIdx * 2
+          local data = love.data.newByteData(bytes)
+          ffi.copy(data:getFFIPointer(), u16, bytes)
+          m:setVertexMap(data, "uint16", nIdx)
+          data:release()
+        else
+          local bytes = nIdx * 4
+          local data = love.data.newByteData(bytes)
+          ffi.copy(data:getFFIPointer(), ibuf, bytes)
+          m:setVertexMap(data, "uint32", nIdx)
+          data:release()
         end
         return m
       end)
@@ -858,6 +907,15 @@ local function runGeometry(map, bodyOnly, masks, sink)
     return scUV
   end
 
+  -- q.lod tags small-silhouette props (buildObject's per-source-pixel
+  -- prisms -- plants, signs, lone trees). bodyOnly used to DROP them, and
+  -- to skip round-tree stamps below, as a memory cut for neighbours.
+  -- That was the wrong lever: a neighbour is what you walk INTO, and
+  -- stripping its silhouette made the forest "load" when the seam
+  -- promoted the map -- trees popping in one frame is worse than the
+  -- bytes they cost. bodyOnly means "no border RING", not "less world".
+  -- The tag stays on the quads for a future true distance LOD; it is
+  -- not consulted here.
   for _, q in ipairs(S.objectQuads) do
     Budget.tick()
     local x0 = math.min(q[1][1], q[2][1], q[3][1], q[4][1])
@@ -894,6 +952,11 @@ local function runGeometry(map, bodyOnly, masks, sink)
   -- stamps keep every quad, ring stamps buried under a neighbour body
   -- (or, body-only, ring stamps full stop) skip without touching their
   -- quads. Only stamps crossing a boundary walk quad by quad.
+  --
+  -- bodyOnly used to skip this whole pass (see objectQuads note above).
+  -- It no longer does: the keep/skip rules below already drop stamps on
+  -- the ring and keep the interior, which is exactly the silhouette a
+  -- neighbour must show so a seam crossing does not plant a forest.
   local sc = { { 0, 0, 0 }, { 0, 0, 0 }, { 0, 0, 0 }, { 0, 0, 0 } }
   for _, st in ipairs(S.roundStamps or {}) do
     local mx, mz = st.mx, st.mz

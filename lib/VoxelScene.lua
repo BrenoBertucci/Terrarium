@@ -437,12 +437,15 @@ function VoxelScene.prefetch(state)
   -- update): request what this frame wants and draw what is ready.
   -- The current map draws its body-only mesh while the full one (the
   -- border ring) is still building -- a seam crossing promotes a
-  -- neighbour whose body is already cached, and the ring pops in a few
-  -- frames later, mostly hidden behind the map just left. A neighbour
-  -- missing its body-only mesh draws its cached FULL mesh instead -- a
-  -- crossing demotes the map just left, and it must not vanish from
-  -- behind the player while its body variant builds; its ring is
-  -- already masked out under this map's body, so the stand-in is safe.
+  -- neighbour whose body is already cached, and only the RING arrives
+  -- a few frames later (mostly hidden behind the map just left). The
+  -- body itself keeps the same trees and props as the full mesh; it is
+  -- not a lower LOD, so the world does not "load in" when you step
+  -- across. A neighbour missing its body-only mesh draws its cached
+  -- FULL mesh instead -- a crossing demotes the map just left, and it
+  -- must not vanish from behind the player while its body variant
+  -- builds; its ring is already masked out under this map's body, so
+  -- the stand-in is safe.
   -- COLD is a map nothing has ever built anything for: a door, a Fly
   -- landing, a blackout -- anywhere that was not a drawn neighbour a moment
   -- ago. The fallback below has always wanted the body-only variant to
