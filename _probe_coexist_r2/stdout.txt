@@ -1,0 +1,8 @@
+[info] generated data loaded (223 maps, 151 species, 165 moves)
+[info] loaded mod DRAMATIC_SHAPE 1.16.0-mobile.rain
+[info] loaded mod TERRARIUM 1.16.0-mobile.rain
+[info] game loaded
+[info] display: 1536x864 units, 1536x864 px, fit scale 6 px/GB px
+[info] loaded save
+[info] loaded save
+[info] map: ROUTE_16 at (34,8)
