@@ -17,7 +17,7 @@
 --
 --   POKEPORT_VERSION=yellow \
 --   DS_PROBE_DIR=<dir> \
---   POKEPORT_DRIVER=mods/DRAMATIC_SHAPE/tests/weather_life_probe.lua gen1recomp
+--   POKEPORT_DRIVER=mods/TERRARIUM/tests/weather_life_probe.lua gen1recomp
 return function(game)
   local OUT = os.getenv("DS_PROBE_DIR") or "."
   local logf = assert(io.open(OUT .. "/weather_life_probe.log", "w"))
@@ -60,12 +60,12 @@ return function(game)
   log("free roam:", game.stack:top() == game.overworld)
 
   local exports = game.mods and game.mods.exports
-  local lib = exports and exports.DRAMATIC_SHAPE and exports.DRAMATIC_SHAPE.lib
+  local lib = exports and exports.TERRARIUM and exports.TERRARIUM.lib
   if not lib then
-    log("FAIL: DRAMATIC_SHAPE not loaded")
+    log("FAIL: TERRARIUM not loaded")
     logf:close(); love.event.quit(); return
   end
-  log("version:", exports.DRAMATIC_SHAPE.version)
+  log("version:", exports.TERRARIUM.version)
 
   local AmbientSound = lib.require("AmbientSound")
   local Weather = lib.require("Weather")
@@ -157,7 +157,7 @@ return function(game)
   log("")
   log("== 10. weather ==")
 
-  Pipelines.setLevel("voxel", 5)
+  Pipelines.setLevel("terrarium_voxel", 5)
   DayNight.setting:sync("day")
   wait(150)
 
@@ -233,7 +233,7 @@ return function(game)
 
   -- ------- and the flat 2D world takes the same rain
   Weather.setting:sync("rain")
-  Pipelines.setLevel("voxel", 0)
+  Pipelines.setLevel("terrarium_voxel", 0)
   wait(600)
   log("flat: paintsFlat=", tostring(Weather.paintsFlat()))
   shot("13_rain_flat2d.png")
@@ -243,7 +243,7 @@ return function(game)
   log("== 11. interiors ==")
 
   Weather.setting:sync("off")
-  Pipelines.setLevel("voxel", 5)
+  Pipelines.setLevel("terrarium_voxel", 5)
   Interiors.setting:sync("on")
   wait(300)
 

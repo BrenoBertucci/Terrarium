@@ -24,7 +24,7 @@
 -- OFF is genuinely the whole of the new drawing and not part of it.
 --
 --   POKEPORT_VERSION=yellow DS_PROBE_DIR=<dir> \
---   POKEPORT_DRIVER=mods/DRAMATIC_SHAPE/tests/night_probe.lua gen1recomp
+--   POKEPORT_DRIVER=mods/TERRARIUM/tests/night_probe.lua gen1recomp
 return function(game)
   local OUT = os.getenv("DS_PROBE_DIR") or "."
   local logf = assert(io.open(OUT .. "/night_probe.log", "w"))
@@ -53,12 +53,12 @@ return function(game)
   end
 
   local exports = game.mods and game.mods.exports
-  local lib = exports and exports.DRAMATIC_SHAPE and exports.DRAMATIC_SHAPE.lib
+  local lib = exports and exports.TERRARIUM and exports.TERRARIUM.lib
   if not lib then
-    log("FAIL: DRAMATIC_SHAPE not loaded"); logf:close(); love.event.quit()
+    log("FAIL: TERRARIUM not loaded"); logf:close(); love.event.quit()
     return
   end
-  log("version:", exports.DRAMATIC_SHAPE.version)
+  log("version:", exports.TERRARIUM.version)
 
   local DayNight = lib.require("DayNight")
   local Sky = lib.require("Sky")
@@ -147,7 +147,7 @@ return function(game)
   --
   -- Locked clock, one map, one rung, no weather. Each phase is the same
   -- number of frames; what is measured is how long they took.
-  Pipelines.setLevel("voxel", 4)
+  Pipelines.setLevel("terrarium_voxel", 4)
   wait(120)
 
   local realCount = Quality.starCount

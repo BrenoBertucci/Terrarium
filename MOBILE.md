@@ -17,7 +17,7 @@
 
 Este é o Dramatic Shape Voxel Mod 1.3.0 com as mudanças necessárias para
 rodar num Android de entrada (o alvo foi um Samsung A14 5G: Mali de 2
-núcleos, painel 2408×1080). O `id` do mod continua sendo `DRAMATIC_SHAPE`,
+núcleos, painel 2408×1080). O `id` do mod e `TERRARIUM` (independente do upstream `DRAMATIC_SHAPE`),
 então ele **substitui** o original — não instale os dois ao mesmo tempo.
 
 Nada aqui muda o que o mod *faz*. As mudanças são todas sobre quanto
@@ -164,7 +164,7 @@ alguém. **MIX** deixa os dois. **OFF** é o jogo original.
 
 | arquivo | mudança |
 |---|---|
-| `lib/RoamerArt.lua` | **novo.** Assa uma folha 16×96 por espécie a partir do *front pic* de batalha e grava em `save/mod-derived/DRAMATIC_SHAPE/roamers/`. |
+| `lib/RoamerArt.lua` | **novo.** Assa uma folha 16×96 por espécie a partir do *front pic* de batalha e grava em `save/mod-derived/TERRARIUM/roamers/`. |
 | `lib/Roamer.lua` | **novo.** O objeto de mapa: mesmo contrato do `src/world/NPC.lua`, com o vagar preso ao terreno de onde ele foi sorteado. |
 | `lib/WildRoamers.lua` | **novo.** Quem aparece, onde, quantos, o que some, a batalha, e as duas costuras do engine. |
 | `main.lua` | A linha no menu, a tecla `9`, `WildRoamers.update()` no hook de update do pipeline e o wrap de `encounter.roll`. |

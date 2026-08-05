@@ -51,7 +51,7 @@
 -- reported.
 --
 --   POKEPORT_VERSION=yellow DS_PROBE_DIR=<dir> \
---   POKEPORT_DRIVER=mods/DRAMATIC_SHAPE/tests/water_shimmer_probe.lua \
+--   POKEPORT_DRIVER=mods/TERRARIUM/tests/water_shimmer_probe.lua \
 --   ./gen1recomp.exe
 return function(game)
   local OUT = os.getenv("DS_PROBE_DIR") or "."
@@ -148,12 +148,12 @@ return function(game)
   end
 
   local exports = game.mods and game.mods.exports
-  local lib = exports and exports.DRAMATIC_SHAPE and exports.DRAMATIC_SHAPE.lib
+  local lib = exports and exports.TERRARIUM and exports.TERRARIUM.lib
   if not lib then
-    log("FAIL: DRAMATIC_SHAPE not loaded"); logf:close(); love.event.quit()
+    log("FAIL: TERRARIUM not loaded"); logf:close(); love.event.quit()
     return
   end
-  log("version:", exports.DRAMATIC_SHAPE.version)
+  log("version:", exports.TERRARIUM.version)
 
   local Water        = lib.require("Water")
   local RayFX        = lib.require("RayFX")
@@ -198,7 +198,7 @@ return function(game)
     Quality.setting:sync(2)                   -- RES 1/2, the default rung
     RayFX.setting:sync("rt")
     Water.setting:sync(0.8)                   -- CALM, the default rung
-    Pipelines.setLevel("voxel", 5)
+    Pipelines.setLevel("terrarium_voxel", 5)
   end
   freeze()
 

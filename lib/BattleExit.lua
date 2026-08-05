@@ -45,7 +45,7 @@ BattleExit.isOpaque = false
 -- The registered record's id, and the fallback timing if it is missing (a
 -- headless caller, or a total conversion that dropped the namespace). Per HALF,
 -- matching the engine's warp fade, so the whole edit is 24 frames.
-BattleExit.ID = "voxel_battle_exit"
+BattleExit.ID = "terrarium_battle_exit"
 BattleExit.FRAMES = 12
 
 -- The fade in progress, or nil. Kept here rather than on the state so the

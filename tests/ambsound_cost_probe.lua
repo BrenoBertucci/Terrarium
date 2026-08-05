@@ -4,7 +4,7 @@
 -- whether it needs warming is simply how long that one frame is.
 --
 --   POKEPORT_VERSION=yellow DS_PROBE_DIR=<dir> \
---   POKEPORT_DRIVER=mods/DRAMATIC_SHAPE/tests/ambsound_cost_probe.lua gen1recomp
+--   POKEPORT_DRIVER=mods/TERRARIUM/tests/ambsound_cost_probe.lua gen1recomp
 return function(game)
   local OUT = os.getenv("DS_PROBE_DIR") or "."
   local logf = assert(io.open(OUT .. "/ambsound_cost.log", "w"))
@@ -28,7 +28,7 @@ return function(game)
     tap("a"); wait(10); f = f + 11; if f > 1500 then break end
   end
 
-  local lib = game.mods.exports.DRAMATIC_SHAPE.lib
+  local lib = game.mods.exports.TERRARIUM.lib
   local AmbientSound = lib.require("AmbientSound")
   local ChipAudio = require("src.core.ChipAudio")
   local sfx = game.data.audio.sfx

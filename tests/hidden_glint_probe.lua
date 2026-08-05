@@ -7,7 +7,7 @@
 -- indistinguishable by eye, and "it drew something" is not the claim.
 --
 --   POKEPORT_VERSION=yellow DS_PROBE_DIR=<dir> \
---   POKEPORT_DRIVER=mods/DRAMATIC_SHAPE/tests/hidden_glint_probe.lua gen1recomp
+--   POKEPORT_DRIVER=mods/TERRARIUM/tests/hidden_glint_probe.lua gen1recomp
 return function(game)
   local OUT = os.getenv("DS_PROBE_DIR") or "."
   local logf = assert(io.open(OUT .. "/hidden_glint.log", "w"))
@@ -36,7 +36,7 @@ return function(game)
     tap("a"); wait(10); f = f + 11; if f > 1500 then break end
   end
 
-  local lib = game.mods.exports.DRAMATIC_SHAPE.lib
+  local lib = game.mods.exports.TERRARIUM.lib
   local Hidden = lib.require("HiddenItems")
   local QoL = lib.require("QoL")
   QoL.setting:sync("on")

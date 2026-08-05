@@ -1,4 +1,4 @@
-﻿return function(game)
+return function(game)
   local OUT = os.getenv("DS_PROBE_DIR") or "."
   local logf = assert(io.open(OUT .. "/night_lamps_probe.log", "w"))
   local function log(...) local p={} for i=1,select("#",...) do p[i]=tostring(select(i,...)) end logf:write(table.concat(p," ").."\n") logf:flush() end
@@ -8,7 +8,7 @@
   while not (game.overworld and game.stack and game.stack:top()) do wait(1); n=n+1; if n>900 then log("FAIL"); logf:close(); love.event.quit(); return end end
   n=0
   while game.stack:top() ~= game.overworld do tap("a"); wait(10); n=n+11; if n>1500 then break end end
-  local lib = game.mods.exports.DRAMATIC_SHAPE.lib
+  local lib = game.mods.exports.TERRARIUM.lib
   local DayNight = lib.require("DayNight")
   local StreetLamps = lib.require("StreetLamps")
   DayNight.setting:sync("night")

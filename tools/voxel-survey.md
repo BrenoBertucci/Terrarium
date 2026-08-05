@@ -1,7 +1,7 @@
 # Voxel accuracy survey
 
 A repeatable procedure -- runnable by an agent or a human -- for finding
-map objects the DRAMATIC_SHAPE mod voxelizes into the wrong shape (a bed
+map objects the TERRARIUM mod voxelizes into the wrong shape (a bed
 extruded to wall height, a table merged into the wall, stairs lying flat)
 and for fixing them so each object gets the 3D shape it depicts.
 
@@ -9,14 +9,14 @@ The loop is: **survey → diagnose → pin → re-survey → spot-check**.
 
 ## 1. Survey a location
 
-`mods/DRAMATIC_SHAPE/tests/voxel_survey.lua` teleports to a map, walks a
+`mods/TERRARIUM/tests/voxel_survey.lua` teleports to a map, walks a
 list of stand points and screenshots each one flat (the 2D ground truth)
 and at every voxel camera pitch, with tilt-shift forced off (it would blur
 exactly the edges under inspection).  Levels are set through
 `Pipelines.setLevel`, so the run never writes the player's options.
 
 ```powershell
-$env:POKEPORT_DRIVER = "mods/DRAMATIC_SHAPE/tests/voxel_survey.lua"
+$env:POKEPORT_DRIVER = "mods/TERRARIUM/tests/voxel_survey.lua"
 $env:SHOT_DIR   = "<absolute scratch dir, must exist>"
 $env:SURVEY_MAP = "REDS_HOUSE_2F"
 $env:SURVEY_SPOTS = "3,4,up@centre; 2,6,left@bed; 5,2,right@stairs"
@@ -67,7 +67,7 @@ big.save("<scratch>/atlas_ids.png")
 
 ## 3. Pin shapes in the profile
 
-`mods/DRAMATIC_SHAPE/data/voxel_heights.lua` maps tile ids to classes per
+`mods/TERRARIUM/data/voxel_heights.lua` maps tile ids to classes per
 tileset id; a pinned tile bypasses detection entirely. The classes:
 
 - `bed` (h7, art on top) -- anything drawn from above that lies low.
@@ -121,16 +121,16 @@ A whole building is not a tile pin. Its drawing packs several 3D facings
 at once -- roof from above, facade face-on, ends as diagonal silhouettes --
 and no single class covers that, so buildings go in the profile's
 `buildings` list instead, as a BAND TABLE over the drawing's rows
-(`mods/DRAMATIC_SHAPE/lib/Buildings.lua`; the pipeline is
-`mods/DRAMATIC_SHAPE/assets/docs/buidling_to_voxel/sprite_to_voxel_methodology.md`).
+(`mods/TERRARIUM/lib/Buildings.lua`; the pipeline is
+`mods/TERRARIUM/assets/docs/buidling_to_voxel/sprite_to_voxel_methodology.md`).
 A template is matched by its exact tile grid, which
-`mods/DRAMATIC_SHAPE/assets/docs/buildings/` catalogues per building along
+`mods/TERRARIUM/assets/docs/buildings/` catalogues per building along
 with every map that places it, so one entry covers all of them. Author only what needs a human to read the drawing -- which rows are
 roof, how the roof's depth maps onto them, the slab, the eave, an awning
 band -- because the silhouette, the taper rate (the slope), the eave
 height and every window are measured off the pixels.
 
-Verify a new template against `mods/DRAMATIC_SHAPE/tools/building_voxels.py`,
+Verify a new template against `mods/TERRARIUM/tools/building_voxels.py`,
 which builds the same model offline and renders isometric previews: the
 voxel and shell counts it prints must match the runtime's (the mod's
 `Buildings.stats()`), and it asserts the intent -- symmetric profile,
@@ -156,7 +156,7 @@ change region shapes, so neighbours can shift.
 - A change to the shared analysis (anything in `lib/Structures.lua`
   rather than the data file) affects every map of that kind; survey one
   unrelated busy interior (e.g. `OAKS_LAB`) to prove nothing regressed.
-- `luajit mods/DRAMATIC_SHAPE/tests/dramatic_shape_test.lua` for the headless
+- `luajit mods/TERRARIUM/tests/dramatic_shape_test.lua` for the headless
   invariants.
 
 ## Gameplay is out of bounds

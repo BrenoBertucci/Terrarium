@@ -23,7 +23,7 @@
 -- that it DID work at 75 degrees, which is the rung nobody plays at.
 --
 --   POKEPORT_VERSION=yellow DS_PROBE_DIR=<dir> \
---   POKEPORT_DRIVER=mods/DRAMATIC_SHAPE/tests/puddle_rtx_probe.lua gen1recomp
+--   POKEPORT_DRIVER=mods/TERRARIUM/tests/puddle_rtx_probe.lua gen1recomp
 return function(game)
   local OUT = os.getenv("DS_PROBE_DIR") or "."
   local logf = assert(io.open(OUT .. "/puddle_rtx_probe.log", "w"))
@@ -103,12 +103,12 @@ return function(game)
   end
 
   local exports = game.mods and game.mods.exports
-  local lib = exports and exports.DRAMATIC_SHAPE and exports.DRAMATIC_SHAPE.lib
+  local lib = exports and exports.TERRARIUM and exports.TERRARIUM.lib
   if not lib then
-    log("FAIL: DRAMATIC_SHAPE not loaded"); logf:close(); love.event.quit()
+    log("FAIL: TERRARIUM not loaded"); logf:close(); love.event.quit()
     return
   end
-  log("version:", exports.DRAMATIC_SHAPE.version)
+  log("version:", exports.TERRARIUM.version)
 
   local RayFX = lib.require("RayFX")
   local GroundFX = lib.require("GroundFX")
@@ -168,7 +168,7 @@ return function(game)
   GroundFX.setting:sync("on")
   DayNight.setting:sync("day")
   RayFX.setting:sync("rt")
-  Pipelines.setLevel("voxel", 5)
+  Pipelines.setLevel("terrarium_voxel", 5)
   GroundFX.SOAK = 3                    -- soak in seconds rather than a minute
 
   -- A town, because a town is where the paving is RAISED -- the case the
@@ -202,7 +202,7 @@ return function(game)
        .. "NOTHING"):format(GroundFX.wetness(), GroundFX.lastDraws,
                             GroundFX.lastStamps))
   for _, rung in ipairs({ { 3, "35deg" }, { 5, "75deg" } }) do
-    Pipelines.setLevel("voxel", rung[1]); wait(90)
+    Pipelines.setLevel("terrarium_voxel", rung[1]); wait(90)
     local c = maskShot(("40_dry_mask_%s.png"):format(rung[2]))
     log(("  dry %s: %d classified of %d sampled"):format(rung[2], c.hits,
                                                          c.seen))
@@ -262,7 +262,7 @@ return function(game)
   end
   for _, rung in ipairs({ { 2, "15deg" }, { 3, "35deg" },
                           { 4, "50deg" }, { 5, "75deg" } }) do
-    Pipelines.setLevel("voxel", rung[1]); wait(90)
+    Pipelines.setLevel("terrarium_voxel", rung[1]); wait(90)
     local c = maskShot(("41_wet_mask_%s.png"):format(rung[2]))
     log(("  wet %s: %d classified of %d sampled"):format(rung[2], c.hits,
                                                          c.seen))
@@ -282,7 +282,7 @@ return function(game)
     -- OPTIONS row itself takes, so a rung set this way is the rung a player
     -- would have. The wait is for the tween -- a shot taken mid-swing is a
     -- shot at an angle that is on no rung at all.
-    Pipelines.setLevel("voxel", level)
+    Pipelines.setLevel("terrarium_voxel", level)
     wait(90)
     RayFX.setting:sync("off"); wait(20); shot(tag .. "_a_rtOFF.png")
     RayFX.setting:sync("rt");  wait(20); shot(tag .. "_b_rtON.png")
@@ -303,7 +303,7 @@ return function(game)
   -- wrong as one that never started.
   Weather.setting:sync("off")
   wait(400)
-  Pipelines.setLevel("voxel", 4); wait(90)
+  Pipelines.setLevel("terrarium_voxel", 4); wait(90)
   log("")
   log(("aftermath: wet=%.2f rain=%.2f -- rain must be 0.00 and wet must not")
       :format(GroundFX.wetness(), Water.rain()))

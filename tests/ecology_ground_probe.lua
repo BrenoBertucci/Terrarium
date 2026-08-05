@@ -19,7 +19,7 @@
 --
 --   POKEPORT_VERSION=yellow \
 --   DS_PROBE_DIR=<dir> \
---   POKEPORT_DRIVER=mods/DRAMATIC_SHAPE/tests/ecology_ground_probe.lua gen1recomp
+--   POKEPORT_DRIVER=mods/TERRARIUM/tests/ecology_ground_probe.lua gen1recomp
 return function(game)
   local OUT = os.getenv("DS_PROBE_DIR") or "."
   local logf = assert(io.open(OUT .. "/ecology_ground_probe.log", "w"))
@@ -62,12 +62,12 @@ return function(game)
   log("free roam:", game.stack:top() == game.overworld)
 
   local exports = game.mods and game.mods.exports
-  local lib = exports and exports.DRAMATIC_SHAPE and exports.DRAMATIC_SHAPE.lib
+  local lib = exports and exports.TERRARIUM and exports.TERRARIUM.lib
   if not lib then
-    log("FAIL: DRAMATIC_SHAPE not loaded")
+    log("FAIL: TERRARIUM not loaded")
     logf:close(); love.event.quit(); return
   end
-  log("version:", exports.DRAMATIC_SHAPE.version)
+  log("version:", exports.TERRARIUM.version)
 
   local Ecology = lib.require("Ecology")
   local GroundFX = lib.require("GroundFX")
@@ -87,7 +87,7 @@ return function(game)
 
   Ecology.setting:sync("on")
   Weather.setting:sync("off")
-  Pipelines.setLevel("voxel", 5)
+  Pipelines.setLevel("terrarium_voxel", 5)
   teleport("ROUTE_4", 10, 8, "down")
   wait(120)
 

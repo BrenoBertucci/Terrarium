@@ -487,6 +487,29 @@ local function tick(dt)
   local visible = out > 0 and state.kind or nil
   DayNight.overcast = state.kind == "snow" and out * 0.75 or out
   Water.wet = state.kind == "rain" and out or 0
+  -- snow on the water is its own channel (veil + freeze target). Pushed the
+  -- same way wet is, so Water never requires this file back.
+  Water.snow = state.kind == "snow" and out or 0
+  -- Natural wind drive: showers shove the air hard, snow less so, clear
+  -- sky lets Wind fall back on diurnal/seasonal breeze alone. Pushed so
+  -- Wind never requires this file (cycle).
+  if Wind then
+    local drive = 0
+    if state.kind == "rain" then
+      drive = out * 0.95
+    elseif state.kind == "snow" then
+      drive = out * 0.55
+    end
+    Wind.weatherDrive = drive
+    if Wind.step then pcall(Wind.step, dt) end
+  end
+  if Water.step then pcall(Water.step, dt) end
+  if ow and ow.player and Water.noteFoot then
+    local fp = ow.player
+    local fpx = fp.px or ((fp.cellX or 0) * 16)
+    local fpz = fp.py or ((fp.cellY or 0) * 16)
+    pcall(Water.noteFoot, fpx + 8, fpz + 8)
+  end
 
   -- ------- lightning
   strike.at = strike.at + dt
@@ -558,7 +581,8 @@ function Weather.update(dt)
   if ok then return end
   failed = true
   state.kind, state.power, state.target = nil, 0, 0
-  DayNight.overcast, Water.wet = 0, 0
+  DayNight.overcast, Water.wet, Water.snow = 0, 0, 0
+  if Water.freeze then Water.freeze = 0 end
   drops, motes = {}, {}
   if V.mod and V.mod.log then
     V.mod.log:warn("weather failed: %s -- the sky is clear for this session",

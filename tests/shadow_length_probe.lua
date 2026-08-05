@@ -35,7 +35,7 @@
 -- screen and doing its job.
 --
 --   POKEPORT_VERSION=yellow DS_PROBE_DIR=<dir> [DS_KMAX=4.7] \
---   POKEPORT_DRIVER=mods/DRAMATIC_SHAPE/tests/shadow_length_probe.lua gen1recomp
+--   POKEPORT_DRIVER=mods/TERRARIUM/tests/shadow_length_probe.lua gen1recomp
 return function(game)
   local OUT = os.getenv("DS_PROBE_DIR") or "."
   local CAND = tonumber(os.getenv("DS_KMAX") or "") or 4.7
@@ -65,12 +65,12 @@ return function(game)
   end
 
   local exports = game.mods and game.mods.exports
-  local lib = exports and exports.DRAMATIC_SHAPE and exports.DRAMATIC_SHAPE.lib
+  local lib = exports and exports.TERRARIUM and exports.TERRARIUM.lib
   if not lib then
-    log("FAIL: DRAMATIC_SHAPE not loaded"); logf:close(); love.event.quit()
+    log("FAIL: TERRARIUM not loaded"); logf:close(); love.event.quit()
     return
   end
-  log("version:", exports.DRAMATIC_SHAPE.version, " candidate K_MAX:", CAND)
+  log("version:", exports.TERRARIUM.version, " candidate K_MAX:", CAND)
 
   local DayNight = lib.require("DayNight")
   local ShadowMap = lib.require("ShadowMap")
@@ -81,7 +81,7 @@ return function(game)
   Weather.setting:sync("off")
   DayNight.setting:sync("cycle")
   DayNight.overcast = 0
-  Pipelines.setLevel("voxel", 4)
+  Pipelines.setLevel("terrarium_voxel", 4)
   wait(120)
   DayNight.overcast = 0
 

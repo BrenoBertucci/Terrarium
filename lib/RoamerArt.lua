@@ -43,7 +43,11 @@ RoamerArt.FRAMES = 6          -- stand down/up/left then walk down/up/left
 -- pinned one on purpose should keep it.
 RoamerArt.REV = "1"
 
-local DERIVED = "save/mod-derived/DRAMATIC_SHAPE/roamers/"
+local function derivedRoot()
+  local id = (V.mod and V.mod.id) or "TERRARIUM"
+  return "save/mod-derived/" .. id .. "/roamers/"
+end
+local DERIVED = derivedRoot()
 local SHIPPED = "assets/roamers/"
 
 -- The three shades a Game Boy OBJ can actually show.  Color 0 is
@@ -264,7 +268,7 @@ local function build(species, mayBake)
       if not writeSheet(mon, path) then return nil end
     end
   end
-  return { id = "DS_ROAM_" .. species, image = path,
+  return { id = "TR_ROAM_" .. species, image = path,
            frames = RoamerArt.FRAMES, walker = true,
            dsSpecies = species }
 end

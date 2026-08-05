@@ -129,7 +129,7 @@ exactly one drawing each, and it is the battle front pic. So that is what a
 roamer wears — resampled down to the 16×16 cell every other character
 occupies, folded onto the three shades a Game Boy sprite can actually show,
 and baked once into the engine's own derived-asset folder
-(`save/mod-derived/DRAMATIC_SHAPE/roamers/`) the first time that species
+(`save/mod-derived/TERRARIUM/roamers/`) the first time that species
 turns up. A species' own pic size decides how big it stands, so a Caterpie
 is smaller than a Snorlax on the map for the same reason it is in a battle.
 

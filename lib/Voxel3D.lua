@@ -102,6 +102,15 @@ local SHADER = [[
   uniform vec2 swellA;        // two crossing wave trains, as phase per pixel
   uniform vec2 swellB;
   uniform float swellPhase;
+  // Spatial body-size knobs (Water.BODY_KX/KZ) -- vertex height AND fragment
+  // bands must share them so paint and feet stay on one field.
+  uniform float bodyKx;
+  uniform float bodyKz;
+  uniform float waterSteep;   // crest steepening (energy * STEEP), heightField twin
+  uniform vec2  waterCurrent; // unit XZ wind/current for advection + foam streaks
+  uniform float waterAdvect;  // phase drag along current
+  uniform float waterEnergy;  // lagged chop energy 0..1
+  uniform float waterTherm;   // 0 cold .. 1 warm
 #ifdef VOXEL_GRID
   // model space, one unit per voxel -- see VoxelGrid. Precision matters
   // here in a way it does not for a colour: the seam is the FRACTIONAL
@@ -122,6 +131,7 @@ local SHADER = [[
   uniform vec2 windFreq;      // phase gained per world pixel, per axis
   uniform float windPhase;    // advanced by the clock
   uniform float swell;        // water's rise at the crest, world px; 0 = flat
+  uniform float iceLift;      // freeze raises the surface a little (still y<-1 id)
   attribute float VertexShade;
   vec4 position(mat4 transform_projection, vec4 vertex_position) {
     // magnitude is the shading, sign is the face normal's Y (see vUp). A
@@ -173,10 +183,15 @@ local SHADER = [[
     // So the test is a compare on a number the mesh already carries, and
     // costs no attribute and no memory.
     //
-    // The displacement is a function of world XZ ALONE, which is what
-    // keeps the surface watertight: two quads meeting at a shared corner
-    // are moved by the same amount, so the mesh never opens a seam even
-    // though it is unindexed and they do not share a vertex.
+    // Identity is the height test ALONE. Motion (swell) is a separate
+    // axis: freeze damps swell to zero on the CPU, and ice still needs
+    // vWater set so the fragment can paint frozen bands. FLAT with no
+    // freeze leaves both zero and the still plane untouched.
+    //
+    // The displacement is a function of world XZ ALONE (Y = f(XZ)), which
+    // is what keeps the surface watertight: two quads meeting at a shared
+    // corner are moved by the same amount, so the mesh never opens a seam
+    // even though it is unindexed and they do not share a vertex.
     //
     // The normal comes free with it. The height is two sines, so its
     // gradient is two cosines -- the exact analytic slope, not a
@@ -185,17 +200,28 @@ local SHADER = [[
     vWater = 0.0;
     vWave = vec3(0.0, 1.0, 0.0);
     vSwellH = 0.0;
-    if (swell > 0.0 && vertex_position.y < -1.0) {
+    if (vertex_position.y < -1.0 && (swell > 0.0 || iceLift > 0.0)) {
       vWater = 1.0;
-      float a = dot(w.xz, swellA) - swellPhase;
-      float b = dot(w.xz, swellB) + swellPhase * 0.7;
+      // Body size + wind advection + crest steepening -- byte for byte with
+      // Water.heightField / phaseAt (feet and mesh share one ocean).
+      float bf = 0.90 + 0.35 * sin(w.x * bodyKx) * cos(w.z * bodyKz);
+      float adv = waterAdvect * waterEnergy * dot(w.xz, waterCurrent);
+      float ph = swellPhase + adv;
+      float a = dot(w.xz, swellA) * bf - ph;
+      float b = dot(w.xz, swellB) * bf + ph * 0.7;
       float h = sin(a) * 0.55 + sin(b) * 0.45;
-      w.y += swell * h;
-      // carried down raw (-1..1): the fragment cuts its cel bands from it,
-      // and a normalized height stays the same bands at every SWELL rung
+      // Gerstner-ish Y steepening: sharpens crests under chop energy
+      float ah = abs(h);
+      h = h + waterSteep * h * ah;
+      w.y += swell * h + iceLift;
       vSwellH = h;
-      vec2 g = swellA * (cos(a) * 0.55) + swellB * (cos(b) * 0.45);
-      vWave = normalize(vec3(-g.x * swell, 1.0, -g.y * swell));
+      if (swell > 0.001) {
+        // d/dx of sin(k·x*bf - p) and of steep term ≈ (1+2*steep*|h|)*cos chain
+        float chain = 1.0 + 2.0 * waterSteep * ah;
+        vec2 g = swellA * (bf * cos(a) * 0.55) + swellB * (bf * cos(b) * 0.45);
+        g *= chain;
+        vWave = normalize(vec3(-g.x * swell, 1.0, -g.y * swell));
+      }
     }
     // The shadow lookup runs off `sunModel`, not `model`. For terrain the
     // two are the same matrix, but a character is drawn as a slab LEANING
@@ -435,6 +461,19 @@ local SHADER = [[
   uniform float sparkle;      // how far toward white a lit crest lifts
   uniform vec2 glint;         // the slope window that catches it
   uniform float foamPhase;    // the tide's clock, for the foam's lapping
+  // Fragment paint phase snap (rad). 0 = continuous. Vertex geometry ignores
+  // this -- only the cel block's re-evaluated height / noise / lip use it.
+  uniform float paintPhaseStep;
+  // World-XZ paint cell (liquid / ice). Spatial snap for band/noise edges.
+  uniform float paintWCell;
+  uniform float paintWCellIce;
+  uniform float freeze;       // 0..1 progressive ice (CPU climate state)
+  uniform float crest;        // 0..1 mid-water crest foam (rain/wind chop)
+  uniform float snowVeil;     // 0..1 soft white veil while snow hits liquid
+  uniform float iceSparkle;   // cold silver glint on frozen plates
+  uniform float stepJitter;   // 0..1 footstep crack on ice (visual only)
+  uniform float waterWet;     // 0..1 rain on water (micro-ripples + heavy foam)
+  // iceLift / bodyKx / bodyKz live with the vertex swell uniforms
   uniform Image glassMask;    // opaque where the atlas texel is window glass
   uniform vec2 glassSize;     // the mask's dimensions: tc -> atlas texels
   uniform float glassNight;   // 0 = daylight .. 1 = the lamps are on
@@ -487,9 +526,11 @@ local SHADER = [[
     // vWater tells the three zones apart with no new data: exactly 1 on
     // the surface (every plane vertex is water), interpolating 1 -> 0 up a
     // shoreline lip face (bottom edge attached to the water, top edge to
-    // the bank), 0 everywhere else. FLAT (swell 0) never sets it, so the
-    // old still plane is untouched.
-    if (vWater > 0.0 && sparkle > 0.0) {
+    // the bank), 0 everywhere else. FLAT with no freeze never sets it, so
+    // the old still plane is untouched. Gated on vWater alone (not
+    // sparkle): rain kills the glint but must KEEP bands, lip foam and
+    // crest foam -- a dull wet pond is still a painted pond.
+    if (vWater > 0.0) {
       // Band / foam decisions snap to a CELL of the render buffer -- the
       // same idiom the sky uses for its dither grid (Sky.lua: floor(sc/cell)).
       // Without this, hard step()s ride a continuously moving swell field
@@ -501,49 +542,163 @@ local SHADER = [[
       vec2 gc = floor(sc / cell);
       float check = mod(gc.x + gc.y, 2.0);
       if (vWater > 0.98) {
-        // ON THE SURFACE: flat bands of brightness cut by the swell's own
-        // height. A crest is a shade lighter, a trough a shade deeper, and
-        // the two thresholds are dithered on the checker -- so the bands
-        // breathe with the interference pattern and read as cel-shaded
-        // water rather than as three painted stripes. Multiplies only:
-        // the tile's own art, the hour's tint and every palette mode keep
-        // their colours, just banded.
-        //
-        // Height for the BANDS is re-evaluated on a world-XZ cell, not taken
-        // from the interpolated vSwellH. Geometry still displaces smoothly
-        // (vertex, XZ-only -- watertight); only the cel paint snaps. Same
-        // idiom as the sky's floor(sc/cell): a hard step over a field that
-        // is constant inside a cell cannot crawl one fragment at a time.
-        // 2 world px is 1/8 of a map cell -- chunky enough to read as the
-        // pixel grid, fine enough that a pond still has many band cells.
-        float wcell = 2.0;
+        // ON THE SURFACE -- advanced cel ocean, still only hard steps +
+        // checker dither. Height re-evaluated on a world-XZ cell so edges
+        // cannot crawl (sky floor(sc/cell) idiom). Geometry is Y=f(XZ);
+        // paint snaps.
+        // Spatial paint grid (sky floor idiom). Larger cell = thicker band
+        // edges, fewer fragments on a hard step as continuous phase slides.
+        // paintPhaseStep is optional temporal snap (default 0 -- see Water.lua).
+        float wcell = mix(paintWCell, paintWCellIce, freeze);
+        if (wcell < 1.0) wcell = 1.0;
         vec2 wz = floor(vWorld.xz / wcell) * wcell;
-        float wa = dot(wz, swellA) - swellPhase;
-        float wb = dot(wz, swellB) + swellPhase * 0.7;
+        float bf = 0.90 + 0.35 * sin(wz.x * bodyKx) * cos(wz.y * bodyKz);
+        float adv = waterAdvect * waterEnergy * dot(wz, waterCurrent);
+        float ph = swellPhase + adv;
+        if (paintPhaseStep > 0.001) {
+          ph = floor(ph / paintPhaseStep + 0.5) * paintPhaseStep;
+        }
+        float wa = dot(wz, swellA) * bf - ph;
+        float wb = dot(wz, swellB) * bf + ph * 0.7;
         float hQ = sin(wa) * 0.55 + sin(wb) * 0.45;
-        float h = hQ + (check - 0.5) * 0.16;
-        rgb *= 1.0 + step(0.34, h) * 0.13 - step(h, -0.40) * 0.15;
-        // A CREST TURNED INTO THE LIGHT, quantized: the swell's analytic
-        // normal (vWave) against the sun, through the same glint window as
-        // ever -- then snapped to three hard rings, because a cel
-        // highlight is a SHAPE, not a sheen. The sparkle still travels
-        // with the wave that carries it; it just has edges now.
+        float ahQ = abs(hQ);
+        hQ = hQ + waterSteep * hQ * ahQ;
+        // Capillary micro-ripples (paint): harmonics of the SAME two trains.
+        float micro = waterWet * (1.0 - freeze)
+                    * (sin(wa * 2.15 + wb * 0.5) * 0.14
+                     + sin(wa * 3.1 - wb * 0.8) * 0.07 * waterEnergy);
+        float jit = (check - 0.5) * 0.16 + stepJitter * (check - 0.5) * 0.45;
+        float h = hQ + micro + jit;
+        // ---- DEPTH COLOUR (Roystan toon-water, free tutorial; adapted to
+        // cel without a depth buffer). Shallow vs deep is the swell height
+        // itself: troughs = deep, crests = shallow. Hard mixes only -- no
+        // smooth gradient airbrush. Source techniques:
+        // https://roystan.net/articles/toon-water/ (MIT-friendly tutorial)
+        float depth01 = clamp(0.5 - 0.5 * h, 0.0, 1.0); // 0 crest .. 1 trough
+        float depthRung = floor(depth01 * 3.0 + 0.001) / 3.0; // 4 hard rungs
+        // shallow (0.325, 0.807, 0.971) / deep (0.086, 0.407, 1.0) -- Roystan defaults
+        vec3 shallowCol = vec3(0.325, 0.807, 0.971);
+        vec3 deepCol    = vec3(0.086, 0.407, 1.000);
+        vec3 depthTint  = mix(shallowCol, deepCol, depthRung);
+        // multiply-tint so the tileset art stays legible; freeze kills it
+        rgb = mix(rgb, rgb * depthTint * 1.15, (1.0 - freeze) * 0.42);
+        // ---- 4-rung height cel (value mass): deep trough / trough / mid / crest
+        float d0 = mix(-0.55, -0.28, freeze);
+        float d1 = mix(-0.22, -0.08, freeze);
+        float d2 = mix( 0.18 - waterWet * 0.04, 0.10, freeze);
+        float d3 = mix( 0.42 - waterWet * 0.05, 0.22, freeze);
+        float band =
+            - step(h, d0) * (0.20 + waterWet * 0.05)
+            - step(h, d1) * (0.10 + waterWet * 0.03)
+            + step(d2, h) * 0.10
+            + step(d3, h) * (0.12 + waterEnergy * 0.04);
+        rgb *= 1.0 + band;
+        // ---- SURFACE NOISE FOAM (Roystan): binary cutoff on analytic
+        // "noise" built from the two trains + a cell hash -- no texture.
+        // Scrolls with foamPhase the way his noise scrolls with _Time.
+        // Gated on chop/rain: a CALM clear pond keeps bands+depth only --
+        // floating mid-pond foam was free frame-to-frame flip under nearest
+        // upscale (shimmer probe R0/R3: continuous churn is swell+paint).
+        float chopPaint = clamp(crest + waterEnergy + waterWet, 0.0, 1.0);
+        float nScroll = foamPhase * 0.22;
+        float noiseSamp = 0.5 + 0.5 * sin(wa * 1.7 + nScroll)
+                               * cos(wb * 1.3 - nScroll * 0.7);
+        // cheap hash on the band cell for irregularity (no Perlin tex)
+        float nHash = fract(sin(dot(wz, vec2(12.9898, 78.233))) * 43758.5453);
+        noiseSamp = clamp(noiseSamp * 0.65 + nHash * 0.35, 0.0, 1.0);
+        // cutoff rises in troughs (less foam mid-pond), drops near crests
+        // and under chop -- shoreline-like density without a depth buffer
+        float noiseCut = mix(0.78, 0.48, clamp(crest + waterEnergy * 0.4, 0.0, 1.0));
+        noiseCut = mix(noiseCut, 0.88, depthRung); // deep = less floating foam
+        float surfaceNoise = step(noiseCut, noiseSamp + (check - 0.5) * 0.08)
+                           * (1.0 - freeze) * step(0.04, chopPaint);
+        rgb = mix(rgb, vec3(0.93, 0.97, 1.0), surfaceNoise * 0.55);
+        // Interference "caustics": hard spots where trains constructively
+        // peak -- cel diamonds, not a soft caustic texture. Same calm gate.
+        float inter = sin(wa) * sin(wb);
+        float caust = step(0.55, inter + (check - 0.5) * 0.20)
+                    * (1.0 - freeze) * (0.10 + 0.08 * waterEnergy)
+                    * step(0.04, chopPaint);
+        rgb *= 1.0 + caust;
+        // Cel fresnel: facing-camera water is darker (looking into mass),
+        // glancing is brighter. vWave.y is the up component of the analytic
+        // normal -- hard steps only.
+        float face = vWave.y;
+        float fres = step(face, 0.88) * 0.08 + step(face, 0.78) * 0.07;
+        fres *= (1.0 - freeze * 0.7);
+        rgb *= 1.0 - fres;
+        // Wind streaks: foam filaments along current (hard dashed dither).
+        // Same paint-phase snap as bands -- continuous foamPhase would
+        // rattle the dashes every frame under the nearest upscale.
+        float fpPaint = foamPhase;
+        if (paintPhaseStep > 0.001) {
+          fpPaint = floor(fpPaint / paintPhaseStep + 0.5) * paintPhaseStep;
+        }
+        float streak = dot(wz, waterCurrent) * 0.11 + fpPaint * 1.7;
+        float streakFoam = step(0.72, sin(streak) + check * 0.25)
+                         * waterEnergy * (1.0 - freeze) * 0.35;
+        // Ice: multi-rung silver plate + crystal diagonals from world cell.
+        float iceBand = step(0.45, freeze + (check - 0.5) * 0.22);
+        float iceHi = step(0.70, freeze + (1.0 - check) * 0.18);
+        float iceXtal = step(0.55, sin((wz.x + wz.y) * 0.08)
+                         + (check - 0.5) * 0.30) * freeze;
+        rgb = mix(rgb, vec3(0.70, 0.84, 0.98), iceBand * freeze * 0.58);
+        rgb = mix(rgb, vec3(0.86, 0.93, 1.0), iceHi * freeze * 0.40);
+        rgb = mix(rgb, vec3(0.92, 0.96, 1.0), iceXtal * 0.28);
+        // Cold therm deepens the blue of liquid water; warm therm leaves
+        // the tile palette alone (hard mix, not a gradient ramp).
+        float coldWash = step(waterTherm, 0.35) * (1.0 - freeze) * 0.12;
+        rgb = mix(rgb, rgb * vec3(0.85, 0.92, 1.05), coldWash);
+        // Melt cracks: dual lattice leads.
+        float meltCrack = step(0.10, freeze) * step(freeze, 0.90);
+        float crack = step(0.5, check) * meltCrack * 0.32;
+        float crack2 = step(0.5, mod(gc.x + floor(gc.y * 0.5), 2.0))
+                     * meltCrack * 0.20;
+        float crack3 = step(0.5, mod(floor(gc.x * 0.5) + gc.y, 2.0))
+                     * meltCrack * stepJitter * 0.25;
+        rgb = mix(rgb, rgb * 0.68, crack + crack2 + crack3);
+        // Specular rings: analytic normal · sun, quantized. Ice silver
+        // lives beside rain-killed sparkle.
         float s = smoothstep(glint.x, glint.y, dot(vWave, -sunRay));
-        s = floor(s * 3.0 + 0.5) / 3.0;
-        rgb = mix(rgb, vec3(0.93, 0.97, 1.0), s * sparkle);
+        s = floor(s * 4.0 + 0.5) / 4.0;
+        float glintAmt = sparkle + iceSparkle;
+        rgb = mix(rgb, vec3(0.93, 0.97, 1.0), s * glintAmt);
+        // Breaking crest foam + tip whitewater + wind streaks.
+        float breakT = mix(0.66, 0.46, clamp(crest + waterEnergy * 0.35, 0.0, 1.0));
+        float crestFoam = step(breakT, h) * crest * (1.0 - freeze);
+        float tipFoam = step(0.78, h) * crest * (waterWet + waterEnergy)
+                      * (1.0 - freeze);
+        // Steepness foam: where |slope| is high (from vWave tilt).
+        float slope = 1.0 - vWave.y;
+        float steepFoam = step(0.12, slope) * waterEnergy * (1.0 - freeze)
+                        * (0.25 + 0.35 * check);
+        rgb = mix(rgb, vec3(0.93, 0.97, 1.0),
+                  crestFoam * (0.58 + 0.38 * check)
+                + tipFoam * 0.60
+                + steepFoam * 0.40
+                + streakFoam);
+        // Snow veil on liquid.
+        float veil = snowVeil * (0.42 + 0.22 * check) * (1.0 - freeze * 0.50);
+        rgb = mix(rgb, vec3(0.95, 0.97, 1.0), veil);
       } else if (vWater > 0.45) {
-        // ON THE LIP, just above the waterline: FOAM. The band of high
-        // vWater on a shore face IS the water contact -- the face's bottom
-        // edge moves with the swell, so the foam line rides the tide for
-        // free. The edge laps back and forth on the tide's own clock and
-        // dissolves through the checker, which is what makes it read as
-        // drawn white pixels breaking against the bank rather than as a
-        // painted rim. Phase is taken on the cell grid so the lap edge
-        // does not crawl independently of the foam step.
-        float lap = 0.10 * sin(foamPhase * 2.0 + gc.x * cell * 0.23
-                                          + gc.y * cell * 0.17);
-        float foam = step(0.70 + lap - check * 0.08, vWater);
-        rgb = mix(rgb, vec3(0.93, 0.97, 1.0), foam * 0.8);
+        // Shore lip foam -- rides the waterline; chop multiplies reach.
+        // Lap clock snapped with paintPhaseStep so the foam edge does not
+        // crawl along the bank one fragment at a time (Roystan foam spirit,
+        // cel tempo).
+        float fpLip = foamPhase;
+        if (paintPhaseStep > 0.001) {
+          fpLip = floor(fpLip / paintPhaseStep + 0.5) * paintPhaseStep;
+        }
+        float lap = 0.14 * sin(fpLip * 2.0 + gc.x * cell * 0.23
+                                         + gc.y * cell * 0.17);
+        float foamEdge = 0.66 + lap - check * 0.11
+                       - crest * 0.12 - waterWet * 0.09
+                       - waterEnergy * 0.06;
+        float foam = step(foamEdge, vWater);
+        // Spray flecks above the lip under high energy (still lip band).
+        float spray = step(0.55, vWater) * step(foamEdge - 0.08, vWater)
+                    * waterEnergy * check * 0.35;
+        rgb = mix(rgb, vec3(0.93, 0.97, 1.0), foam * 0.90 + spray);
       }
     }
 #ifdef VOXEL_GRID
@@ -1241,9 +1396,29 @@ function Voxel3D.beginScene(w, h, cx, cy, vw, vh, sky, slot)
   pcall(sh.send, sh, "swellA", Water.WAVE_A)
   pcall(sh.send, sh, "swellB", Water.WAVE_B)
   pcall(sh.send, sh, "swellPhase", Water.phase())
+  pcall(sh.send, sh, "iceLift", Water.iceLift())
+  pcall(sh.send, sh, "bodyKx", Water.BODY_KX or 0.0039)
+  pcall(sh.send, sh, "bodyKz", Water.BODY_KZ or 0.0045)
+  pcall(sh.send, sh, "waterSteep", tonumber(Water.STEEP_NOW) or 0)
+  pcall(sh.send, sh, "waterCurrent", Water.CURRENT or { 0.94, 0.34 })
+  pcall(sh.send, sh, "waterAdvect", tonumber(Water.ADVECT) or 0.045)
+  pcall(sh.send, sh, "waterEnergy", tonumber(Water.energy) or 0)
+  pcall(sh.send, sh, "waterTherm", tonumber(Water.THERM) or 0.5)
+  -- climate paint: freeze / crest foam / snow veil / ice glint / foot crack
+  pcall(sh.send, sh, "freeze", tonumber(Water.freeze) or 0)
+  pcall(sh.send, sh, "crest", tonumber(Water.CREST) or 0)
+  pcall(sh.send, sh, "snowVeil", tonumber(Water.SNOW_VEIL) or 0)
+  pcall(sh.send, sh, "iceSparkle", tonumber(Water.ICE_SPARKLE) or 0)
+  pcall(sh.send, sh, "stepJitter", tonumber(Water.stepJitter) or 0)
+  pcall(sh.send, sh, "waterWet", tonumber(Water.wet) or 0)
   -- the same clock again, under the name the FRAGMENT declares: the foam's
   -- lapping edge rides the tide that moves the waterline it sits on
   pcall(sh.send, sh, "foamPhase", Water.phase())
+  -- paint phase snap: fragment cel only (see Water.PAINT_PHASE_STEP). 0 keeps
+  -- continuous paint; geometry always uses the unsnapped swellPhase above.
+  pcall(sh.send, sh, "paintPhaseStep", tonumber(Water.PAINT_PHASE_STEP) or 0)
+  pcall(sh.send, sh, "paintWCell", tonumber(Water.PAINT_WCELL) or 4)
+  pcall(sh.send, sh, "paintWCellIce", tonumber(Water.PAINT_WCELL_ICE) or 6)
   -- sparkleNow, not SPARKLE: the row's strength with the rain taken out of it
   -- (Water.wet), so a shower dulls the pond's glint on the same tick it starts
   pcall(sh.send, sh, "sparkle", Water.sparkleNow())

@@ -15,7 +15,7 @@
 --
 --   POKEPORT_VERSION=yellow \
 --   DS_PROBE_DIR=<dir> \
---   POKEPORT_DRIVER=mods/DRAMATIC_SHAPE/tests/rayfx_water_probe.lua gen1recomp
+--   POKEPORT_DRIVER=mods/TERRARIUM/tests/rayfx_water_probe.lua gen1recomp
 return function(game)
   local OUT = os.getenv("DS_PROBE_DIR") or "."
   local logf = assert(io.open(OUT .. "/rayfx_water_probe.log", "w"))
@@ -53,12 +53,12 @@ return function(game)
   end
 
   local exports = game.mods and game.mods.exports
-  local lib = exports and exports.DRAMATIC_SHAPE and exports.DRAMATIC_SHAPE.lib
+  local lib = exports and exports.TERRARIUM and exports.TERRARIUM.lib
   if not lib then
-    log("FAIL: DRAMATIC_SHAPE not loaded"); logf:close(); love.event.quit()
+    log("FAIL: TERRARIUM not loaded"); logf:close(); love.event.quit()
     return
   end
-  log("version:", exports.DRAMATIC_SHAPE.version)
+  log("version:", exports.TERRARIUM.version)
 
   local RayFX = lib.require("RayFX")
   local WorldCurve = lib.require("WorldCurve")
@@ -79,7 +79,7 @@ return function(game)
   Weather.setting:sync("off")
   DayNight.setting:sync("day")
   RayFX.setting:sync("max")
-  Pipelines.setLevel("voxel", 5)
+  Pipelines.setLevel("terrarium_voxel", 5)
 
   local function frame(map, x, y, curve, tag)
     WorldCurve.setting:sync(curve)

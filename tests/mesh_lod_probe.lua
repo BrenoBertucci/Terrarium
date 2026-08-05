@@ -18,7 +18,7 @@
 --      a regression there would not hide behind "this wasn't touched".
 --
 -- POKEPORT_VERSION=yellow DS_PROBE_DIR=<dir> \
--- POKEPORT_DRIVER=mods/DRAMATIC_SHAPE/tests/mesh_lod_probe.lua gen1recomp
+-- POKEPORT_DRIVER=mods/TERRARIUM/tests/mesh_lod_probe.lua gen1recomp
 return function(game)
   local OUT = os.getenv("DS_PROBE_DIR") or "."
   local logf = assert(io.open(OUT .. "/mesh_lod_probe.log", "w"))
@@ -45,12 +45,12 @@ return function(game)
   end
 
   local exports = game.mods and game.mods.exports
-  local lib = exports and exports.DRAMATIC_SHAPE and exports.DRAMATIC_SHAPE.lib
+  local lib = exports and exports.TERRARIUM and exports.TERRARIUM.lib
   if not lib then
-    log("FAIL: DRAMATIC_SHAPE not loaded"); logf:close(); love.event.quit()
+    log("FAIL: TERRARIUM not loaded"); logf:close(); love.event.quit()
     return
   end
-  log("version:", exports.DRAMATIC_SHAPE.version)
+  log("version:", exports.TERRARIUM.version)
 
   local Structures = lib.require("Structures")
   local ChunkMesher = lib.require("ChunkMesher")

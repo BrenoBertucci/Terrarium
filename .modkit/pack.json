@@ -1,0 +1,842 @@
+{
+  "modkit": "1.0.0",
+  "packed_at": "2026-08-05T04:22:39Z",
+  "id": "TERRARIUM",
+  "version": "1.16.0-mobile.rain",
+  "api": 2,
+  "engine_range": ">=0.1.37 <2.0.0",
+  "folder": "breno@TERRARIUM",
+  "install_folder": "TERRARIUM",
+  "files": [
+    {
+      "path": ".modkitignore",
+      "bytes": 2366,
+      "sha256": "763ae79991c68c0960cfef2a8f96ce37cf1eb5277686c6b9e1ef3a680df0bc87"
+    },
+    {
+      "path": "assets/audio/birds.ogg",
+      "bytes": 544669,
+      "sha256": "359e4e3f9da9d75aac64cede511c7e3ef8b461f9d9f8c230f8f80e44c4b3e35f"
+    },
+    {
+      "path": "assets/audio/CREDITS.md",
+      "bytes": 2836,
+      "sha256": "e551ed1221ac3349e313120e9558ed48158a00689c7199dd40ae1640cee7fd76"
+    },
+    {
+      "path": "assets/audio/crickets.mp3",
+      "bytes": 184393,
+      "sha256": "5b5bd1f744087888c5623543c3ff80be9c2ce106093993e7c8a8492b0280b2c0"
+    },
+    {
+      "path": "assets/audio/rain.ogg",
+      "bytes": 529890,
+      "sha256": "204bbdba67bd69f744bbb07d81155d0ee775960b979abd0a9b662b23dbc124fd"
+    },
+    {
+      "path": "assets/audio/thunder.ogg",
+      "bytes": 51493,
+      "sha256": "8a4f1dee999546b363f989eff92174375eeae7c241dc9beaa0892fb131ef12a9"
+    },
+    {
+      "path": "assets/audio/water.ogg",
+      "bytes": 104892,
+      "sha256": "32bc3462ebd2376d9b84e8f602969f8c2a475f589adee9804207e19116cda768"
+    },
+    {
+      "path": "assets/docs/buidling_to_voxel/sprite_extract.py",
+      "bytes": 2211,
+      "sha256": "f91ae9dbead63a815d6832e54ab57050027eb680d339068a2e0db9523f74de84"
+    },
+    {
+      "path": "assets/docs/buidling_to_voxel/sprite_to_voxel_methodology.md",
+      "bytes": 11779,
+      "sha256": "c5bf6b4ee42a0015c70dddb5dd2f8468324e5bb59d59c2e6c5d712a704b2db6a"
+    },
+    {
+      "path": "assets/docs/buidling_to_voxel/voxel_build_verify.py",
+      "bytes": 6340,
+      "sha256": "e9eedc53135941ac5cb0b7c4ffec388fbefb5cabb14e9554d9f975fed0a54d58"
+    },
+    {
+      "path": "assets/docs/buildings/B01-unnamed-building.md",
+      "bytes": 4127,
+      "sha256": "5b7629f0cff024b0c93edbab54eacfef748e45e3077a0bd82ac44c8c7c9e49c9"
+    },
+    {
+      "path": "assets/docs/buildings/B02-unnamed-building.md",
+      "bytes": 4197,
+      "sha256": "21e609fba06d4d00aa3ecbe4a5ff499d9df8388f209d6682c1806067d6048612"
+    },
+    {
+      "path": "assets/docs/buildings/B03-unnamed-building.md",
+      "bytes": 4338,
+      "sha256": "89e656c8515120cee5873c0179789afc06ebf8e5f16cff9adb9952209dbab85f"
+    },
+    {
+      "path": "assets/docs/buildings/B04-unnamed-building.md",
+      "bytes": 3365,
+      "sha256": "2e4402c6fd77f856e693a1e1940333b573c80cd0462132a83f062321fecb5bed"
+    },
+    {
+      "path": "assets/docs/buildings/B05-unnamed-building.md",
+      "bytes": 4178,
+      "sha256": "f56b1aa815a4879db1bdb8f6b8420e8c4dca74c333e92d8fa4afd15605457b81"
+    },
+    {
+      "path": "assets/docs/buildings/B06-unnamed-building.md",
+      "bytes": 3963,
+      "sha256": "0114d56951f8ba67bf0e7c7074f844f621cad6d1591cd1f85ecb533330545116"
+    },
+    {
+      "path": "assets/docs/buildings/B07-unnamed-building.md",
+      "bytes": 3585,
+      "sha256": "9fe510863b66735843b1e7220486fa4dc10a5eec91146426a68ce3431a5ace7a"
+    },
+    {
+      "path": "assets/docs/buildings/B08-unnamed-building.md",
+      "bytes": 4573,
+      "sha256": "e4c59299b4af999f8c43d3796a8c15c58413b5e732e545ed2976ee2336fc70ba"
+    },
+    {
+      "path": "assets/docs/buildings/B09-unnamed-building.md",
+      "bytes": 4404,
+      "sha256": "c37aa979a1483b547d89152a2c68fca4baf0ad0cada04501eea84a4c0e856120"
+    },
+    {
+      "path": "assets/docs/buildings/B10-unnamed-building.md",
+      "bytes": 4571,
+      "sha256": "d8f68e2e621a9b44e4d50964087053aab0c3e373395706d0ed3fb919ca08981f"
+    },
+    {
+      "path": "assets/docs/buildings/B11-unnamed-building.md",
+      "bytes": 3272,
+      "sha256": "baa746e6aa6c939c500b40dd33347760ed745516b7acfe3b97b3ea7d6e5d1e35"
+    },
+    {
+      "path": "assets/docs/buildings/B12-unnamed-building.md",
+      "bytes": 2860,
+      "sha256": "57125df29a5659806076773f20691f13bc0b83100051baa4b9d5de053fa184c8"
+    },
+    {
+      "path": "assets/docs/buildings/B13-unnamed-building.md",
+      "bytes": 4251,
+      "sha256": "4f799915b65ecbdc23eabcc5e4966d07f2a2ddc8492bf6d9c196b2175c54b78a"
+    },
+    {
+      "path": "assets/docs/buildings/B14-unnamed-building.md",
+      "bytes": 5379,
+      "sha256": "705a0792d6ec7098107fb8465a3deb6c10363bd277abeced020c04c369211f1b"
+    },
+    {
+      "path": "assets/docs/buildings/B15-unnamed-building.md",
+      "bytes": 5447,
+      "sha256": "e912d6ce5c2a2d672024edbfbefadc7d74b770b92a29799770629762330e0ae3"
+    },
+    {
+      "path": "assets/docs/buildings/B16-unnamed-building.md",
+      "bytes": 5126,
+      "sha256": "4863c561115b90e2dd6a879a9c8e3ca83cb47b1332c4733623677cd56f1a2a5b"
+    },
+    {
+      "path": "assets/docs/buildings/B17-unnamed-building.md",
+      "bytes": 3224,
+      "sha256": "f89b3205acd94af0ff75e37142b4085e368a54eb71477364e54a9f3b7f781df8"
+    },
+    {
+      "path": "assets/docs/buildings/B18-unnamed-building.md",
+      "bytes": 4218,
+      "sha256": "2cedd6112af0490722a33fa0b9204c68154c7ee048a4909dc953b7f7ba8ad127"
+    },
+    {
+      "path": "assets/docs/buildings/B19-unnamed-building.md",
+      "bytes": 12175,
+      "sha256": "ea1d2dc8aa8f60e43b96afbc8279813e0aa648ec51b6a24e806ddaa033cffd73"
+    },
+    {
+      "path": "assets/docs/buildings/B20-unnamed-building.md",
+      "bytes": 10719,
+      "sha256": "cc0ac172c172514f9b8a9302f1fbb4c15d5d879bad5399bf5d0293d75cac1891"
+    },
+    {
+      "path": "assets/docs/buildings/B21-unnamed-building.md",
+      "bytes": 8222,
+      "sha256": "bf22d59711ca4584bca732097f4c0da669f9f78a02e9adf0c340870cf3f528cb"
+    },
+    {
+      "path": "assets/docs/buildings/B22-unnamed-building.md",
+      "bytes": 7916,
+      "sha256": "3b78e2cb236ce8f2bc09809defe6e655d745206830d84875ffc30719b02d8e73"
+    },
+    {
+      "path": "assets/docs/buildings/B23-unnamed-building.md",
+      "bytes": 7808,
+      "sha256": "0df1011dcf8d56b891633c606993e05b219c0d6c1a9b2e31e4287c8963185d73"
+    },
+    {
+      "path": "assets/docs/buildings/B24-unnamed-building.md",
+      "bytes": 6386,
+      "sha256": "a4d7d4f00091f463589779a6407a21e809602f4c772548294e68d938ab089eaf"
+    },
+    {
+      "path": "assets/docs/buildings/B25-unnamed-building.md",
+      "bytes": 6300,
+      "sha256": "9f9b6b00f91e94c2cc18063adf933d2dfd8f342bbd12dc0dde3a4a0853f3fdae"
+    },
+    {
+      "path": "assets/docs/buildings/B26-unnamed-building.md",
+      "bytes": 5569,
+      "sha256": "5a44028cee64302348062996de5302c028ee19acd9f418e2e44d120ba8f0e1d0"
+    },
+    {
+      "path": "assets/docs/buildings/B27-unnamed-building.md",
+      "bytes": 4769,
+      "sha256": "1de114c3a81b09e3daf4b75ceadedd348c79ba4f3931edfaad59cfcb0c6275aa"
+    },
+    {
+      "path": "assets/docs/buildings/B28-unnamed-building.md",
+      "bytes": 4831,
+      "sha256": "eda3bda45efe0bba7bb9933a2caa94d03da8b16b3c3f50f4f25797073c1b666d"
+    },
+    {
+      "path": "assets/docs/buildings/B29-unnamed-building.md",
+      "bytes": 4246,
+      "sha256": "7e9b593ddd081e167095c5636c66a3f9bccf138ab3adfd4b20939426f7aa6945"
+    },
+    {
+      "path": "assets/docs/buildings/B30-unnamed-building.md",
+      "bytes": 4284,
+      "sha256": "1c730a878cabe55e24bfb10fc3f247d45df2b202b9aec516258327e500f9428e"
+    },
+    {
+      "path": "assets/docs/buildings/B31-unnamed-building.md",
+      "bytes": 4324,
+      "sha256": "161b5eac958d1bed05d9d388bcec32e58e1447e6882809fd3f3cdbbd7417bc6e"
+    },
+    {
+      "path": "assets/docs/buildings/B32-unnamed-building.md",
+      "bytes": 5426,
+      "sha256": "80950ad9d6d487f360604d5f5aa3f835a2f4c6badaa51fb4f7a0c8ea73587833"
+    },
+    {
+      "path": "assets/docs/buildings/B33-unnamed-building.md",
+      "bytes": 3625,
+      "sha256": "d5569fcb6cc688a96d6164468d130d75ffe7b010bfef264d56ae59ccd2f31587"
+    },
+    {
+      "path": "assets/docs/buildings/B34-unnamed-building.md",
+      "bytes": 2660,
+      "sha256": "ed09560fbffc84f3f14de197585cb3fdf7424ba075a5fb10c71d4c0299d76175"
+    },
+    {
+      "path": "assets/docs/buildings/README.md",
+      "bytes": 16582,
+      "sha256": "6d3799413057480a5fb3a860cd5cf9a4ed62110fb90ecd50ad99b1ede0482063"
+    },
+    {
+      "path": "assets/docs/buildings/REMAINING.md",
+      "bytes": 4118,
+      "sha256": "91b76c60b6f2685b4f26dc8d43e1132deaa50b46253476dadf856229185f3c6c"
+    },
+    {
+      "path": "assets/ground/print.png",
+      "bytes": 335,
+      "sha256": "edc2f0aab90a67799a8f86d53f16ee6f42074e77d37f0d662733458dc0e4c6bf"
+    },
+    {
+      "path": "assets/ground/puddle.png",
+      "bytes": 773,
+      "sha256": "7e2a381fe9aa1dcf17bdc9901975297677decd77d150381571620a84a08b42be"
+    },
+    {
+      "path": "assets/ground/README.md",
+      "bytes": 4457,
+      "sha256": "ed51fde052aa24b7b1954606e0838f21a4429539087e547ee2195daeb4022c17"
+    },
+    {
+      "path": "assets/ground/snow-crust-1.png",
+      "bytes": 754,
+      "sha256": "31926d06952bb251444b8e94f38b3f192c51b4e438311a579b8d664564fc5dbe"
+    },
+    {
+      "path": "assets/ground/snow-crust-2.png",
+      "bytes": 1430,
+      "sha256": "11e50da76ab48326dcab2f7ee9cb7df46c5b961d16cd6be8d0334049b52a24ad"
+    },
+    {
+      "path": "assets/ground/snow-crust-3.png",
+      "bytes": 2049,
+      "sha256": "9b5817591fb71abb7ff692ea3562e165f43303a7e25f685b22308f888b655eaf"
+    },
+    {
+      "path": "assets/ground/snow-ground-1.png",
+      "bytes": 397,
+      "sha256": "777523c6bebec834de288129225bdc6a2a2092ff80e02c1ab26b449b8f2e8dd8"
+    },
+    {
+      "path": "assets/ground/snow-ground-2.png",
+      "bytes": 1077,
+      "sha256": "94258b030b997b4bc7dacc5732c0996a98289422bbb1bb431c930e04fece35cc"
+    },
+    {
+      "path": "assets/ground/snow-ground-3.png",
+      "bytes": 1512,
+      "sha256": "739160d13fc38257c141454133b403417692c98b6cf65833fc0b180d45da585f"
+    },
+    {
+      "path": "assets/ground/source/Pokemon.Yellow.Legacy.V1.0.10.Patches.zip",
+      "bytes": 196080,
+      "sha256": "91c97db334cd913633a84087a1a081d0b3454a64d505d5ce7f42c8c97cd1e718"
+    },
+    {
+      "path": "assets/ground/source/Pokemon_PureRed_v2.7.4.bps",
+      "bytes": 478462,
+      "sha256": "403f47ed5def3a36aa51ad149fb5d836194b00ec47b0944d84d050d6582eee1e"
+    },
+    {
+      "path": "assets/ground/source/snowleve.png",
+      "bytes": 1502410,
+      "sha256": "81b784d674eff44e5d7618c902d60aefad437f4d588964622be143a4f8c75053"
+    },
+    {
+      "path": "assets/ground/source/snowlevearvore.png",
+      "bytes": 1511596,
+      "sha256": "49a88cf43062c500dfc7185996752f33917bdbe9b852d9575a1f9cd94c007f1a"
+    },
+    {
+      "path": "assets/ground/source/snowmedioarvore.png",
+      "bytes": 1486801,
+      "sha256": "850bd69b4858e688e70a68bf13c610bf1b50d66a59327058103619340613ee8d"
+    },
+    {
+      "path": "assets/ground/source/snowpesado.png",
+      "bytes": 1489348,
+      "sha256": "307ee555784375b3524e24c6fa911c8c3a65e7e09b06bbbac219613a9e206c57"
+    },
+    {
+      "path": "assets/ground/source/snowpesadoarvore.png",
+      "bytes": 2543380,
+      "sha256": "0058352f6db939f7cafdbd034aea661cad287dea1dd1932f7e414a1e4e22365d"
+    },
+    {
+      "path": "assets/ground/source/ylegacy v1.0.10.zip",
+      "bytes": 555047,
+      "sha256": "3503e6e25ff71f8e61607a5c6903fa6ba2d6a361287a0a57bdf4c422baa8826b"
+    },
+    {
+      "path": "CHANGELOG.md",
+      "bytes": 183117,
+      "sha256": "31f1b58d55a145f0beddc66f523842e3304a015fbf5b614f1ba338a6bbd38e25"
+    },
+    {
+      "path": "data/battle_arenas.lua",
+      "bytes": 11327,
+      "sha256": "b94c2f2df11baff890869cf9a5528632e28dd291c994933eac3824785d6c9ecc"
+    },
+    {
+      "path": "data/voxel_heights.lua",
+      "bytes": 188216,
+      "sha256": "5bf0de2461b0f114ea7a1c1aef16758090bdf1fcae98c15cdffc91497e3e9a0f"
+    },
+    {
+      "path": "FEATURES.md",
+      "bytes": 33827,
+      "sha256": "9f1974071c24ab575cb4259294cccb64f046f3767a915594c85a6d00a3d2cf05"
+    },
+    {
+      "path": "lib/AmbientLife.lua",
+      "bytes": 21159,
+      "sha256": "8d980195db91d80241deb9190991b08e365e0534c8a3c62aae4a8b092b92ced4"
+    },
+    {
+      "path": "lib/AmbientSound.lua",
+      "bytes": 28315,
+      "sha256": "f4629e1636f736187f9602f5d7b90906935b27f08550244361393519cf9375ff"
+    },
+    {
+      "path": "lib/AutoFarm.lua",
+      "bytes": 29180,
+      "sha256": "79504c37c333da2753499b0c10ef6c3068b2d928a3a3bc931033da9d9d114e61"
+    },
+    {
+      "path": "lib/BattleArena.lua",
+      "bytes": 15227,
+      "sha256": "5e508f57eb420b593d298b06d28af14ba473db425bc7d32e9be710813a088cb7"
+    },
+    {
+      "path": "lib/BattleBillboard.lua",
+      "bytes": 5924,
+      "sha256": "0ee39926a60de750f8e3ae8f9ae7d8c87d59d5e66136d13b8fe0a73c6bea0d42"
+    },
+    {
+      "path": "lib/BattleCam.lua",
+      "bytes": 8965,
+      "sha256": "471de0d925ca96f6cee4164e1b9778ffdfdf4aded491053d24b6a6161dab3788"
+    },
+    {
+      "path": "lib/BattleDOF.lua",
+      "bytes": 7595,
+      "sha256": "9c53789bd5843bcc623fe44536cb071780761ce4f7cc810bd0ef0471c4eb8ad7"
+    },
+    {
+      "path": "lib/BattleExit.lua",
+      "bytes": 9002,
+      "sha256": "a29b29a28916b6f502785cc5a1f09c5560dc3551332c5481f5f450be7a994c47"
+    },
+    {
+      "path": "lib/BattleHud.lua",
+      "bytes": 15451,
+      "sha256": "7ec4df1173d6d7db09ccdc47549bca9577ffb7ed4974bcf0d934eea766031911"
+    },
+    {
+      "path": "lib/BattlePics.lua",
+      "bytes": 10130,
+      "sha256": "2d1ac46e64d18dd1574f84b8f984f36121b0298f1b81b7a7d681bff7d727db2a"
+    },
+    {
+      "path": "lib/BattleScene.lua",
+      "bytes": 25728,
+      "sha256": "1c22c77b88d1e539dbcb3aa8d7e70792fcb3621e830557df1dcad81255c01f1c"
+    },
+    {
+      "path": "lib/BuildBudget.lua",
+      "bytes": 1971,
+      "sha256": "c33857dcd8eaee68721ec75a94edb633a9fecddf1bc5b8915ec9b659d017bb96"
+    },
+    {
+      "path": "lib/Buildings.lua",
+      "bytes": 28512,
+      "sha256": "24cd8b2169a9ec1c8e92aa47c1de818f93f1cca50d8cec44d7749c2e97f68458"
+    },
+    {
+      "path": "lib/Carry.lua",
+      "bytes": 7134,
+      "sha256": "716656f2431d6d0f2d9f5384e67561a43f5b0302e17850b6a5d024c0d44f4666"
+    },
+    {
+      "path": "lib/ChunkMesher.lua",
+      "bytes": 63501,
+      "sha256": "4d58ebed8084d66e1226edfae6b548ec627a4055e80fe08e61060f888741a3e9"
+    },
+    {
+      "path": "lib/CityLife.lua",
+      "bytes": 13613,
+      "sha256": "5528b7343cdcb4e5d804d307eaf478908a043b3777ebabd899a72bc18f999e78"
+    },
+    {
+      "path": "lib/Comforts.lua",
+      "bytes": 11983,
+      "sha256": "ec38452202c63909eae1f2d366cef17c01208d572f775d84fce69ac3f399a6dc"
+    },
+    {
+      "path": "lib/DayNight.lua",
+      "bytes": 37031,
+      "sha256": "f1fe4fbc159f4c682077f802ced4dbc23d2339b5ebf8b567b544ba1a16dcab3b"
+    },
+    {
+      "path": "lib/DayTint.lua",
+      "bytes": 8634,
+      "sha256": "4f83c62895283227a0c0911660d0622c41ebd98d9af28d19f125ed1e6698667a"
+    },
+    {
+      "path": "lib/Ecology.lua",
+      "bytes": 18724,
+      "sha256": "eacb072768369ecd9f94c479e660f55bd2bfdf8f9eff991bca25867a49d36998"
+    },
+    {
+      "path": "lib/ExpShare.lua",
+      "bytes": 5829,
+      "sha256": "98644660370fbd8bdeb6cdd823423dd3c337aaa35081bb4ea0d60aa411766480"
+    },
+    {
+      "path": "lib/GlassMask.lua",
+      "bytes": 6287,
+      "sha256": "242327056d1b09d28278588f6b8c712f665ac57c38a5b4fb4320903310d98778"
+    },
+    {
+      "path": "lib/GroundFX.lua",
+      "bytes": 55947,
+      "sha256": "36d194b4c24aa268e857b418b74943220ea9817286fcadd64390feb3ee608fc6"
+    },
+    {
+      "path": "lib/HiddenItems.lua",
+      "bytes": 6543,
+      "sha256": "34c24c242afc82d9bf58590f53cdde2df1a757082093e689de5b34ef5a42397f"
+    },
+    {
+      "path": "lib/ImageCache.lua",
+      "bytes": 2531,
+      "sha256": "9f7b3b008a475243086ccf542f3f80821fec520395df9b66894da9d29642a776"
+    },
+    {
+      "path": "lib/Interiors.lua",
+      "bytes": 20729,
+      "sha256": "905e5f151b09b55caed32d2cc7c08479f493eb190ff38028384f9652882bc294"
+    },
+    {
+      "path": "lib/Light.lua",
+      "bytes": 4137,
+      "sha256": "29444538fbf3d8964668c0cb28a8d9def2e9bc8d58198acff44104a6916843ae"
+    },
+    {
+      "path": "lib/Mat4.lua",
+      "bytes": 5462,
+      "sha256": "46d35d189083aea4333dd2005880440fe8789a02865cefdb6997185f84522989"
+    },
+    {
+      "path": "lib/MiniMap.lua",
+      "bytes": 17336,
+      "sha256": "1f2c5e044dd72a29db5b4342cd24a00ebdcf47f09f949d2bb5a29518ae1d9d77"
+    },
+    {
+      "path": "lib/ModSetting.lua",
+      "bytes": 4621,
+      "sha256": "5ea4a8a9e45c9d2ee6bd92eee33526cd131a4e92d5e18e1043b12d55f923d14f"
+    },
+    {
+      "path": "lib/OverworldBattle.lua",
+      "bytes": 54576,
+      "sha256": "d48cfaa8dd539aa8d19b349895c99c359c7cc34a356e51f355d213ad5dd6c3ea"
+    },
+    {
+      "path": "lib/Perf.lua",
+      "bytes": 12153,
+      "sha256": "f88c185ec321b98b1ca5e797f4601b165fa042487d947024fc30c64d271a9802"
+    },
+    {
+      "path": "lib/QoL.lua",
+      "bytes": 15577,
+      "sha256": "642ab57d1f9f06975502f4dbd7c1ca587e7a4349e7a25a75e2817d947cc16a3d"
+    },
+    {
+      "path": "lib/Quality.lua",
+      "bytes": 8030,
+      "sha256": "d82fee892110f91cd3089e5b7ffda73988f4d70e7823df04967b85bfcbf07d3f"
+    },
+    {
+      "path": "lib/RayFX.lua",
+      "bytes": 57317,
+      "sha256": "e731030be93daf7add039ecf9f7f70198a759caddc944a74753eb3a6e17b28bb"
+    },
+    {
+      "path": "lib/Roamer.lua",
+      "bytes": 11937,
+      "sha256": "546a2f3d1a312527f1f5f0be08c128b51e3442ddb329c45e18039225821b0212"
+    },
+    {
+      "path": "lib/RoamerArt.lua",
+      "bytes": 14822,
+      "sha256": "f2d417a1768d79585974d7e30ae1cfd46b1018b412a83e0eefb06e4ed54cc167"
+    },
+    {
+      "path": "lib/Routines.lua",
+      "bytes": 16629,
+      "sha256": "6be4395d36c3a0dde9849cdd3ce8a1102c503c4073a6dfc28ab2ad9049996c64"
+    },
+    {
+      "path": "lib/ShadowMap.lua",
+      "bytes": 27081,
+      "sha256": "c703dd10c1b4b96b734f7faebe72d116a2f47fd85b19ff47ea4c2f4a0fb3853a"
+    },
+    {
+      "path": "lib/Shelter.lua",
+      "bytes": 24124,
+      "sha256": "fc8c8cd298c3aa77f0025c60d8792fe745aec2983b13f11d42c2632173e7bf59"
+    },
+    {
+      "path": "lib/Sky.lua",
+      "bytes": 28585,
+      "sha256": "c7e6c9f97eb6becd1698fb4050409fd67cbe8c784f408fa67636f7aecbc1cc79"
+    },
+    {
+      "path": "lib/SpriteBillboards.lua",
+      "bytes": 4327,
+      "sha256": "fcc19c60517ff82abbcb5e5b7e17f9abe94d6bb10f0cf36883f12eddf55244b3"
+    },
+    {
+      "path": "lib/StreetLamps.lua",
+      "bytes": 11221,
+      "sha256": "88f369428b1856ecbf4d34b723550eff636401b7918b4dbc2147fc4db3a81656"
+    },
+    {
+      "path": "lib/Structures.lua",
+      "bytes": 109175,
+      "sha256": "905c7998fd4b0fe0ad0ec70aab0185a18aa415cfdec7b1392294686947f78af2"
+    },
+    {
+      "path": "lib/TerrainAtlas.lua",
+      "bytes": 27661,
+      "sha256": "b2cb80d5c57444c14d41c0cae71733f5916d9347e78306b6d573e6e661eca66f"
+    },
+    {
+      "path": "lib/TileShape.lua",
+      "bytes": 22875,
+      "sha256": "a57b665c9f3e1acd13a1836532c5661b35180b5d97d895178b2b154bf0bf7db6"
+    },
+    {
+      "path": "lib/TiltShift.lua",
+      "bytes": 10921,
+      "sha256": "aa3c03d3e82972b079e0c1754d59f00ef49bf22a7852f256703729855b355a4b"
+    },
+    {
+      "path": "lib/Voxel3D.lua",
+      "bytes": 104572,
+      "sha256": "43c519a475032bc0c8bf1071bf9b35f6b732eb6e4985a9c678bf91944e875ac6"
+    },
+    {
+      "path": "lib/VoxelGrid.lua",
+      "bytes": 3449,
+      "sha256": "9994e33881b479a4ac2edea96729e5c2056212fcec3a1ae67242083c94e8fa1b"
+    },
+    {
+      "path": "lib/VoxelScene.lua",
+      "bytes": 51191,
+      "sha256": "4710e0a03664780a562c7f9e583c4d023e4fe9258c0ba8bedd3c20d78872fed0"
+    },
+    {
+      "path": "lib/VoxelState.lua",
+      "bytes": 6373,
+      "sha256": "63b6c3fa9c0eb73af433c44b0983b881f3b1334e56be6f9f38e159c31d608347"
+    },
+    {
+      "path": "lib/Water.lua",
+      "bytes": 18855,
+      "sha256": "8d7eaf668d903f0ae2e774c8559a4ed9a6f169b4798da5e7b91c19bdad966479"
+    },
+    {
+      "path": "lib/Weather.lua",
+      "bytes": 31124,
+      "sha256": "8ace35907f12ef140e4afb51f7df088b063edb014b368f1235a24bfbe0c10402"
+    },
+    {
+      "path": "lib/WildRoamers.lua",
+      "bytes": 24312,
+      "sha256": "189f544a0ec0ffa9109838a636d4428ef9372ff7ce0bb99c173553aa6a4d227d"
+    },
+    {
+      "path": "lib/Wind.lua",
+      "bytes": 8818,
+      "sha256": "6014159845d70344ba3bb87f79187621bbf02a95fe68926e643e7494f1f25479"
+    },
+    {
+      "path": "lib/WorldCurve.lua",
+      "bytes": 4164,
+      "sha256": "91ee9b80d6b9dec75f7e643159fc9ff52a7dcd7bea06c036295dda9828831a94"
+    },
+    {
+      "path": "main.lua",
+      "bytes": 76831,
+      "sha256": "3c40ae44f14497571f933534fdd61ab6ae6bfbde7184874f17c6be70ab5c11bd"
+    },
+    {
+      "path": "manifest.json",
+      "bytes": 3346,
+      "sha256": "b457958a3d23d3292b2cc3643c5b07eaf69def79fbab3fd472d2ca9b1af9e4ea"
+    },
+    {
+      "path": "MOBILE.md",
+      "bytes": 11763,
+      "sha256": "f9a298f03eb8d015df84d2a6e9dc4291aa203018910a1394375ba4a8be2f991e"
+    },
+    {
+      "path": "mod.card",
+      "bytes": 11959,
+      "sha256": "b2a2782d1c94c167c7c927aa881ad426fa48eb44baad38b705c264fa89a242c4"
+    },
+    {
+      "path": "PROMPT_LUZ.md",
+      "bytes": 11642,
+      "sha256": "5f421ff85e98234df0cd0a8b51f5bdeb0b6e32971590533b54e472851c316992"
+    },
+    {
+      "path": "PROMPT_MEMORIA_MAPA.md",
+      "bytes": 16003,
+      "sha256": "1fee492855d7796225078f8e56f33120a4bf7924a6e38257b56828660cfacfa7"
+    },
+    {
+      "path": "quiver-catalog-entry.json",
+      "bytes": 880,
+      "sha256": "7e078b5590523ca8295c4034789d8c5ee5cd623188d2e5f5f57b9555dc1ec6ef"
+    },
+    {
+      "path": "quiver-local-index.json",
+      "bytes": 1081,
+      "sha256": "0c02cbb9d27323ea8ed9f2219237a0c6f99f1b0cbfc045de36ed9b7f44cb3941"
+    },
+    {
+      "path": "README.md",
+      "bytes": 16405,
+      "sha256": "d565ead5ddf7022113208082d34e600efc48daec077ac9c9aab3d302341a9bed"
+    },
+    {
+      "path": "tests/ambient_beds_probe.lua",
+      "bytes": 8669,
+      "sha256": "21e5255d9d29a5cbcb17dcdfec076ab5575e197cb72186d695868d7bac05691f"
+    },
+    {
+      "path": "tests/ambsound_cost_probe.lua",
+      "bytes": 2050,
+      "sha256": "dfef53b0dad4a4b1b080d1cc5a1c65ff773bd769424806a2f6fae3e7f3c0dcc5"
+    },
+    {
+      "path": "tests/carry_headless_test.lua",
+      "bytes": 3662,
+      "sha256": "7322217ce990436f8c3926b9bd06e6edb477dda49eb6874fce62c6f5e47c933f"
+    },
+    {
+      "path": "tests/coexist_probe.lua",
+      "bytes": 4019,
+      "sha256": "a7535d280ce73af8471b8e909870633a3c7ed2425b732147189e353c1e6d5587"
+    },
+    {
+      "path": "tests/comforts_probe.lua",
+      "bytes": 17318,
+      "sha256": "ef0665f9bac12d8b50cc8496233221a45cdae8591d2bb07ccfbcb507af24f15f"
+    },
+    {
+      "path": "tests/daynight_dial_probe.lua",
+      "bytes": 13536,
+      "sha256": "76bf5c229963b97dfe7076bf4641d2837784aa0026dd24dc14700ed51e83c060"
+    },
+    {
+      "path": "tests/dramatic_shape_test.lua",
+      "bytes": 129358,
+      "sha256": "9e2959f62c141a4dd040325c0639063f23567da8c8b659d1823190dd1abc189f"
+    },
+    {
+      "path": "tests/ds_z_anchor_probe.lua",
+      "bytes": 2756,
+      "sha256": "b88efc81874756fae1bae5a868c536b840306f5b1c77a6ea17f524f03f68639d"
+    },
+    {
+      "path": "tests/ecology_ground_probe.lua",
+      "bytes": 18659,
+      "sha256": "7619f8c759abbe5f3bf52dc236dffa387d9b05311cf25ae8a090af16f56581a7"
+    },
+    {
+      "path": "tests/hidden_glint_probe.lua",
+      "bytes": 5341,
+      "sha256": "5233e5bf96f13aec5d82f1ebec762dc110afdd6c3f2a731dc392615c49b9d477"
+    },
+    {
+      "path": "tests/ice_sprite_probe.lua",
+      "bytes": 2177,
+      "sha256": "c77d710007ee0a9519bd6aca50a42401182250c28878f112baa7f17a96956fed"
+    },
+    {
+      "path": "tests/mesh_lod_probe.lua",
+      "bytes": 4855,
+      "sha256": "631606eb2581be4546ffa96ef84052ca9f59dc87859b3ea6e9af5eeb93e29cbc"
+    },
+    {
+      "path": "tests/minimap_probe.lua",
+      "bytes": 10016,
+      "sha256": "3a26e454575f16f64458536b3c673194604c336a630eaff0fe5f95eca6c83652"
+    },
+    {
+      "path": "tests/night_lamps_probe.lua",
+      "bytes": 2142,
+      "sha256": "fd13eae8f7f9bda0fe3c4cbcb5ee8c7a8d1f276dfe306c3630125698f4dceba1"
+    },
+    {
+      "path": "tests/night_probe.lua",
+      "bytes": 11665,
+      "sha256": "02f8de7a1ace0e0b4396e4593477effefd2c011fe7e40201b62d0486acbcae47"
+    },
+    {
+      "path": "tests/puddle_debug.lua",
+      "bytes": 6553,
+      "sha256": "5a2f889977d0e0dad92fcb5a783c61db798e3b55176b5d5d9487b9b698eac4e5"
+    },
+    {
+      "path": "tests/puddle_rtx_probe.lua",
+      "bytes": 14404,
+      "sha256": "9c74373253c25321dacd47c79567e762add570673ea4bfd1398379d2cfb0a1ba"
+    },
+    {
+      "path": "tests/qol_extras_probe.lua",
+      "bytes": 5298,
+      "sha256": "67a8f2117ce454c73fe891e6d9418a6cdc6880b4b0a80418600e75e598ec70ad"
+    },
+    {
+      "path": "tests/rayfx_water_probe.lua",
+      "bytes": 5339,
+      "sha256": "681e0afbb9a1effb516c62d6570c4d9b7e823b44747083529e2daa1b89e3701e"
+    },
+    {
+      "path": "tests/seam_stream_probe.lua",
+      "bytes": 12359,
+      "sha256": "dc0098587a8c8d1eb84efe32f9e2a314356b521aa726cb234345926b10c1b342"
+    },
+    {
+      "path": "tests/shadow_length_probe.lua",
+      "bytes": 11663,
+      "sha256": "bc4e0f383c9885e4be3e26c2ef67b5ea65c24398da1e59d6b90551d644259bf1"
+    },
+    {
+      "path": "tests/snow_shot.lua",
+      "bytes": 4223,
+      "sha256": "5d7bf7b7648ab5e200a007605b2a2ad066f3384ae0eab0b975a7ed3c9ccd43dc"
+    },
+    {
+      "path": "tests/town_rain_probe.lua",
+      "bytes": 9732,
+      "sha256": "95493d4fad66c49c0fb1a334219e5fd2ea904f8490bc00a7da2c6ed946fe2aad"
+    },
+    {
+      "path": "tests/voxel_figure_test.lua",
+      "bytes": 9472,
+      "sha256": "776750be3de8e2424d9f4b5592b6e3eb808cc082bfd293cfac44dea38d7a97aa"
+    },
+    {
+      "path": "tests/water_physics_probe.lua",
+      "bytes": 10798,
+      "sha256": "9e225a396e77031305e8d2468cba0f85b30dd03eb867842dc8caa7d1f760032a"
+    },
+    {
+      "path": "tests/water_roam_probe.lua",
+      "bytes": 3073,
+      "sha256": "4ae297b7dda1f6a84beb510ebc0845a4c2654c5b52a7e93640a609ea3b0f6863"
+    },
+    {
+      "path": "tests/water_shimmer_probe.lua",
+      "bytes": 25254,
+      "sha256": "e5aeccc3e84de22d5fe356c62166e8a217c7c6d60d833270091b52d1f5f80793"
+    },
+    {
+      "path": "tests/weather_life_probe.lua",
+      "bytes": 13550,
+      "sha256": "313d3258ab7a865f11d2e6a877ebfaaf4729b4e24458bf8191341e1d9a9467fe"
+    },
+    {
+      "path": "tools/building_images.py",
+      "bytes": 4185,
+      "sha256": "4fc2ada589ec56b0a7967e595dd629d6f5dc8273a41de7b4c9580f1bc953514d"
+    },
+    {
+      "path": "tools/building_voxels.py",
+      "bytes": 43891,
+      "sha256": "61d2e6639964a2277e75acaefd8112b9f5961de1cc4100784099ced529864d0b"
+    },
+    {
+      "path": "tools/contact_sheets.py",
+      "bytes": 4426,
+      "sha256": "520700440d79203fe157d80a068e0635b39bf383a6fc1888cd7171e124a1863c"
+    },
+    {
+      "path": "tools/sheet2strip.ps1",
+      "bytes": 12099,
+      "sha256": "fd49c8598db049f7a83911692926702488b6ffed10cd9ff449582f67e304d854"
+    },
+    {
+      "path": "tools/voxel-survey.md",
+      "bytes": 9284,
+      "sha256": "f957389d99b24b124fb27b7e5a2aff5256e2f88e8382f147e540b8ddb41c172b"
+    }
+  ],
+  "lint": {
+    "no_rom_content": "pass",
+    "schema": "pass",
+    "cross_refs": "pass"
+  }
+}

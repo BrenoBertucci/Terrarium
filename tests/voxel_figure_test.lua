@@ -242,4 +242,4 @@ end
 T.check(TileShape.propBg("CAVERN") == nil,
   "a tileset that names none answers nil")
 
-T.finish("DRAMATIC_SHAPE figures")
+T.finish("TERRARIUM figures")

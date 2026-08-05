@@ -7,7 +7,7 @@
 -- separately.
 --
 --   POKEPORT_VERSION=yellow DS_PROBE_DIR=<dir> \
---   POKEPORT_DRIVER=mods/DRAMATIC_SHAPE/tests/puddle_debug.lua gen1recomp
+--   POKEPORT_DRIVER=mods/TERRARIUM/tests/puddle_debug.lua gen1recomp
 return function(game)
   local OUT = os.getenv("DS_PROBE_DIR") or "."
   local logf = assert(io.open(OUT .. "/puddle_debug.log", "w"))
@@ -30,7 +30,7 @@ return function(game)
     tap("a"); wait(10); n = n + 11; if n > 1500 then break end
   end
 
-  local lib = game.mods.exports.DRAMATIC_SHAPE.lib
+  local lib = game.mods.exports.TERRARIUM.lib
   local GroundFX = lib.require("GroundFX")
   local Weather = lib.require("Weather")
   local DayNight = lib.require("DayNight")
@@ -38,7 +38,7 @@ return function(game)
 
   GroundFX.setting:sync("on")
   DayNight.setting:sync("day")
-  Pipelines.setLevel("voxel", 5)
+  Pipelines.setLevel("terrarium_voxel", 5)
   Weather.setting:sync("rain")
   GroundFX.SOAK = 3
   game.overworld:setMap("VIRIDIAN_CITY", 4, 16, "down")

@@ -1,0 +1,35 @@
+{
+  "version": "1.0.0",
+  "name": "Local Terrarium catalog",
+  "mods": [
+    {
+      "id": "TERRARIUM",
+      "name": "Terrarium",
+      "title": "Terrarium (Dramatic Shape Voxel Mod fork)",
+      "author": "breno",
+      "folder": "breno@TERRARIUM",
+      "github": "breno/TERRARIUM",
+      "repo": null,
+      "url": null,
+      "summary": "Independent fork of DramaticShape's voxel diorama mod. Own mod id, own folder, own pipeline keys and letter hotkeys so it can install beside upstream DRAMATIC_SHAPE without overwrites.",
+      "category": "GRAPHICS",
+      "api": 2,
+      "game_version": "0.0.0-dev || >=0.1.37 <2.0.0",
+      "upstream": "https://github.com/DramaticShape/DramaticShapeVoxelMod",
+      "install_folder": "TERRARIUM",
+      "hotkeys": {
+        "voxel": "v",
+        "grid": "g",
+        "tiltshift": "t",
+        "curve": "c",
+        "battles": "b",
+        "wild": "n",
+        "map": "p"
+      },
+      "pipelines": {
+        "voxel": "terrarium_voxel",
+        "tiltshift": "terrarium_tiltshift"
+      }
+    }
+  ]
+}

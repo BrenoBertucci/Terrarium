@@ -8,7 +8,7 @@
 --     really about: streaks kept refilling behind a ceiling
 --
 --   POKEPORT_VERSION=yellow DS_PROBE_DIR=<dir> \
---   POKEPORT_DRIVER=mods/DRAMATIC_SHAPE/tests/ambient_beds_probe.lua gen1recomp
+--   POKEPORT_DRIVER=mods/TERRARIUM/tests/ambient_beds_probe.lua gen1recomp
 return function(game)
   local OUT = os.getenv("DS_PROBE_DIR") or "."
   local logf = assert(io.open(OUT .. "/ambient_beds.log", "w"))
@@ -33,7 +33,7 @@ return function(game)
   end
   log("free roam:", game.stack:top() == game.overworld)
 
-  local lib = game.mods.exports.DRAMATIC_SHAPE.lib
+  local lib = game.mods.exports.TERRARIUM.lib
   local AmbientSound = lib.require("AmbientSound")
   local Weather = lib.require("Weather")
   local DayNight = lib.require("DayNight")
@@ -150,7 +150,7 @@ return function(game)
 
   AmbientSound.setting:sync("on")
   Weather.setting:sync("off")
-  Pipelines.setLevel("voxel", 5)
+  Pipelines.setLevel("terrarium_voxel", 5)
 
   teleport("ROUTE_1", 8, 12)
   DayNight.setting:sync("night"); wait(260)

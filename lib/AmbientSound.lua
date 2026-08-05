@@ -27,7 +27,7 @@
 -- drops to the synth and the ambience is worse rather than gone. That is what
 -- the programs were always actually good for.
 --
--- They are registered ids either way (`DS_AMB_CRICKET` and friends), so a
+-- They are registered ids either way (`TR_AMB_CRICKET` and friends), so a
 -- sound pack can override one through the engine's own sfx registry.
 --
 -- ------- beds, not blips
@@ -199,12 +199,12 @@ local THUNDER = {
 -- prefix because the sfx registry is one flat namespace shared with the ROM's
 -- two hundred effects.
 AmbientSound.PROGRAMS = {
-  { "DS_AMB_CRICKET", CRICKET },
-  { "DS_AMB_BIRD", BIRD },
-  { "DS_AMB_CHIRP", CHIRP },
-  { "DS_AMB_LAP", LAP },
-  { "DS_AMB_RAIN", RAIN },
-  { "DS_AMB_THUNDER", THUNDER },
+  { "TR_AMB_CRICKET", CRICKET },
+  { "TR_AMB_BIRD", BIRD },
+  { "TR_AMB_CHIRP", CHIRP },
+  { "TR_AMB_LAP", LAP },
+  { "TR_AMB_RAIN", RAIN },
+  { "TR_AMB_THUNDER", THUNDER },
 }
 
 -- ------- registration
@@ -288,13 +288,13 @@ local AUDIO = "assets/audio/"
 -- rain carry a scene, birdsong sits behind one, water is a detail you notice
 -- when you are near it.
 AmbientSound.BEDS = {
-  crickets = { file = "crickets.mp3", chip = "DS_AMB_CRICKET", gain = 0.85 },
-  birds    = { file = "birds.ogg",    chip = "DS_AMB_BIRD",    gain = 0.55 },
-  water    = { file = "water.ogg",    chip = "DS_AMB_LAP",     gain = 0.70 },
-  rain     = { file = "rain.ogg",     chip = "DS_AMB_RAIN",    gain = 1.00 },
+  crickets = { file = "crickets.mp3", chip = "TR_AMB_CRICKET", gain = 0.85 },
+  birds    = { file = "birds.ogg",    chip = "TR_AMB_BIRD",    gain = 0.55 },
+  water    = { file = "water.ogg",    chip = "TR_AMB_LAP",     gain = 0.70 },
+  rain     = { file = "rain.ogg",     chip = "TR_AMB_RAIN",    gain = 1.00 },
 }
 
-AmbientSound.THUNDER = { file = "thunder.ogg", chip = "DS_AMB_THUNDER",
+AmbientSound.THUNDER = { file = "thunder.ogg", chip = "TR_AMB_THUNDER",
                          gain = 1.0 }
 
 -- ------- decoding

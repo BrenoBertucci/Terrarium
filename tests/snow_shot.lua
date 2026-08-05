@@ -6,7 +6,7 @@
 -- the pictures and quits.
 --
 --   POKEPORT_VERSION=yellow DS_PROBE_DIR=<dir> \
---   POKEPORT_DRIVER=mods/DRAMATIC_SHAPE/tests/snow_shot.lua gen1recomp
+--   POKEPORT_DRIVER=mods/TERRARIUM/tests/snow_shot.lua gen1recomp
 return function(game)
   local OUT = os.getenv("DS_PROBE_DIR") or "."
   local logf = assert(io.open(OUT .. "/snow_shot.log", "w"))
@@ -37,7 +37,7 @@ return function(game)
     tap("a"); wait(10); n = n + 11; if n > 1500 then break end
   end
 
-  local lib = game.mods.exports.DRAMATIC_SHAPE.lib
+  local lib = game.mods.exports.TERRARIUM.lib
   local GroundFX = lib.require("GroundFX")
   local Weather = lib.require("Weather")
   local DayNight = lib.require("DayNight")
@@ -46,7 +46,7 @@ return function(game)
 
   GroundFX.setting:sync("on")
   DayNight.setting:sync("day")
-  Pipelines.setLevel("voxel", 5)
+  Pipelines.setLevel("terrarium_voxel", 5)
   -- fast enough that the three steps are three short waits rather than a
   -- coffee break, and nothing else in the mod is asked to do anything
   GroundFX.SETTLE, GroundFX.MELT = 6, 4

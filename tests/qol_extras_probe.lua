@@ -6,7 +6,7 @@
 --   TRADE    Evolution.pendingFor on a level-37 HAUNTER
 --
 --   POKEPORT_VERSION=yellow DS_PROBE_DIR=<dir> \
---   POKEPORT_DRIVER=mods/DRAMATIC_SHAPE/tests/qol_extras_probe.lua gen1recomp
+--   POKEPORT_DRIVER=mods/TERRARIUM/tests/qol_extras_probe.lua gen1recomp
 return function(game)
   local OUT = os.getenv("DS_PROBE_DIR") or "."
   local logf = assert(io.open(OUT .. "/qol_extras.log", "w"))
@@ -35,7 +35,7 @@ return function(game)
     tap("a"); wait(10); f = f + 11; if f > 1500 then break end
   end
 
-  local lib = game.mods.exports.DRAMATIC_SHAPE.lib
+  local lib = game.mods.exports.TERRARIUM.lib
   local QoL = lib.require("QoL")
   QoL.setting:sync("on")
 

@@ -38,14 +38,34 @@ local mod = ...
 
 local V = { mod = mod, path = mod.path }
 
+-- Registry keys unique to this fork so DRAMATIC_SHAPE (upstream) can load
+-- beside us without overwriting the same pipeline / transition slots.
+local PIPE_VOXEL = "terrarium_voxel"
+local PIPE_TILT  = "terrarium_tiltshift"
+V.PIPE_VOXEL, V.PIPE_TILT = PIPE_VOXEL, PIPE_TILT
+
+-- Letter keys: free of engine 2-5 and of upstream DRAMATIC_SHAPE's 3/5/6/7/8/9,
+-- so both mods can be enabled without fighting for the same presses.
+local KEY_VOXEL  = "v"   -- VOXEL camera ladder (skips FULL)
+local KEY_GRID   = "g"   -- V-GRID wireframe
+local KEY_TILT   = "t"   -- T-SHIFT blur
+local KEY_CURVE  = "c"   -- V-CURVE horizon
+local KEY_BATTLE = "b"   -- 3D-BTL
+local KEY_WILD   = "n"   -- WILD roam ladder
+local KEY_MAP    = "p"   -- minimap ON/FULL/OFF
+V.KEYS = {
+  voxel = KEY_VOXEL, grid = KEY_GRID, tilt = KEY_TILT,
+  curve = KEY_CURVE, battle = KEY_BATTLE, wild = KEY_WILD, map = KEY_MAP,
+}
+
 local function chunkFor(rel)
   local source = mod:read(rel)
   if not source then
-    error(("DRAMATIC_SHAPE: %s is missing -- reinstall the mod"):format(rel), 0)
+    error(("TERRARIUM: %s is missing -- reinstall the mod"):format(rel), 0)
   end
   local chunk, err = load(source, "@" .. mod.path .. "/" .. rel)
   if not chunk then
-    error(("DRAMATIC_SHAPE: %s did not compile: %s"):format(rel, tostring(err)), 0)
+    error(("TERRARIUM: %s did not compile: %s"):format(rel, tostring(err)), 0)
   end
   return chunk
 end
@@ -103,6 +123,7 @@ local QoL = V.require("QoL")
 local HiddenItems = V.require("HiddenItems")
 local ExpShare = V.require("ExpShare")
 local Comforts = V.require("Comforts")
+local MiniMap = V.require("MiniMap")
 
 -- Forward declaration: the voxel pipeline's update hook (registered below)
 -- calls this, and it is defined further down with the settings it drives.
@@ -148,12 +169,12 @@ function voidFill.check()
   voidFill.last = now
 end
 
-mod.content.render_pipelines:register("voxel", {
+mod.content.render_pipelines:register(PIPE_VOXEL, {
   label = "VOXEL",
   levels = Voxel.ANGLE_LABELS,
-  -- 3 is the engine's TILT key, which this mode supersedes -- see the
-  -- hotkey block near the bottom of this file for how it is claimed
-  hotkey = "3",
+  -- Letter key (not the engine's 3/TILT): see hotkey block. Free of
+  -- upstream DRAMATIC_SHAPE so both can be enabled together.
+  hotkey = KEY_VOXEL,
   -- above tiltshift, so the two sort together in the options list with the
   -- mode first and its post-process under it
   priority = 20,
@@ -326,6 +347,11 @@ mod.content.render_pipelines:register("voxel", {
       Weather.draw(Voxel3D.project, ctx.scale, sw, sh)
       Voxel3D.endOverlay()
     end
+    -- Orientation radar on the finished (upscaled) world canvas. Screen-
+    -- space corner HUD -- not inside the RES-downsampled 3D pass. When
+    -- T-SHIFT is on, worldPresent re-paints it AFTER the blur so the
+    -- radar stays sharp (see tiltshift worldPresent below).
+    MiniMap.present(canvas)
     return canvas
   end,
 
@@ -336,15 +362,15 @@ mod.content.render_pipelines:register("voxel", {
     -- the ground decals are GPU objects on the same footing: meshes and two
     -- generated strips, all rebuilt on demand
     GroundFX.dropGPU()
+    MiniMap.invalidate()
   end,
 })
 
-mod.content.render_pipelines:register("tiltshift", {
+mod.content.render_pipelines:register(PIPE_TILT, {
   label = "T-SHIFT",
   levels = TiltShift.LABELS,
-  -- 6 is free: no engine branch claims it, so this one alone reaches the
-  -- registry by the documented route
-  hotkey = "6",
+  -- Letter key (not upstream's 6): registry + wrap handle it.
+  hotkey = KEY_TILT,
   priority = 10,
 
   update = function(dt, level)
@@ -354,8 +380,14 @@ mod.content.render_pipelines:register("tiltshift", {
   -- worldPresent, not present: the blur belongs on the diorama, not on the
   -- dialog box in front of it.  A pass-through when the level is 0 or the
   -- shader is unavailable, so the frame is untouched in every other case.
+  -- When the blur actually ran, re-paint the orientation radar on top so
+  -- it is not smeared with the diorama (drawWorld already painted it once).
   worldPresent = function(canvas)
-    return TiltShift.apply(canvas)
+    canvas = TiltShift.apply(canvas)
+    if (TiltShift.level or 0) > 0 then
+      canvas = MiniMap.present(canvas)
+    end
+    return canvas
   end,
 
   invalidate = function()
@@ -396,7 +428,7 @@ applyFull = function(level)
 
   -- the miniature blur at its strongest: FULL is the diorama look, and the
   -- tilt-shift is most of what makes it read as a model
-  Pipelines.setLevel("tiltshift", Pipelines.maxLevel("tiltshift"))
+  Pipelines.setLevel(PIPE_TILT, Pipelines.maxLevel(PIPE_TILT))
   Pipelines.syncOptions(opts)
   -- the horizon flat. The curve bends the world away from a walking player,
   -- which fights a fixed diorama framing
@@ -468,10 +500,12 @@ local SETTINGS = {
   -- menu there would hide the one row that decides whether the world looks
   -- alive.
   { Wind.setting,
-    "Wind through the tall grass and the flowers. They are geometry in "
-    .. "this mode, so this is a real bend -- the base stays planted, the "
-    .. "tip gives, and the gust TRAVELS across a meadow because each tuft "
-    .. "takes the wave's phase from where it actually stands.",
+    "Wind through the tall grass and the flowers. BREEZE follows the "
+    .. "weather and the hour on its own -- showers bring a front, nights "
+    .. "go quieter, winter has a bite -- so you do not toggle it with the "
+    .. "rain. GALE amplifies that living air; OFF is silence. The grass is "
+    .. "geometry here: the base stays planted, the tip gives, and the gust "
+    .. "TRAVELS across a meadow.",
     full = true },
   { Water.setting,
     "The water surface as geometry rather than a scrolling picture: it "
@@ -765,6 +799,16 @@ local SETTINGS = {
     .. "DEEP night still has light on the street. Routes and forests get "
     .. "none -- only outdoor maps without a grass encounter table.",
     full = true },
+  -- Orientation radar. Always-on by default at the cheap rung; FULL adds a
+  -- local 4-colour cell grid. Not the classic Town Map item -- that stays
+  -- untouched. full = true so a phone on FULL RES can still hide it.
+  { MiniMap.setting,
+    "Corner orientation radar on free-roam. ON is player + facing + "
+    .. "Center/Gym/Gate icons from the map's own warps; FULL also paints a "
+    .. "4-colour walkability grid of the current map (regenerated only on "
+    .. "map change). OFF is nothing. Drops detail on low RES. Purely HUD -- "
+    .. "nothing here writes collision, flags or scripts.",
+    full = true },
 }
 
 local schema = {}
@@ -775,46 +819,41 @@ mod.options:define(schema)
 
 -- ------- this mod's hotkeys
 --
---   3  VOXEL    cycle the camera ladder      (was 6; skips FULL)
---   5  V-GRID   toggle the wireframe         (new)
---   6  T-SHIFT  cycle the blur ladder        (was 9)
---   7  V-CURVE  cycle the horizon bend       (new)
---   8  3D-BTL   toggle overworld battles     (new)
---   9  WILD     cycle ROAM / MIX / OFF       (new)
+--   v  VOXEL    cycle the camera ladder      (skips FULL)
+--   g  V-GRID   toggle the wireframe
+--   t  T-SHIFT  cycle the blur ladder
+--   c  V-CURVE  cycle the horizon bend
+--   b  3D-BTL   toggle overworld battles
+--   n  WILD     cycle ROAM / MIX / OFF
+--   p  MAP      minimap ON / FULL / OFF
 --
--- Only 6 arrives by the documented route. Game:keypressed answers the
--- engine's own display keys FIRST and returns -- 2 COLORS, 3 TILT, 4 ZOOM,
--- 5 GBC FX -- and only then offers the key to Pipelines.hotkey, expressly
--- so "a pipeline can never shadow one" (Schemas, render_pipelines.hotkey).
--- 3 and 5 are two of those, and 7, 8 and 9 belong to plain mod settings that
--- own no pass and so have no registry to claim a key from at all.
+-- Upstream DRAMATIC_SHAPE still uses 3/5/6/7/8/9. These letter keys are the
+-- independence surface: both mods can load and neither steals the other's
+-- presses. Engine keys 2 COLORS / 3 TILT / 4 ZOOM / 5 GBC FX stay free of our
+-- HOTKEYS table; pinEngineFx still holds TILT and GBC FX at off while we are
+-- installed (they fight the diorama), and the registry still drops TILT when
+-- a world pipeline owns the pass.
 --
--- So this wraps Game:keypressed. It is the invasive option and it is the
--- only one: polling the keyboard in update() would fire alongside the
--- engine's handler rather than instead of it, so 3 would cycle this mode
--- AND the engine's TILT on the same press.
---
--- Consequences worth being explicit about: while this mod is enabled, TILT
--- (3) and GBC FX (5) are unreachable by key -- and unreachable on the OPTIONS
--- menu too, where both rows are taken away and both values held at zero (see
--- pinEngineFx). Nothing is being hidden that still does something: TILT is the
--- flat fake of what this mode does for real, the registry already forces it
--- off whenever a world pipeline takes the pass, and GBC FX is a full-screen
--- present pass over the top of the diorama. Uninstalling puts both back.
+-- Game:keypressed still has to be wrapped: settings without a pipeline have
+-- no registry hotkey route, and the VOXEL key walks a custom ladder that
+-- skips FULL. Polling in update() would fire alongside the engine instead
+-- of instead of it.
 --
 -- Everything the engine does around a pipeline hotkey has to happen here
 -- too, so the work is DELEGATED rather than reimplemented: Pipelines.hotkey
--- applies its own gate and ladder, and the three lines after it are the
--- engine's own (syncOptions, the tilt exclusion, writeOptions).
+-- applies its own gate and ladder, and the lines after it are the engine's
+-- own (syncOptions, the tilt exclusion, writeOptions).
 
 local HOTKEYS = {
-  ["3"] = "pipeline",           -- voxel, by its declared hotkey
-  ["6"] = "pipeline",           -- tiltshift, likewise
-  ["5"] = VoxelGrid.setting,
-  ["7"] = WorldCurve.setting,
-  ["8"] = OverworldBattle.setting,
-  ["9"] = WildRoamers.setting,
+  [KEY_VOXEL]  = "pipeline",
+  [KEY_TILT]   = "pipeline",
+  [KEY_GRID]   = VoxelGrid.setting,
+  [KEY_CURVE]  = WorldCurve.setting,
+  [KEY_BATTLE] = OverworldBattle.setting,
+  [KEY_WILD]   = WildRoamers.setting,
+  [KEY_MAP]    = MiniMap.setting,
 }
+
 
 do
   local Game = require("src.core.Game")
@@ -829,14 +868,14 @@ do
     -- render mode. Only free-roam presses are ours to take.
     if claim and not (top and top.onKeyPressed) then
       if claim == "pipeline" then
-        -- 3 walks the ANGLE rungs and steps over FULL (Voxel.HOTKEY_ORDER),
+        -- VOXEL key walks the ANGLE rungs and steps over FULL (Voxel.HOTKEY_ORDER),
         -- so the registry's plain "advance one and wrap" is not what it
-        -- wants; 6 still is. The gate is the registry's own either way.
+        -- wants; T-SHIFT still is. The gate is the registry's own either way.
         local stepped = false
-        if key == "3" then
-          if Pipelines.canToggle("voxel", top, self.overworld) then
-            Pipelines.setLevel("voxel",
-              Voxel.nextHotkeyLevel(Pipelines.level("voxel")))
+        if key == KEY_VOXEL then
+          if Pipelines.canToggle(PIPE_VOXEL, top, self.overworld) then
+            Pipelines.setLevel(PIPE_VOXEL,
+              Voxel.nextHotkeyLevel(Pipelines.level(PIPE_VOXEL)))
             stepped = true
           end
         else
@@ -844,8 +883,8 @@ do
         end
         if stepped then
           Pipelines.syncOptions(self.save.options)
-          -- 3 is the key that used to turn TILT on and sits next to the one
-          -- that used to turn GBC FX on, and this mod has taken both away.
+          -- VOXEL press still clears TILT/GBC FX so a pre-mod save cannot leave
+          -- either fighting the diorama with no path back to off.
           -- A player who left either running before enabling the mod would
           -- otherwise have no way back to off, and both fight the diorama:
           -- TILT is the flat fake of what this mode does for real, and GBC
@@ -853,7 +892,7 @@ do
           -- VOXEL key clears them on EVERY press, not just the press that
           -- switches the mode on -- cycling back round to OFF leaves them
           -- off too, which is the state the key is now the only route to.
-          if key == "3" then
+          if key == KEY_VOXEL then
             self.save.options.tilt = 0
             self.save.options.gbcfx = 0
             require("src.render.GBCFX").setLevel(0)
@@ -862,7 +901,7 @@ do
           self:writeOptions()
           return
         end
-      elseif Pipelines.canToggle("voxel", top, self.overworld) then
+      elseif Pipelines.canToggle(PIPE_VOXEL, top, self.overworld) then
         -- All four answer to the voxel pass's own free-roam gate --
         -- borrowed from the registry rather than restated, so a press
         -- mid-warp or mid-cutscene is refused for the wireframe exactly when
@@ -874,7 +913,7 @@ do
         -- removes map objects, which is nothing to be doing while a script
         -- is walking the cast around.
         claim:cycle(self)
-        -- 8 is one of the two ways staged battles get switched on, and they
+        -- 3D-BTL is one of the two ways staged battles get switched on, and they
         -- pin BATTLE LAYOUT to OG (see the rows hook). The other two keys
         -- parameterise the pass and leave the layout alone; the guard answers
         -- for all three, so nothing here has to know which key it was.
@@ -901,7 +940,7 @@ local function insertGrouped(out, extra)
   local anchor = nil
   for i, row in ipairs(out) do
     local id = type(row) == "table" and row.id
-    if id == "pipeline:voxel" or id == "pipeline:tiltshift" then anchor = i end
+    if id == "pipeline:" .. PIPE_VOXEL or id == "pipeline:" .. PIPE_TILT then anchor = i end
   end
   if not anchor then
     for _, row in ipairs(extra) do out[#out + 1] = row end
@@ -979,13 +1018,13 @@ mod.hooks:wrap("ui.options.rows", function(next, game, rows)
     OverworldBattle.forceOG(game)
     dropRow(out, "battleLayout")
   end
-  local full = Voxel.isFull(Pipelines.level("voxel"))
+  local full = Voxel.isFull(Pipelines.level(PIPE_VOXEL))
   if full then
     -- FULL owns the rows that PARAMETERISE the diorama -- the wireframe, the
     -- horizon bend, the blur, the hour -- so those come off the menu and
     -- DAYTIME is held at SYNC while its row is unreachable.
     DayNight.forceSync(game)
-    dropRow(out, "pipeline:tiltshift")
+    dropRow(out, "pipeline:" .. PIPE_TILT)
   end
   local extra = {}
   for _, entry in ipairs(SETTINGS) do
@@ -1023,7 +1062,7 @@ mod.events:on("mod.options_changed", function(payload)
   -- straight back to SYNC -- the OPTIONS row is hidden, but the manager's is
   -- not, and FULL's pin must hold against both
   local Pipelines = require("src.render.Pipelines")
-  if Voxel.isFull(Pipelines.level("voxel")) then DayNight.forceSync() end
+  if Voxel.isFull(Pipelines.level(PIPE_VOXEL)) then DayNight.forceSync() end
 end)
 
 -- ------- keeping the geometry in step with the world
@@ -1137,13 +1176,13 @@ do
     end
 
     function OptionsMenu:update(dt)
-      local before = Pipelines.level("voxel")
+      local before = Pipelines.level(PIPE_VOXEL)
       local hadBattles = OverworldBattle.enabled()
       local hadWild = WildRoamers.enabled()
       local hadWeather = Weather.enabled()
       local wasOn = idAt(self, self.index)
       inner(self, dt)
-      local after = Pipelines.level("voxel")
+      local after = Pipelines.level(PIPE_VOXEL)
       local crossedFull = after ~= before
                           and (Voxel.isFull(before) or Voxel.isFull(after))
       if crossedFull or OverworldBattle.enabled() ~= hadBattles
@@ -1231,6 +1270,8 @@ AmbientSound.register(mod)
 -- move menu, from the same TypeChart the damage formula reads).
 QoL.install()
 Carry.install()
+-- Walk-on-ice when frozen, gated on Surf (Soul Badge + party knows SURF).
+if Water.installWalk then pcall(Water.installWalk) end
 
 -- ------- three more mercies on the same row
 --
@@ -1440,3 +1481,5 @@ mod.exports.version = "1.15.0-mobile.snow.1"
 -- exposed so a companion mod can pin its own tiles' shapes or read the
 -- camera without reaching into this mod's file layout
 mod.exports.lib = V
+mod.exports.pipelines = { voxel = PIPE_VOXEL, tiltshift = PIPE_TILT }
+mod.exports.keys = V.KEYS

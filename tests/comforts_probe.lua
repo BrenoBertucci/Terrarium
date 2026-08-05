@@ -17,7 +17,7 @@
 --
 --   POKEPORT_VERSION=yellow \
 --   DS_PROBE_DIR=<dir> \
---   POKEPORT_DRIVER=mods/DRAMATIC_SHAPE/tests/comforts_probe.lua gen1recomp
+--   POKEPORT_DRIVER=mods/TERRARIUM/tests/comforts_probe.lua gen1recomp
 return function(game)
   local OUT = os.getenv("DS_PROBE_DIR") or "."
   local logf = assert(io.open(OUT .. "/comforts_probe.log", "w"))
@@ -55,12 +55,12 @@ return function(game)
   end
 
   local exports = game.mods and game.mods.exports
-  local lib = exports and exports.DRAMATIC_SHAPE and exports.DRAMATIC_SHAPE.lib
+  local lib = exports and exports.TERRARIUM and exports.TERRARIUM.lib
   if not lib then
-    log("FAIL: DRAMATIC_SHAPE not loaded"); logf:close(); love.event.quit()
+    log("FAIL: TERRARIUM not loaded"); logf:close(); love.event.quit()
     return
   end
-  log("version:", exports.DRAMATIC_SHAPE.version)
+  log("version:", exports.TERRARIUM.version)
 
   local ExpShare = lib.require("ExpShare")
   local Comforts = lib.require("Comforts")
@@ -343,7 +343,7 @@ return function(game)
   RayFX.setting:sync("max")
   WorldCurve.setting:sync(3)
   DayNight.setting:sync("day")
-  Pipelines.setLevel("voxel", 5)
+  Pipelines.setLevel("terrarium_voxel", 5)
   -- slow enough that the three size steps are three different moments,
   -- fast enough that the probe is not a coffee break
   GroundFX.SOAK, GroundFX.DRY = 22, 6

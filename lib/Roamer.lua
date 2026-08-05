@@ -85,7 +85,7 @@ function Roamer.new(spriteDef, species, level, kind, cellX, cellY)
   local self = setmetatable({}, Roamer)
   self.roamer = true
   self.def = INERT_DEF
-  self.id = ("DS_ROAM_%d"):format(nextId)
+  self.id = ("TR_ROAM_%d"):format(nextId)
   self.species, self.level, self.kind = species, level, kind
   self.sprite = SpriteRenderer.new(spriteDef, self.id)
   self.cellX, self.cellY = cellX, cellY
@@ -253,11 +253,20 @@ function Roamer:draw(camX, camY)
     sprite:draw(px, py, camX, camY, facing, phase, flip)
     return
   end
-  -- 2D waterline: hide the bottom WATERLINE pixels of the 16x16 blit so
-  -- the mon is cut at the water the same way the 3D card is.  Scissor is
-  -- in screen pixels of the current canvas; if anything about the camera
-  -- scale disagrees, fall back to the full draw rather than a wrong crop.
+  -- Waterline respects ice + freeze/thaw blend (Water.waterlineCut).
   local cut = Roamer.WATERLINE
+  do
+    local ok, c = pcall(Water.waterlineCut, px + 8, py + 8, Roamer.WATERLINE)
+    if ok and c then cut = c end
+  end
+  if cut <= 0 then
+    sprite:draw(px, py, camX, camY, facing, phase, flip)
+    return
+  end
+  -- 2D waterline: hide the bottom cut pixels of the 16x16 blit so the mon
+  -- is cut at the water the same way the 3D card is.  Scissor is in screen
+  -- pixels of the current canvas; if anything about the camera scale
+  -- disagrees, fall back to the full draw rather than a wrong crop.
   local g = love.graphics
   local sx = math.floor(px - camX)
   local sy = math.floor(py - camY)

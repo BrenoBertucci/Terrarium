@@ -18,7 +18,7 @@ local MOD_PATH = os.getenv("DS_MOD_PATH") or "mods/DramaticShapeVoxelMod"
 local run = T.sdk.loadMod(MOD_PATH, { data = Data })
 
 T.eq(#run.errors, 0,
-  "DRAMATIC_SHAPE loads clean: " .. table.concat(run.errors, "; "))
+  "TERRARIUM loads clean: " .. table.concat(run.errors, "; "))
 
 -- Game:load does this after the merge; the SDK harness merges into a
 -- fixture dataset instead, so point the dispatcher at that one.
@@ -28,43 +28,43 @@ Pipelines.install(Data)
 
 local defs = Data.render_pipelines
 T.check(type(defs) == "table", "the merge created the render_pipelines namespace")
-T.check(type(defs.voxel) == "table", "the voxel pipeline is registered")
-T.check(type(defs.tiltshift) == "table", "the tiltshift pipeline is registered")
+T.check(type(defs.terrarium_voxel) == "table", "the voxel pipeline is registered")
+T.check(type(defs.terrarium_tiltshift) == "table", "the tiltshift pipeline is registered")
 
-T.eq(defs.voxel.label, "VOXEL", "voxel carries its options-row label")
-T.eq(defs.tiltshift.label, "T-SHIFT", "tiltshift carries its options-row label")
-T.eq(defs.voxel.hotkey, "3", "voxel claims hotkey 3")
-T.eq(defs.tiltshift.hotkey, "6", "tiltshift claims hotkey 6")
-T.check(type(defs.voxel.drawWorld) == "function",
+T.eq(defs.terrarium_voxel.label, "VOXEL", "voxel carries its options-row label")
+T.eq(defs.terrarium_tiltshift.label, "T-SHIFT", "tiltshift carries its options-row label")
+T.eq(defs.terrarium_voxel.hotkey, "v", "voxel claims hotkey v")
+T.eq(defs.terrarium_tiltshift.hotkey, "t", "tiltshift claims hotkey t")
+T.check(type(defs.terrarium_voxel.drawWorld) == "function",
   "voxel is a world pipeline (drawWorld)")
-T.check(type(defs.tiltshift.worldPresent) == "function",
+T.check(type(defs.terrarium_tiltshift.worldPresent) == "function",
   "tiltshift is a world post-process (worldPresent)")
-T.check(defs.tiltshift.drawWorld == nil,
+T.check(defs.terrarium_tiltshift.drawWorld == nil,
   "tiltshift does not claim the world pass")
 
 -- provenance: a callback that throws at play time must be attributable to
 -- this mod, not reported as an engine fault
-T.eq(defs._owners and defs._owners.voxel, "DRAMATIC_SHAPE",
+T.eq(defs._owners and defs._owners.terrarium_voxel, "TERRARIUM",
   "the merge stamped the pipeline's owning mod")
 
 -- ------- the ladders the engine drives
 
-T.eq(#defs.voxel.levels, 6, "voxel exposes a six-rung ladder")
-T.eq(defs.voxel.levels[1], "OFF", "rung 0 is OFF")
-T.eq(defs.voxel.levels[2], "FULL",
+T.eq(#defs.terrarium_voxel.levels, 6, "voxel exposes a six-rung ladder")
+T.eq(defs.terrarium_voxel.levels[1], "OFF", "rung 0 is OFF")
+T.eq(defs.terrarium_voxel.levels[2], "FULL",
   "FULL is the first rung after OFF -- the order those two get used in")
-T.eq(defs.voxel.levels[6], "75", "the top rung is the 75-degree camera")
-T.eq(Pipelines.maxLevel("voxel"), 5, "the engine reads the ladder height")
-T.eq(Pipelines.levelLabel("voxel", 3), "35", "the engine reads the rung labels")
+T.eq(defs.terrarium_voxel.levels[6], "75", "the top rung is the 75-degree camera")
+T.eq(Pipelines.maxLevel("terrarium_voxel"), 5, "the engine reads the ladder height")
+T.eq(Pipelines.levelLabel("terrarium_voxel", 3), "35", "the engine reads the rung labels")
 
 -- ------- gating: inert until switched on, and inert without a GPU
 
-T.eq(Pipelines.level("voxel"), 0, "the mode starts switched off")
+T.eq(Pipelines.level("terrarium_voxel"), 0, "the mode starts switched off")
 T.eq(Pipelines.worldPipeline(), nil,
   "nothing owns the world pass while every pipeline is off")
 
-Pipelines.setLevel("voxel", 2)
-T.eq(Pipelines.level("voxel"), 2, "the engine can set the mode's level")
+Pipelines.setLevel("terrarium_voxel", 2)
+T.eq(Pipelines.level("terrarium_voxel"), 2, "the engine can set the mode's level")
 -- the headless love stub has no depth canvas, so `available` says no and
 -- the engine keeps the vanilla 2D path -- the property that makes the mod
 -- safe to ship enabled
@@ -74,12 +74,12 @@ T.eq(Pipelines.worldPipeline(), nil,
 -- one world pipeline at a time, and never alongside the engine's tilt
 local Tilt = require("src.render.Tilt")
 Tilt.setLevel(3)
-Pipelines.setLevel("voxel", 1)
+Pipelines.setLevel("terrarium_voxel", 1)
 T.eq(Tilt.level, 0, "switching a world pipeline on switches TILT off")
 
 -- a post-process is not a world pipeline, so it composes with tilt
 Tilt.setLevel(2)
-Pipelines.setLevel("tiltshift", 3)
+Pipelines.setLevel("terrarium_tiltshift", 3)
 T.eq(Tilt.level, 2, "a worldPresent pipeline leaves TILT alone")
 
 -- ------- persistence round-trip
@@ -87,13 +87,13 @@ T.eq(Tilt.level, 2, "a worldPresent pipeline leaves TILT alone")
 local opts = { tilt = 0, pipelines = {} }
 Pipelines.syncOptions(opts)
 T.eq(opts.pipelines.voxel, 1, "the level is written back to save.options")
-T.eq(opts.pipelines.tiltshift, 3, "every pipeline's level is written back")
+T.eq(opts.pipelines.terrarium_tiltshift, 3, "every pipeline's level is written back")
 
 Pipelines.reset()
-T.eq(Pipelines.level("voxel"), 0, "reset clears the live levels")
+T.eq(Pipelines.level("terrarium_voxel"), 0, "reset clears the live levels")
 Pipelines.applyOptions(opts)
-T.eq(Pipelines.level("voxel"), 1, "a restored save restores the mode")
-T.eq(Pipelines.level("tiltshift"), 3, "a restored save restores the blur")
+T.eq(Pipelines.level("terrarium_voxel"), 1, "a restored save restores the mode")
+T.eq(Pipelines.level("terrarium_tiltshift"), 3, "a restored save restores the blur")
 
 -- ------- the options rows the menu splices in
 
@@ -114,7 +114,7 @@ T.eq(byLabel.VOXEL.value(), "FULL", "the row renders the current rung's label")
 -- settings page looks.
 
 local Runtime = require("src.mods.Runtime")
-local VoxelState = run.loader.exports.DRAMATIC_SHAPE.lib.require("VoxelState")
+local VoxelState = run.loader.exports.TERRARIUM.lib.require("VoxelState")
 
 -- ------- FULL is a preset that owns the rows describing the LOOK
 --
@@ -126,31 +126,31 @@ local VoxelState = run.loader.exports.DRAMATIC_SHAPE.lib.require("VoxelState")
 -- is drawn over and BACK SPRITES how it is framed; neither is a knob on the
 -- diorama the preset is a preset FOR. FULL sets them on arrival and then lets
 -- go, which is what makes it a preset rather than a lock.
-Pipelines.setLevel("voxel", VoxelState.FULL_LEVEL)
+Pipelines.setLevel("terrarium_voxel", VoxelState.FULL_LEVEL)
 local fullRows = Runtime.call("ui.options.rows", function(_, r) return r end,
                               { data = Data },
-                              { { id = "tilt" }, { id = "pipeline:voxel" },
-                                { id = "pipeline:tiltshift" } })
+                              { { id = "tilt" }, { id = "pipeline:terrarium_voxel" },
+                                { id = "pipeline:terrarium_tiltshift" } })
 local fullIds = {}
 for _, row in ipairs(fullRows) do fullIds[row.id] = true end
-T.check(fullIds["pipeline:voxel"], "FULL keeps the VOXEL row it lives on")
-T.check(not fullIds["pipeline:tiltshift"],
+T.check(fullIds["pipeline:terrarium_voxel"], "FULL keeps the VOXEL row it lives on")
+T.check(not fullIds["pipeline:terrarium_tiltshift"],
   "FULL takes T-SHIFT off the menu -- it owns the blur")
-T.check(not fullIds["DRAMATIC_SHAPE:grid"], "and V-GRID")
-T.check(not fullIds["DRAMATIC_SHAPE:curve"], "and V-CURVE")
-T.check(not fullIds["DRAMATIC_SHAPE:daytime"], "and DAYTIME")
+T.check(not fullIds["TERRARIUM:grid"], "and V-GRID")
+T.check(not fullIds["TERRARIUM:curve"], "and V-CURVE")
+T.check(not fullIds["TERRARIUM:daytime"], "and DAYTIME")
 
 -- but the battle rows survive it: they are not knobs on the look, and FULL
 -- sets them once rather than holding them, so a player who wants the classic
 -- back sprite (or no staged fights at all) can still say so from inside FULL
-T.check(fullIds["DRAMATIC_SHAPE:battles"], "3D-BTL is still on the menu under FULL")
-T.check(fullIds["DRAMATIC_SHAPE:battleBack"], "and BACK SPRITES with it")
+T.check(fullIds["TERRARIUM:battles"], "3D-BTL is still on the menu under FULL")
+T.check(fullIds["TERRARIUM:battleBack"], "and BACK SPRITES with it")
 
 -- DAYTIME is not only hidden under FULL, it is HELD at SYNC: the row cannot
 -- be reached while FULL owns it, so a value changed underneath (the mod
 -- manager's page, an edited options file) snaps back when the menu asks
 do
-  local DayNight = run.loader.exports.DRAMATIC_SHAPE.lib.require("DayNight")
+  local DayNight = run.loader.exports.TERRARIUM.lib.require("DayNight")
   DayNight.setting:sync("night")
   Runtime.call("ui.options.rows", function(_, r) return r end,
                { data = Data }, { { id = "tilt" } })
@@ -171,12 +171,12 @@ end
 -- chunk and a chunk has 200 local slots, so a section that wants half a dozen
 -- borrows them rather than spending them for the rest of the run.
 do
-local Battles = run.loader.exports.DRAMATIC_SHAPE.lib.require("OverworldBattle")
+local Battles = run.loader.exports.TERRARIUM.lib.require("OverworldBattle")
 T.eq(Battles.enabled(), true, "3D-BTL is on by default, which is what pins it")
 
 -- off FULL first: the row on its own has to be enough, and FULL is checked
 -- separately below
-Pipelines.setLevel("voxel", 2)
+Pipelines.setLevel("terrarium_voxel", 2)
 local layoutGame = {
   data = Data,
   save = { options = { battleLayout = "wide", pipelines = {}, modOptions = {} } },
@@ -186,7 +186,7 @@ local layoutGame = {
 local pinned = Runtime.call("ui.options.rows", function(_, r) return r end,
                             layoutGame,
                             { { id = "battleLayout" }, { id = "tilt" },
-                              { id = "pipeline:voxel" } })
+                              { id = "pipeline:terrarium_voxel" } })
 local pinnedIds = {}
 for _, row in ipairs(pinned) do pinnedIds[row.id] = true end
 T.check(not pinnedIds["battleLayout"],
@@ -200,7 +200,7 @@ T.eq(Battles.enabled(), false, "3D-BTL off")
 local handedBack = Runtime.call("ui.options.rows", function(_, r) return r end,
                                 layoutGame,
                                 { { id = "battleLayout" }, { id = "tilt" },
-                                  { id = "pipeline:voxel" } })
+                                  { id = "pipeline:terrarium_voxel" } })
 local backIds = {}
 for _, row in ipairs(handedBack) do backIds[row.id] = true end
 T.check(backIds["battleLayout"], "the engine's row is back on the menu")
@@ -216,7 +216,7 @@ T.eq(layoutGame.save.options.battleLayout, "wide",
 -- there, so the stand-in would pin BATTLE LAYOUT to OG for a fight that is
 -- never staged. The ROW decides, which is what every other reader of this
 -- setting already believed.
-Pipelines.setLevel("voxel", VoxelState.FULL_LEVEL)
+Pipelines.setLevel("terrarium_voxel", VoxelState.FULL_LEVEL)
 Runtime.call("ui.options.rows", function(_, r) return r end, layoutGame,
              { { id = "battleLayout" } })
 T.eq(layoutGame.save.options.battleLayout, "wide",
@@ -258,12 +258,12 @@ GBCFX.setLevel(2)
 local fxRows = Runtime.call("ui.options.rows", function(_, r) return r end,
                             fxGame,
                             { { id = "tilt" }, { id = "gbcfx" },
-                              { id = "colors" }, { id = "pipeline:voxel" } })
+                              { id = "colors" }, { id = "pipeline:terrarium_voxel" } })
 local fxIds = {}
 for _, row in ipairs(fxRows) do fxIds[row.id] = true end
 T.check(not fxIds["tilt"], "TILT is off the OPTIONS menu")
 T.check(not fxIds["gbcfx"], "and so is GBC FX")
-T.check(fxIds["colors"] and fxIds["pipeline:voxel"],
+T.check(fxIds["colors"] and fxIds["pipeline:terrarium_voxel"],
   "with every other row the engine offered still on it")
 
 T.eq(fxGame.save.options.tilt, 0,
@@ -273,14 +273,14 @@ T.eq(Tilt.level, 0, "the live level follows, so the frame is not still tilted")
 
 -- and FULL, which takes its own branch through the rows hook, must not be a
 -- way back in
-Pipelines.setLevel("voxel", VoxelState.FULL_LEVEL)
+Pipelines.setLevel("terrarium_voxel", VoxelState.FULL_LEVEL)
 local fullFx = Runtime.call("ui.options.rows", function(_, r) return r end,
                             fxGame, { { id = "tilt" }, { id = "gbcfx" } })
 local fullFxIds = {}
 for _, row in ipairs(fullFx) do fullFxIds[row.id] = true end
 T.check(not fullFxIds["tilt"] and not fullFxIds["gbcfx"],
   "under FULL they are gone too -- the drop is above every branch")
-Pipelines.setLevel("voxel", 2)
+Pipelines.setLevel("terrarium_voxel", 2)
 end
 
 -- ------- and off FULL, the rows come back, grouped with the mode
@@ -288,19 +288,19 @@ end
 -- The engine splices a pipeline row in beside TILT and lands a mod's own
 -- additions at the END of the list, which would leave this mode's four rows
 -- in two places with unrelated rows between them.
-Pipelines.setLevel("voxel", 2)
+Pipelines.setLevel("terrarium_voxel", 2)
 local grouped = Runtime.call("ui.options.rows", function(_, r) return r end,
                              { data = Data },
-                             { { id = "tilt" }, { id = "pipeline:voxel" },
-                               { id = "pipeline:tiltshift" },
+                             { { id = "tilt" }, { id = "pipeline:terrarium_voxel" },
+                               { id = "pipeline:terrarium_tiltshift" },
                                { id = "void_fill" } })
 local order = {}
 for i, row in ipairs(grouped) do order[row.id] = i end
-T.check(order["pipeline:tiltshift"] < order["DRAMATIC_SHAPE:grid"],
+T.check(order["pipeline:terrarium_tiltshift"] < order["TERRARIUM:grid"],
   "the mode's settings follow its pipeline rows")
-T.eq(order["DRAMATIC_SHAPE:battles"] - order["pipeline:tiltshift"], 3,
+T.eq(order["TERRARIUM:battles"] - order["pipeline:terrarium_tiltshift"], 3,
   "and sit in one unbroken block, not scattered to the end of the list")
-T.check(order["void_fill"] > order["DRAMATIC_SHAPE:battles"],
+T.check(order["void_fill"] > order["TERRARIUM:battles"],
   "with the engine's own later rows still after them")
 
 -- ------- the open menu notices when FULL is stepped onto or off
@@ -319,34 +319,34 @@ local menuGame = {
   writeOptions = function() end,
 }
 
-Pipelines.setLevel("voxel", 2)
+Pipelines.setLevel("terrarium_voxel", 2)
 local menu = OptionsMenu.new(menuGame)
 local function rowIndex(m, id)
   for i, row in ipairs(m.rows) do if row.id == id then return i end end
 end
-T.check(rowIndex(menu, "DRAMATIC_SHAPE:grid"),
+T.check(rowIndex(menu, "TERRARIUM:grid"),
   "off FULL the menu opens with the mode's settings on it")
 
 -- step the VOXEL row from 15 down to FULL, the way the player would
-menu.index = rowIndex(menu, "pipeline:voxel")
+menu.index = rowIndex(menu, "pipeline:terrarium_voxel")
 pressed = { left = true }
 menu:update(0)
 pressed = {}
-T.eq(Pipelines.level("voxel"), 1, "the step landed on FULL")
-T.check(not rowIndex(menu, "DRAMATIC_SHAPE:grid"),
+T.eq(Pipelines.level("terrarium_voxel"), 1, "the step landed on FULL")
+T.check(not rowIndex(menu, "TERRARIUM:grid"),
   "and the rows FULL owns left the OPEN menu at once")
-T.check(not rowIndex(menu, "pipeline:tiltshift"), "T-SHIFT with them")
+T.check(not rowIndex(menu, "pipeline:terrarium_tiltshift"), "T-SHIFT with them")
 T.check(menu.index <= #menu.rows + 1, "the cursor stayed in range")
 
 -- and back off it again
-menu.index = rowIndex(menu, "pipeline:voxel")
+menu.index = rowIndex(menu, "pipeline:terrarium_voxel")
 pressed = { right = true }
 menu:update(0)
 pressed = {}
-T.eq(Pipelines.level("voxel"), 2, "the step left FULL")
-T.check(rowIndex(menu, "DRAMATIC_SHAPE:grid"),
+T.eq(Pipelines.level("terrarium_voxel"), 2, "the step left FULL")
+T.check(rowIndex(menu, "TERRARIUM:grid"),
   "and the rows came straight back without reopening the menu")
-T.check(rowIndex(menu, "pipeline:tiltshift"), "T-SHIFT too")
+T.check(rowIndex(menu, "pipeline:terrarium_tiltshift"), "T-SHIFT too")
 
 -- ------- 3D-BTL owns BATTLE LAYOUT, and takes it off the OPEN menu too
 --
@@ -355,14 +355,14 @@ T.check(rowIndex(menu, "pipeline:tiltshift"), "T-SHIFT too")
 -- press that switched staged battles on would leave the cursor a row further
 -- down than the player left it.
 do
-local Battles = run.loader.exports.DRAMATIC_SHAPE.lib.require("OverworldBattle")
+local Battles = run.loader.exports.TERRARIUM.lib.require("OverworldBattle")
 Battles.setting:setIndex(2, menuGame)             -- staged battles off
 menuGame.save.options.battleLayout = "wide"
-Pipelines.setLevel("voxel", 2)
+Pipelines.setLevel("terrarium_voxel", 2)
 local layoutMenu = OptionsMenu.new(menuGame)
 T.check(rowIndex(layoutMenu, "battleLayout"),
   "with staged battles off, the engine's BATTLE LAYOUT row is on the menu")
-layoutMenu.index = rowIndex(layoutMenu, "DRAMATIC_SHAPE:battles")
+layoutMenu.index = rowIndex(layoutMenu, "TERRARIUM:battles")
 pressed = { right = true }
 layoutMenu:update(0)
 pressed = {}
@@ -370,13 +370,13 @@ T.eq(Battles.setting:get(), true, "the step switched staged battles on")
 T.check(not rowIndex(layoutMenu, "battleLayout"),
   "and BATTLE LAYOUT left the open menu with the same keypress")
 T.eq(menuGame.save.options.battleLayout, "og", "pinned to OG on the way out")
-T.eq(layoutMenu.index, rowIndex(layoutMenu, "DRAMATIC_SHAPE:battles"),
+T.eq(layoutMenu.index, rowIndex(layoutMenu, "TERRARIUM:battles"),
   "with the cursor still on the row the player just used")
 end
 
 -- level 2 is the "15" rung: any rung that is not FULL, so the settings the
 -- preset owns are back on the menu
-Pipelines.setLevel("voxel", 2)
+Pipelines.setLevel("terrarium_voxel", 2)
 local hookedRows = Runtime.call("ui.options.rows", function(_, r) return r end,
                                { data = Data }, { { id = "text_speed" } })
 T.eq(#hookedRows, 6, "the options hook added a row per setting")
@@ -404,9 +404,9 @@ T.check(backRow.id ~= battles.id and backRow.id:find("battleBack", 1, true),
 local settingGame = { save = { options = {} }, mods = { modOptions = {} } }
 grid.step(settingGame)
 T.eq(grid.value(), "ON", "stepping the row toggles the grid")
-T.eq(settingGame.save.options.modOptions.DRAMATIC_SHAPE.grid, true,
+T.eq(settingGame.save.options.modOptions.TERRARIUM.grid, true,
   "the toggle lands in options.modOptions, where the mod manager reads it")
-T.eq(settingGame.mods.modOptions.DRAMATIC_SHAPE.grid, true,
+T.eq(settingGame.mods.modOptions.TERRARIUM.grid, true,
   "and in the loader's live copy, which mod.options:get reads")
 grid.step(settingGame)
 T.eq(grid.value(), "OFF", "stepping again toggles it back")
@@ -414,9 +414,9 @@ T.eq(grid.value(), "OFF", "stepping again toggles it back")
 -- the curve is a four-rung ladder rather than a toggle, and wraps
 curve.step(settingGame, 1)
 T.eq(curve.value(), "1", "stepping the curve climbs its ladder")
-T.eq(settingGame.save.options.modOptions.DRAMATIC_SHAPE.curve, 1,
+T.eq(settingGame.save.options.modOptions.TERRARIUM.curve, 1,
   "the curve level persists alongside the grid, not over it")
-T.eq(settingGame.save.options.modOptions.DRAMATIC_SHAPE.grid, false,
+T.eq(settingGame.save.options.modOptions.TERRARIUM.grid, false,
   "and the grid it shares a bucket with is untouched")
 curve.step(settingGame, 1)
 curve.step(settingGame, 1)
@@ -429,7 +429,7 @@ curve.step(settingGame, 1)
 
 -- the strength scales with the view height, so a rung looks the same at
 -- every zoom -- and is exactly zero when the setting is off
-local WorldCurve = run.loader.exports.DRAMATIC_SHAPE.lib.require("WorldCurve")
+local WorldCurve = run.loader.exports.TERRARIUM.lib.require("WorldCurve")
 T.eq(WorldCurve.k(154), 0, "an OFF curve bends nothing")
 curve.step(settingGame, 1)
 T.check(math.abs(WorldCurve.k(154) - WorldCurve.AMOUNTS[2] / 154) < 1e-9,
@@ -475,7 +475,7 @@ T.eq(curve.value(), "OFF", "the curve is left off for the rows below")
 -- The harness has no love.image at all, which is why the checks above never
 -- reached this branch. Stand up just enough of one to walk it.
 
-local TerrainAtlas = run.loader.exports.DRAMATIC_SHAPE.lib.require("TerrainAtlas")
+local TerrainAtlas = run.loader.exports.TERRARIUM.lib.require("TerrainAtlas")
 local TileRenderer = require("src.render.TileRenderer")
 
 local realImage, realNewImage = love.image, love.graphics.newImage
@@ -717,7 +717,7 @@ TileRenderer.animFrame = nil
 -- (any frames-animated tile resolves `flower` with no profile entry),
 -- and the PATCH writes alpha where the frame is not dark.
 
-local TileShape = run.loader.exports.DRAMATIC_SHAPE.lib.require("TileShape")
+local TileShape = run.loader.exports.TERRARIUM.lib.require("TileShape")
 
 local flowerSet = {
   id = "T_FLOWER_PIN", image = "assets/tilesets/stub.png",
@@ -817,7 +817,7 @@ love.image, love.graphics.newImage = realImage, realNewImage
 -- Every OTHER reload still has to drop it, so this pins the distinction
 -- rather than just the fix.
 
-local ChunkMesher = run.loader.exports.DRAMATIC_SHAPE.lib.require("ChunkMesher")
+local ChunkMesher = run.loader.exports.TERRARIUM.lib.require("ChunkMesher")
 local Runtime = require("src.mods.Runtime")
 
 local realInvalidate = ChunkMesher.invalidate
@@ -905,7 +905,7 @@ ChunkMesher.refresh = realRefresh
 -- function, so this stays a claim about the picture rather than a
 -- restatement of the implementation.
 
-local VoxelScene = run.loader.exports.DRAMATIC_SHAPE.lib.require("VoxelScene")
+local VoxelScene = run.loader.exports.TERRARIUM.lib.require("VoxelScene")
 local modeColors = VoxelScene._modeColors
 T.check(type(modeColors) == "function", "the scene exposes its palette resolve")
 
@@ -991,8 +991,8 @@ T.eq(modeColors(nil), nil, "and a pipeline given no paletteFor at all is safe")
 
 local Game = require("src.core.Game")
 Pipelines.reset()
-Pipelines.setLevel("voxel", 0)
-Pipelines.setLevel("tiltshift", 0)
+Pipelines.setLevel("terrarium_voxel", 0)
+Pipelines.setLevel("terrarium_tiltshift", 0)
 
 -- a free-roam game: Zoom.gateOK wants the top screen to BE the overworld,
 -- not transitioning and not running a script
@@ -1006,8 +1006,8 @@ keyGame = {
   writeOptions = function() end,
 }
 
-local VoxelGrid = run.loader.exports.DRAMATIC_SHAPE.lib.require("VoxelGrid")
-local Curve = run.loader.exports.DRAMATIC_SHAPE.lib.require("WorldCurve")
+local VoxelGrid = run.loader.exports.TERRARIUM.lib.require("VoxelGrid")
+local Curve = run.loader.exports.TERRARIUM.lib.require("WorldCurve")
 
 -- ------- 3 walks the ANGLE rungs and steps over FULL
 --
@@ -1015,11 +1015,11 @@ local Curve = run.loader.exports.DRAMATIC_SHAPE.lib.require("WorldCurve")
 -- else. FULL reaches in and rewrites four other settings, so landing on it
 -- mid-walk would silently turn the blur to maximum and flatten the horizon
 -- with nothing on screen saying a keypress had done it.
-Pipelines.setLevel("voxel", 0)
+Pipelines.setLevel("terrarium_voxel", 0)
 local walk = {}
 for _ = 1, 6 do
-  Game.keypressed(keyGame, "3")
-  walk[#walk + 1] = Pipelines.levelLabel("voxel")
+  Game.keypressed(keyGame, "v")
+  walk[#walk + 1] = Pipelines.levelLabel("terrarium_voxel")
 end
 T.eq(table.concat(walk, ","), "15,35,50,75,OFF,15",
   "3 walks OFF -> 15 -> 35 -> 50 -> 75 and wraps, never touching FULL")
@@ -1029,34 +1029,34 @@ T.eq(table.concat(walk, ","), "15,35,50,75,OFF,15",
 -- Matched by angle, so this follows FULL if it is ever retuned.
 T.eq(VoxelState.ANGLES_DEG[VoxelState.FULL_LEVEL + 1], 35,
   "FULL is the 35-degree camera")
-Pipelines.setLevel("voxel", VoxelState.FULL_LEVEL)
-Game.keypressed(keyGame, "3")
-T.eq(Pipelines.levelLabel("voxel"), "50",
+Pipelines.setLevel("terrarium_voxel", VoxelState.FULL_LEVEL)
+Game.keypressed(keyGame, "v")
+T.eq(Pipelines.levelLabel("terrarium_voxel"), "50",
   "a press from FULL goes to 50, since FULL already IS the 35 camera")
 
-Pipelines.setLevel("voxel", 0)
-Game.keypressed(keyGame, "3")
-T.eq(Pipelines.level("voxel"), 2, "3 cycles the voxel camera ladder")
-Game.keypressed(keyGame, "3")
-T.eq(Pipelines.level("voxel"), 3, "and keeps climbing it")
+Pipelines.setLevel("terrarium_voxel", 0)
+Game.keypressed(keyGame, "v")
+T.eq(Pipelines.level("terrarium_voxel"), 2, "3 cycles the voxel camera ladder")
+Game.keypressed(keyGame, "v")
+T.eq(Pipelines.level("terrarium_voxel"), 3, "and keeps climbing it")
 
-Game.keypressed(keyGame, "6")
-T.eq(Pipelines.level("tiltshift"), 1, "6 cycles the tilt-shift blur")
+Game.keypressed(keyGame, "t")
+T.eq(Pipelines.level("terrarium_tiltshift"), 1, "6 cycles the tilt-shift blur")
 
-Game.keypressed(keyGame, "5")
+Game.keypressed(keyGame, "g")
 T.eq(VoxelGrid.setting:get(), true, "5 toggles V-GRID on")
-Game.keypressed(keyGame, "5")
+Game.keypressed(keyGame, "g")
 T.eq(VoxelGrid.setting:get(), false, "and off again")
 
 local curveBefore = Curve.setting:get()
-Game.keypressed(keyGame, "7")
+Game.keypressed(keyGame, "c")
 T.neq(Curve.setting:get(), curveBefore, "7 cycles V-CURVE")
 
-local Battles = run.loader.exports.DRAMATIC_SHAPE.lib.require("OverworldBattle")
+local Battles = run.loader.exports.TERRARIUM.lib.require("OverworldBattle")
 T.eq(Battles.setting:get(), true, "3D-BTL starts on")
-Game.keypressed(keyGame, "8")
+Game.keypressed(keyGame, "b")
 T.eq(Battles.setting:get(), false, "8 toggles overworld battles off")
-Game.keypressed(keyGame, "8")
+Game.keypressed(keyGame, "b")
 T.eq(Battles.setting:get(), true, "and back on")
 
 -- 3 also clears the two engine modes it displaced. Without this a player
@@ -1069,7 +1069,7 @@ GBCFX.setLevel(3)
 keyGame.save.options.tilt = 2
 keyGame.save.options.gbcfx = 3
 
-Game.keypressed(keyGame, "3")
+Game.keypressed(keyGame, "v")
 T.eq(keyGame.save.options.tilt, 0, "3 turns TILT off in the save")
 T.eq(Tilt.level, 0, "and on the live renderer")
 T.eq(keyGame.save.options.gbcfx, 0, "3 turns GBC FX off in the save")
@@ -1082,14 +1082,14 @@ T.eq(GBCFX.level, 0, "and on the live renderer")
 -- back on, so the single press under test is the one that wraps to OFF --
 -- where nothing else is going to clear them.
 -- 5 is the "75" rung, the last one the key walks before it wraps to OFF
-Pipelines.setLevel("voxel", 5)
+Pipelines.setLevel("terrarium_voxel", 5)
 Tilt.setLevel(3)
 GBCFX.setLevel(4)
 keyGame.save.options.tilt = 3
 keyGame.save.options.gbcfx = 4
 
-Game.keypressed(keyGame, "3")
-T.eq(Pipelines.level("voxel"), 0, "the press wraps the ladder back to OFF")
+Game.keypressed(keyGame, "v")
+T.eq(Pipelines.level("terrarium_voxel"), 0, "the press wraps the ladder back to OFF")
 T.eq(keyGame.save.options.tilt, 0, "the press that wraps to OFF still clears TILT")
 T.eq(Tilt.level, 0, "with the renderer agreeing")
 T.eq(keyGame.save.options.gbcfx, 0, "and still clears GBC FX")
@@ -1099,7 +1099,7 @@ T.eq(GBCFX.level, 0, "with the renderer agreeing there too")
 -- the registry deliberately leaves it alone
 Tilt.setLevel(2)
 keyGame.save.options.tilt = 2
-Game.keypressed(keyGame, "6")
+Game.keypressed(keyGame, "t")
 T.eq(keyGame.save.options.tilt, 2, "6 leaves TILT alone -- the blur composes with it")
 Tilt.setLevel(0)
 keyGame.save.options.tilt = 0
@@ -1116,21 +1116,21 @@ T.check(zoomKeyReached, "a key this mod does not claim still reaches the engine"
 -- A screen with its own key handler owns the keyboard: typing a nickname
 -- must not cycle a render mode behind the text box.
 local gridBefore = VoxelGrid.setting:get()
-local voxelBefore = Pipelines.level("voxel")
+local voxelBefore = Pipelines.level("terrarium_voxel")
 local typed = {}
 local menu = { onKeyPressed = function(_, k) typed[#typed + 1] = k end }
 keyGame.stack.top = function() return menu end
-for _, k in ipairs({ "3", "5", "6", "7" }) do Game.keypressed(keyGame, k) end
+for _, k in ipairs({ "v", "g", "t", "c" }) do Game.keypressed(keyGame, k) end
 T.eq(#typed, 4, "every claimed key goes to a screen that handles keys itself")
 T.eq(VoxelGrid.setting:get(), gridBefore, "V-GRID is untouched while a screen has focus")
-T.eq(Pipelines.level("voxel"), voxelBefore, "and so is the voxel ladder")
+T.eq(Pipelines.level("terrarium_voxel"), voxelBefore, "and so is the voxel ladder")
 
 -- and the free-roam gate the engine applies to its own display keys applies
 -- to the settings too: no flipping the wireframe mid-cutscene
 keyGame.stack.top = function() return overworld end
 overworld.transitioning = true
 local midWarp = VoxelGrid.setting:get()
-Game.keypressed(keyGame, "5")
+Game.keypressed(keyGame, "g")
 T.eq(VoxelGrid.setting:get(), midWarp, "V-GRID refuses mid-transition, as the mode does")
 overworld.transitioning = false
 
@@ -1142,7 +1142,7 @@ overworld.transitioning = false
 -- cave is a room with a ceiling, and the void past its walls is the
 -- outside of a box, not open air.
 
-local Voxel = run.loader.exports.DRAMATIC_SHAPE.lib.require("VoxelState")
+local Voxel = run.loader.exports.TERRARIUM.lib.require("VoxelState")
 local skyFor = VoxelScene._skyFor
 local skyStrength = VoxelScene._skyStrength
 T.check(type(skyFor) == "function", "the scene exposes its sky resolve")
@@ -1150,7 +1150,7 @@ T.check(type(skyFor) == "function", "the scene exposes its sky resolve")
 -- pinned to DAY for every sky assertion below: the row ships defaulting to
 -- SYNC -- the machine's own clock -- which would hand these tests whatever
 -- palette the hour of the test run happened to be
-run.loader.exports.DRAMATIC_SHAPE.lib.require("DayNight").setting:sync("day")
+run.loader.exports.TERRARIUM.lib.require("DayNight").setting:sync("day")
 
 local outside = { def = { id = "PALLET_TOWN", tileset = "OVERWORLD" } }
 local inside = { def = { id = "REDS_HOUSE_1F", tileset = "HOUSE" } }
@@ -1228,9 +1228,9 @@ T.check(skyRGB("gbc_inv")[3] ~= blue[3],
 -- each. Nothing is baked to a fixed size and upscaled -- the bands fill the
 -- window and the dither grid is cut to the diorama's own pixel scale.
 do
-local Sky = run.loader.exports.DRAMATIC_SHAPE.lib.require("Sky")
-local Voxel3D = run.loader.exports.DRAMATIC_SHAPE.lib.require("Voxel3D")
-local DayNight = run.loader.exports.DRAMATIC_SHAPE.lib.require("DayNight")
+local Sky = run.loader.exports.TERRARIUM.lib.require("Sky")
+local Voxel3D = run.loader.exports.TERRARIUM.lib.require("Voxel3D")
+local DayNight = run.loader.exports.TERRARIUM.lib.require("DayNight")
 
 local function luma(c) return 0.299 * c[1] + 0.587 * c[2] + 0.114 * c[3] end
 
@@ -1495,7 +1495,7 @@ Voxel.angle = 0
 -- strings, one per cell row, "." open and anything else solid; "w" is water
 -- (open to a surfer only) and "d" a warp tile.
 
-local BattleArena = run.loader.exports.DRAMATIC_SHAPE.lib.require("BattleArena")
+local BattleArena = run.loader.exports.TERRARIUM.lib.require("BattleArena")
 
 local function stubMap(rows)
   local at = function(cx, cy)
@@ -1674,9 +1674,9 @@ T.check(BattleArena.find(roomy, 2, 3, false) ~= nil,
 -- real camera rather than asserted about the constants, so the day someone
 -- retunes the rig this either still lands or says so.
 
-local BattleCam = run.loader.exports.DRAMATIC_SHAPE.lib.require("BattleCam")
-local BattleScene = run.loader.exports.DRAMATIC_SHAPE.lib.require("BattleScene")
-local Voxel3Dcam = run.loader.exports.DRAMATIC_SHAPE.lib.require("Voxel3D")
+local BattleCam = run.loader.exports.TERRARIUM.lib.require("BattleCam")
+local BattleScene = run.loader.exports.TERRARIUM.lib.require("BattleScene")
+local Voxel3Dcam = run.loader.exports.TERRARIUM.lib.require("Voxel3D")
 
 -- where a world point lands in the 160x144 frame, or nil behind the camera
 local function project(cam, point, w, h, fov)
@@ -1836,7 +1836,7 @@ T.eq(rig.curve, 0, "the battle camera switches the world curve off")
 -- The engine draws it as a full-screen white rectangle, which is a flash on
 -- a white battle field and a whiteout of the map, the HUD and the text box
 -- over a world. It is dropped on the way past and put back on the two cards.
-local Battles = run.loader.exports.DRAMATIC_SHAPE.lib.require("OverworldBattle")
+local Battles = run.loader.exports.TERRARIUM.lib.require("OverworldBattle")
 T.eq(Battles.flashing(nil), false, "no battle, no flash")
 T.eq(Battles.flashing({ fx = {}, frame = 0 }), false,
   "a battle with no flash counter is not flashing")
@@ -1855,7 +1855,7 @@ T.eq(Battles.flashing({ fx = { flash = 16 }, frame = 5 }), true,
 -- always wears the seams. The player's own V-GRID row must not be touched by
 -- that -- an override, not a write, or switching the mode off mid-battle
 -- would quietly rewrite a setting they chose.
-local Grid = run.loader.exports.DRAMATIC_SHAPE.lib.require("VoxelGrid")
+local Grid = run.loader.exports.TERRARIUM.lib.require("VoxelGrid")
 Grid.override = nil
 local rowWas = Grid.setting:get()
 T.eq(Grid.enabled(), rowWas and true or false,
@@ -1875,7 +1875,7 @@ T.eq(Grid.enabled(), rowWas and true or false,
 -- to be derived from where they landed rather than from a constant -- and it
 -- has to hold BOTH, which a band narrower than the gap between them would
 -- not.
-local BattleDOF = run.loader.exports.DRAMATIC_SHAPE.lib.require("BattleDOF")
+local BattleDOF = run.loader.exports.TERRARIUM.lib.require("BattleDOF")
 local focusY, band, range = BattleDOF.bandFor(96, 56, 144)
 T.check(math.abs(focusY - 76 / 144) < 1e-9,
   "the band centres between the two marks")
@@ -2003,9 +2003,9 @@ local backGame = { save = { options = { modOptions = {} } },
 Battles.setting:setIndex(1, backGame)              -- 3D-BTL on
 Battles.backSetting:setIndex(2, backGame)          -- BACK SPRITES on
 T.eq(Battles.backPinned(), true, "switched on, the back pic is pinned")
-T.eq(backGame.save.options.modOptions.DRAMATIC_SHAPE.battleBack, true,
+T.eq(backGame.save.options.modOptions.TERRARIUM.battleBack, true,
   "and it persists on its own key, beside 3D-BTL rather than over it")
-T.eq(backGame.save.options.modOptions.DRAMATIC_SHAPE.battles, true,
+T.eq(backGame.save.options.modOptions.TERRARIUM.battles, true,
   "which is still where it always was")
 
 -- and it means nothing at all with staged battles off: there is no staged
@@ -2023,8 +2023,8 @@ local offRows = Runtime.call("ui.options.rows", function(_, r) return r end,
                              backGame, { { id = "tilt" } })
 local offIds = {}
 for _, row in ipairs(offRows) do offIds[row.id] = true end
-T.check(offIds["DRAMATIC_SHAPE:battles"], "3D-BTL itself is still offered")
-T.check(not offIds["DRAMATIC_SHAPE:battleBack"],
+T.check(offIds["TERRARIUM:battles"], "3D-BTL itself is still offered")
+T.check(not offIds["TERRARIUM:battleBack"],
   "but BACK SPRITES is off the menu while there is no staged fight to be about")
 
 Battles.setting:setIndex(1, backGame)
@@ -2032,8 +2032,8 @@ local onRows = Runtime.call("ui.options.rows", function(_, r) return r end,
                             backGame, { { id = "tilt" } })
 local onAt = {}
 for i, row in ipairs(onRows) do onAt[row.id] = i end
-T.check(onAt["DRAMATIC_SHAPE:battleBack"], "switched back on, so is the row")
-T.eq(onAt["DRAMATIC_SHAPE:battleBack"] - onAt["DRAMATIC_SHAPE:battles"], 1,
+T.check(onAt["TERRARIUM:battleBack"], "switched back on, so is the row")
+T.eq(onAt["TERRARIUM:battleBack"] - onAt["TERRARIUM:battles"], 1,
   "directly under the row it belongs to")
 
 Battles.backSetting:setIndex(1, backGame)          -- and off for the rows below
@@ -2059,8 +2059,8 @@ end
 -- canvas IS the moment the world is finished and the paper has not started.
 -- That is what this drives -- the gates, and the ordering.
 do
-local DayTint = run.loader.exports.DRAMATIC_SHAPE.lib.require("DayTint")
-local DayNight = run.loader.exports.DRAMATIC_SHAPE.lib.require("DayNight")
+local DayTint = run.loader.exports.TERRARIUM.lib.require("DayTint")
+local DayNight = run.loader.exports.TERRARIUM.lib.require("DayNight")
 
 -- the map the hour is asked about is the one the player is standing on, read
 -- off the live game rather than passed in -- so there has to be one
@@ -2165,7 +2165,7 @@ end
 -- filled the notch between a Rattata's ears and the gap between its body and
 -- its tail, which are background and have the drawing over them.
 do
-local BattlePics = run.loader.exports.DRAMATIC_SHAPE.lib.require("BattlePics")
+local BattlePics = run.loader.exports.TERRARIUM.lib.require("BattlePics")
 
 -- Run one hand-drawn figure through the real BattlePics and hand back a
 -- reader over what came out. The pic is faked at the readback seam, which is
@@ -2303,7 +2303,7 @@ end
 -- whatever is on top, which is the fade while it is up, so the fade has to be
 -- off the stack before the battle finishes and back on it afterwards.
 do
-local Exit = run.loader.exports.DRAMATIC_SHAPE.lib.require("BattleExit")
+local Exit = run.loader.exports.TERRARIUM.lib.require("BattleExit")
 
 T.eq(Data.transitions and Data.transitions[Exit.ID] and
      Data.transitions[Exit.ID].frames, Exit.FRAMES,
@@ -2406,10 +2406,10 @@ end
 -- camera looks north, so the discs must actually cross the northern sky),
 -- and the clock's ride through the save file.
 do
-local DayNight = run.loader.exports.DRAMATIC_SHAPE.lib.require("DayNight")
-local ShadowMap = run.loader.exports.DRAMATIC_SHAPE.lib.require("ShadowMap")
-local Voxel3D = run.loader.exports.DRAMATIC_SHAPE.lib.require("Voxel3D")
-local Voxel = run.loader.exports.DRAMATIC_SHAPE.lib.require("VoxelState")
+local DayNight = run.loader.exports.TERRARIUM.lib.require("DayNight")
+local ShadowMap = run.loader.exports.TERRARIUM.lib.require("ShadowMap")
+local Voxel3D = run.loader.exports.TERRARIUM.lib.require("Voxel3D")
+local Voxel = run.loader.exports.TERRARIUM.lib.require("VoxelState")
 
 -- the dial and its pins
 T.eq(DayNight.setting.values[1], "sync",
@@ -2563,7 +2563,7 @@ T.eq(DayNight.tod(0), "MORNING", "dawn is MORNING")
 T.eq(DayNight.tod(600), "EVENING", "dusk is EVENING")
 
 -- the clock rides the save slot
-local modApi = run.loader.exports.DRAMATIC_SHAPE.lib.mod
+local modApi = run.loader.exports.TERRARIUM.lib.mod
 DayNight.setting:sync("cycle")
 DayNight.clock = 777
 DayNight.store()
@@ -2600,8 +2600,8 @@ local Game = require("src.core.Game")
 local hadSave = Game.save
 Game.save = { options = {} }
 DayNight.setting:sync("day")
-defs.voxel.update(0, 2)               -- any rung that is not FULL
-defs.voxel.update(0, 1)               -- and the arrival
+defs.terrarium_voxel.update(0, 2)               -- any rung that is not FULL
+defs.terrarium_voxel.update(0, 1)               -- and the arrival
 T.eq(DayNight.setting:get(), "sync",
   "FULL pins DAYTIME to SYNC, whatever was chosen before")
 Game.save = hadSave
@@ -2658,7 +2658,7 @@ end
 -- The scenes wire it as tint(outdoor or isCanopy(map)) over the unchanged
 -- noon rig, so what is checked here is the classification itself.
 do
-local DayNight = run.loader.exports.DRAMATIC_SHAPE.lib.require("DayNight")
+local DayNight = run.loader.exports.TERRARIUM.lib.require("DayNight")
 T.check(DayNight.isCanopy({ id = "VIRIDIAN_FOREST" }),
   "Viridian Forest stands under a canopy")
 T.check(not DayNight.isCanopy({ id = "MT_MOON_1F" }),
@@ -2677,8 +2677,8 @@ end
 -- stored depth and nothing about where their shadow falls -- taking most of
 -- the forgiveness back for the shadow they throw and for nothing else.
 do
-local ShadowMap = run.loader.exports.DRAMATIC_SHAPE.lib.require("ShadowMap")
-local Mat4 = run.loader.exports.DRAMATIC_SHAPE.lib.require("Mat4")
+local ShadowMap = run.loader.exports.TERRARIUM.lib.require("ShadowMap")
+local Mat4 = run.loader.exports.TERRARIUM.lib.require("Mat4")
 local dir = ShadowMap.sunDir()
 local s = -ShadowMap.slack * ShadowMap.SNUG
 local m = ShadowMap.snug(nil)
@@ -2704,9 +2704,9 @@ end
 -- building's sits a row down inside its tile. The scan takes a pure reader,
 -- so the geometry is checked here without an image in sight.
 do
-local GlassMask = run.loader.exports.DRAMATIC_SHAPE.lib.require("GlassMask")
-local DayNight = run.loader.exports.DRAMATIC_SHAPE.lib.require("DayNight")
-local Voxel3D = run.loader.exports.DRAMATIC_SHAPE.lib.require("Voxel3D")
+local GlassMask = run.loader.exports.TERRARIUM.lib.require("GlassMask")
+local DayNight = run.loader.exports.TERRARIUM.lib.require("DayNight")
+local Voxel3D = run.loader.exports.TERRARIUM.lib.require("Voxel3D")
 
 local W, H = 32, 16
 local blackAt = {}
@@ -2771,4 +2771,4 @@ end
 Pipelines.reset()
 run.release()
 
-T.finish("DRAMATIC_SHAPE")
+T.finish("TERRARIUM")

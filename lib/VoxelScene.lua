@@ -201,10 +201,25 @@ end
 -- Land uses the cell's static height; mid-step hop lift still comes from
 -- pose() as before.
 local function entityGround(map, e, px, py)
+  local wx = (px or 0) + 8
+  local wz = (py or 0) + 8
   if e and (e.surfing or (e.roamer and e.kind == "water")) then
-    local ok, y = pcall(Water.surfaceAt, (px or 0) + 8, (py or 0) + 8)
+    local ok, y = pcall(Water.surfaceAt, wx, wz)
     if ok and y then return y end
     return Water.BASE or -2
+  end
+  -- Walkable ice: height identity is still water, but the effective floor is
+  -- the frozen surface (Water.surfaceAt), not the land groundAt of -2.
+  if e and map and map.isWaterCell and Water.walkableIce then
+    local wok, water = pcall(map.isWaterCell, map, e.cellX, e.cellY)
+    if wok and water then
+      local iok, ice = pcall(Water.walkableIce, wx, wz)
+      if iok and ice then
+        local ok, y = pcall(Water.surfaceAt, wx, wz)
+        if ok and y then return y end
+        return (Water.BASE or -2) + (Water.iceLift and Water.iceLift() or 0)
+      end
+    end
   end
   return groundAt(map, e.cellX, e.cellY)
 end
@@ -539,14 +554,24 @@ local function posesOf(state, spriteColors)
     local waterRoamer = g.npc.roamer and g.npc.kind == "water"
     local onWater = g.npc.surfing or waterRoamer
     -- On water the swell is already in entityGround; pose()'s bob is for
-    -- the 2D blit only and must not be added again as lift.  Water roamers
-    -- also carry a waterline cut so only the top of the body is meshed.
+    -- the 2D blit only and must not be added again as lift.  Waterline cut
+    -- while swimming; full body on ice; freeze/thaw anim blends the cut.
+    local wl, hop = 0, 0
+    if waterRoamer then
+      local okc, cut = pcall(Water.waterlineCut, gpx + 8, gpy + 8,
+                             Roamer.WATERLINE)
+      wl = (okc and cut) or Roamer.WATERLINE
+    end
+    if onWater then
+      local okl, lift = pcall(Water.standAnimLift, gpx + 8, gpy + 8)
+      hop = (okl and lift) or 0
+    end
     posed[#posed + 1] = {
       sprite = sprite, px = gpx, py = gpy,
       facing = facing, phase = phase, flip = flip,
-      gh = entityGround(g.map or state.map, g.npc, gpx, gpy),
+      gh = entityGround(g.map or state.map, g.npc, gpx, gpy) + hop,
       lift = onWater and 0 or (g.npc.py - vy),
-      waterline = waterRoamer and Roamer.WATERLINE or 0,
+      waterline = wl,
       colors = spriteColors(g.map or state.map),
     }
   end
@@ -564,12 +589,25 @@ local function posesOf(state, spriteColors)
                                 Roamer.WIND_HEIGHT)
         if ok and lz then drawPy = e.py + lz end
       end
+      -- Swim cut / ice stand / freeze-thaw blend (keeps Surf as the mount).
+      local wl, hop = 0, 0
+      if waterRoamer then
+        local okc, cut = pcall(Water.waterlineCut, drawPx + 8, drawPy + 8,
+                               Roamer.WATERLINE)
+        wl = (okc and cut) or Roamer.WATERLINE
+      end
+      if onWater then
+        local okl, lift = pcall(Water.standAnimLift, drawPx + 8, drawPy + 8)
+        hop = (okl and lift) or 0
+      end
+      -- Player mid-Surf also gets the freeze/thaw hop + full body on ice
+      -- (no waterline cut on the player card, but hop still reads).
       posed[#posed + 1] = {
         sprite = sprite, px = drawPx, py = drawPy,
         facing = facing, phase = phase, flip = flip,
-        gh = entityGround(state.map, e, drawPx, drawPy),
+        gh = entityGround(state.map, e, drawPx, drawPy) + hop,
         lift = onWater and 0 or (drawPy - vy),
-        waterline = waterRoamer and Roamer.WATERLINE or 0,
+        waterline = wl,
         colors = colors,
       }
       if e == state.player then me = posed[#posed] end

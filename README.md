@@ -8,21 +8,24 @@ living in it.
 > **Terrarium is a fork of the [Dramatic Shape Voxel Mod](https://github.com/DramaticShape/DramaticShapeVoxelMod)
 > by [Dramatic Shape](https://github.com/DramaticShape).** The name is
 > different because the fork grew its own set of features, **not** because it
-> is a separate work — the diorama, the depth-buffered occlusion, the shadow
+> is a separate work â€” the diorama, the depth-buffered occlusion, the shadow
 > map, the tilt-shift pass and the over-the-shoulder battles are all his, and
 > without them there is nothing here to fork.
 >
 > **If you are choosing between them, go and look at his first:**
 > https://github.com/DramaticShape/DramaticShapeVoxelMod
 >
-> It keeps the mod id `DRAMATIC_SHAPE`, so it **replaces** the original rather
-> than sitting beside it. Do not install both.
+> It ships under its own mod id `TERRARIUM` and its own folder, so it can
+> sit **beside** the original without overwriting it. Both can be installed;
+> both can be installed and enabled together: this fork uses letter hotkeys
+> (v/g/t/c/b/n/p) and its own pipeline ids, so it does not fight upstream's
+> 3/5/6/7/8/9. Still only one world pipeline should own the frame at a time.
 
-A mod for the [Pokémon Gen 1 Recompilation
+A mod for the [PokÃ©mon Gen 1 Recompilation
 Project](https://github.com/bryanthaboi/gen1recomp). The overworld becomes a
 3D diorama: terrain extruded into real geometry, cast shadows that stretch
 through the afternoon, a six-phase day/night cycle with a painted sky and
-stars, weather that leaves puddles and snow on the ground, and wild Pokémon
+stars, weather that leaves puddles and snow on the ground, and wild PokÃ©mon
 standing in the grass where you can see them.
 
 > **This is a fan-made modification. It is not a game, and it contains no part
@@ -32,8 +35,8 @@ standing in the grass where you can see them.
 
 ## Legal
 
-**Pokémon Red, Pokémon Blue and Pokémon Yellow are © 1996–1999 Nintendo,
-Creatures Inc. and GAME FREAK Inc. "Pokémon", "Nintendo" and "Game Boy" are
+**PokÃ©mon Red, PokÃ©mon Blue and PokÃ©mon Yellow are Â© 1996â€“1999 Nintendo,
+Creatures Inc. and GAME FREAK Inc. "PokÃ©mon", "Nintendo" and "Game Boy" are
 trademarks of their respective owners. All rights in the games, characters,
 names, artwork, music and every other element of them belong to those
 companies and to nobody else.**
@@ -42,18 +45,18 @@ This project is:
 
 - **Unofficial and unaffiliated.** It is not made by, endorsed by, sponsored
   by, licensed by, or associated with Nintendo, Creatures Inc., GAME FREAK
-  Inc., The Pokémon Company, or any of their subsidiaries or partners.
+  Inc., The PokÃ©mon Company, or any of their subsidiaries or partners.
 - **Not a game, and not a way to get one.** It is a modification: a set of
   Lua scripts and original art that changes how an already-installed program
   draws itself. On its own it does nothing at all.
 - **Free of Nintendo's data.** This repository contains **no ROM, no ROM
   patch, no game code, no sprite, no map, no music and no sound** taken from
-  any Pokémon title. It never has and it never will — the `.gitignore` here
+  any PokÃ©mon title. It never has and it never will â€” the `.gitignore` here
   blocks ROMs, dumps, saves and patch files (`.bps`, `.ips`, `.ups`) so that
   one cannot be committed by accident.
 - **Dependent on a copy you already own.** Gen1Recomp reads a ROM that the
   player dumps from their own cartridge. **Do not ask this project for a ROM,
-  and do not link one in an issue or a pull request** — such a request will be
+  and do not link one in an issue or a pull request** â€” such a request will be
   closed and such a link removed.
 - **Non-commercial.** It is given away. No part of it is sold, and no
   donations, ads or paid tiers are attached to it. It is a hobby project made
@@ -78,12 +81,12 @@ and reviewing.
 
 What that means in practice:
 
-- The code was **directed, tested and accepted by a human** — me. Features
+- The code was **directed, tested and accepted by a human** â€” me. Features
   were specified, measured, and rejected when the measurement did not support
   them. It is not generated and dumped.
 - Much of it is **verified by probes rather than by eye.** The `tests/`
   directory holds twenty self-contained probes that drive the real game
-  headless and write numbers to a log — shadow lengths, palette ramps, pixel
+  headless and write numbers to a log â€” shadow lengths, palette ramps, pixel
   classifications, frame-time medians. Where this README claims a number, a
   probe produced it.
 - It carries the usual caveat all the same: **read it before you trust it.**
@@ -93,7 +96,7 @@ What that means in practice:
 If AI-assisted contributions are something you would rather avoid, that is a
 completely reasonable position and you should use the
 [original mod](https://github.com/DramaticShape/DramaticShapeVoxelMod)
-instead — it is excellent, and this fork exists because of it.
+instead â€” it is excellent, and this fork exists because of it.
 
 ---
 
@@ -105,31 +108,31 @@ the over-the-shoulder battles. All of that is his work, and it is the reason
 any of this exists.
 
 Everything below was added in the `-mobile` line (versions 1.4.0 through
-1.16.0 — see [`CHANGELOG.md`](CHANGELOG.md) for the full history, and
+1.16.0 â€” see [`CHANGELOG.md`](CHANGELOG.md) for the full history, and
 [`MOBILE.md`](MOBILE.md), written in Portuguese, for the reasoning).
 
 ### It runs on weak hardware
 
 This was the whole point of the fork. The original targeted a desktop; this
-one was made to run on an entry-level Android (a Samsung A14 5G — two-core
-Mali, 2408×1080 panel) and on a low-end PC. Development and every measurement
+one was made to run on an entry-level Android (a Samsung A14 5G â€” two-core
+Mali, 2408Ã—1080 panel) and on a low-end PC. Development and every measurement
 in this repo happen on an **Intel i3-1115G4 with integrated UHD graphics**.
 
 Two new rows on the OPTIONS menu, both visible under every preset:
 
 | row | values | default | what it does |
 | --- | --- | --- | --- |
-| **RES** | 1/2 · 1/3 · 1/4 · FULL | **1/2** | divides the resolution the 3D pass rasterises at before it is scaled back up. Every cost in the pass is quadratic in it: 1/2 is four times less of everything, 1/3 is nine. Upscaled *nearest*, so the result is chunkier, not blurrier — the right defect for this art. |
-| **SHADOWS** | LOW · OFF · HIGH · SOFT | **LOW** | LOW keeps real cast shadows on a 512–1024 texel map instead of 2048, one tap instead of four, no neighbouring maps casting, redrawn every second frame while walking. |
+| **RES** | 1/2 | 1/3 | 1/4 | FULL | **1/2** | divides the resolution the 3D pass rasterises at before it is scaled back up. Every cost in the pass is quadratic in it: 1/2 is four times less of everything, 1/3 is nine. Upscaled *nearest*, so the result is chunkier, not blurrier â€” the right defect for this art. |
+| **SHADOWS** | LOW | OFF | HIGH | SOFT | **LOW** | LOW keeps real cast shadows on a 512â€“1024 texel map instead of 2048, one tap instead of four, no neighbouring maps casting, redrawn every second frame while walking. |
 
 Plus spatial culling, and a shadow-map size ladder chosen per frame from how
 much world is actually in view.
 
-### Wild Pokémon you can see
+### Wild PokÃ©mon you can see
 
 The **WILD** row. The map's own encounter table decides who is standing in the
 grass right now; they wander their own patch in their own art, and the fight
-starts when you walk into one — so a route can be picked through, hunted, or
+starts when you walk into one â€” so a route can be picked through, hunted, or
 crossed without a single battle.
 
 This is the one feature that touches the game rather than the drawing of it,
@@ -141,21 +144,55 @@ rolls its dice precisely as it always did.**
 | row | what it is |
 | --- | --- |
 | **RTX** | a screen-space row walked through the depth buffer the 3D pass already filled: ambient occlusion in corners the sky cannot reach, reflections marched across the water's own swell, light shafts toward the sun. OFF is byte-for-byte the old frame. |
-| **CITY** | Pokémon loose in the streets of every town, and civilian NPCs that glance as you pass |
-| **ROUTINES / SHELTER** | civilians look around, turn toward the sign they are standing beside, talk in pairs — and walk to the nearest doorway when a shower comes down hard |
+| **CITY** | PokÃ©mon loose in the streets of every town, and civilian NPCs that glance as you pass |
+| **ROUTINES / SHELTER** | civilians look around, turn toward the sign they are standing beside, talk in pairs â€” and walk to the nearest doorway when a shower comes down hard |
 | **WEATHER** | rain and snow, folded into the light rather than drawn over it |
 | **GROUND** | what the weather leaves behind: puddles that gather through a shower and are still there ten minutes later wearing the sky's own colour, snow settling in drifts, footprints behind everyone walking on it |
-| **ECOLOGY** | Gen 2's time-of-day encounters built out of Gen 1's single table — the nocturnal half of the dex comes up after dark, birds and caterpillars by day, by reweighting the map's own ten slot buckets rather than adding or removing anything |
-| **WATER** | a real swell, with two wave trains and a slope window a crest has to reach to catch the sun |
+| **ECOLOGY** | Gen 2's time-of-day encounters built out of Gen 1's single table â€” the nocturnal half of the dex comes up after dark, birds and caterpillars by day, by reweighting the map's own ten slot buckets rather than adding or removing anything |
+| **WATER** | a cel-shaded swell: two crossing wave trains, analytic normals, depth-rung colour and binary foam (toon water ideas, hard steps only â€” not PBR). CALM / SWELL / FLAT. Rain and wind feed chop energy; freeze turns the surface into walkable ice when the party can Surf |
 | **QOL** | type-effectiveness hints on the FIGHT menu, auto-repel, and HMs on an A press (CUT at a tree, SURF at water, STRENGTH at a boulder) |
 | **BAG / STACK** | twenty item slots and ninety-nine per stack were Game Boy save-RAM limits, not design. Raise both. |
 | **AUTO-FARM** | pick a party slot and a bot trains it, always picking the strongest move against what it faces |
 | **GLINT** | a thin reflection sweeping across window panes as you walk |
 
+### Cel water (measured)
+
+The water is geometry, not a flat scrolling tile. Identity is the height test
+alone (`y < -1` â€” recessed two world pixels so the shoreline shows a lip).
+Displacement is Y = f(XZ) only, so an unindexed mesh never opens a seam.
+The normal is two cosines of the same trains â€” analytic, free, exact.
+
+Paint stays in the mod's four-colour dialect: hard `step`s, checker dither,
+bands re-evaluated on a world-XZ cell (the sky's own `floor(sc/cell)` idiom).
+Ideas from [Roy Stan's Toon Water Shader](https://roystan.net/articles/toon-water/)
+are adapted here (depth-rung tint, binary surface-noise foam, shoreline foam)
+without a second render target, without a normal map, and without soft
+airbrush gradients. See [Credits](#credits).
+
+**Shimmer is a number, not a screenshot.** `tests/water_shimmer_probe.lua`
+freezes weather, wind, clock and NPCs, builds a water mask by FLAT-vs-SWELL
+diff, then counts water pixels that change between consecutive frames under
+ablations (tile roll / geometry / glint window / SSR). On VERMILION_CITY at
+the default RES 1/2 rung, with climate off:
+
+| | continuous background | of sampled water |
+| --- | ---: | ---: |
+| before anti-crawl pass | ~4125 px | **~5.9%** |
+| after (`RATE` 0.9â†’0.55 + mid-pond foam gated on chop/rain) | ~1510â€“1890 px | **~2.2â€“2.7%** |
+
+So about **half the continuous churn** on a calm clear pond. Ablation on the
+pre-pass baseline: almost all of that churn was swell + cel paint; the
+tileset roll, the glint rings and SSR each moved under 5% of the count.
+`PAINT_PHASE_STEP` (temporal snap of paint phase) and a coarser paint cell
+were tried and rejected â€” the first turned crawl into full-pond flashes, the
+second made the palindrome unreadable. Knobs remain in `lib/Water.lua` at
+safe defaults. Puddle SSR shares RayFX with the pond; `tests/puddle_rtx_probe.lua`
+is the regression gate and still passes.
+
 ### Day, night, and the sky
 
-The clock runs a six-phase dial — dawn, golden hour, day, dusk, violet
-twilight, night — with a hand-quantised sky palette per phase on the Game Boy
+The clock runs a six-phase dial â€” dawn, golden hour, day, dusk, violet
+twilight, night â€” with a hand-quantised sky palette per phase on the Game Boy
 Color's own 5-bit lattice, a dithered gradient, and a cell-art sun and moon.
 
 The most recent work went here, and it is measured rather than eyeballed:
@@ -163,9 +200,9 @@ The most recent work went here, and it is measured rather than eyeballed:
 - **Every phase is now actually painted.** The dial used to hold `day` and
   `night` and pass *through* the other four: measured a second at a time,
   `dawn`, `golden` and `dusk` held for one second each and `violet` for none
-  at all — four hand-authored palettes that were never shown. They now hold
-  45–137 seconds each, and the sunrise runs dawn → golden → day the way the
-  evening already ran day → golden → dusk.
+  at all â€” four hand-authored palettes that were never shown. They now hold
+  45â€“137 seconds each, and the sunrise runs dawn â†’ golden â†’ day the way the
+  evening already ran day â†’ golden â†’ dusk.
 - **Stars, and the occasional meteor.** A fixed 96-star field on the sky's own
   cell grid, posterised to four brightness rungs and twinkling on their own
   phases, fading in with the night and gone under an overcast. Star count is a
@@ -176,7 +213,7 @@ The most recent work went here, and it is measured rather than eyeballed:
   afternoon. Each pane now burns at its own brightness, so a wall of windows
   is a wall of rooms.
 - **Evening shadows stretch.** The shear clamp was cutting a full-strength
-  shadow for 300 seconds of every 1200 — right through the golden hour. It is
+  shadow for 300 seconds of every 1200 â€” right through the golden hour. It is
   now derived from the fade angle instead, so it can only ever shorten a
   shadow already on its way out. Measured cost: `+0.015 ms` per frame.
 
@@ -193,16 +230,30 @@ The most recent work went here, and it is measured rather than eyeballed:
 Drop the folder into your Gen1Recomp `mods/` directory, or import the packaged
 zip through the launcher's mods tab.
 
-**Name the installed folder `DRAMATIC_SHAPE`, not `Terrarium`.** The repository
-is called Terrarium; the mod it installs is still id `DRAMATIC_SHAPE`, and the
-probes in `tests/` are launched by paths of the form
-`mods/DRAMATIC_SHAPE/tests/<probe>.lua`. Keeping the folder on the id is the
-one place the old name still has to survive.
+**Name the installed folder `TERRARIUM`.** That matches the mod id in
+`manifest.json`. Probes under `tests/` launch as
+`mods/TERRARIUM/tests/<probe>.lua`.
 
-That shared id is also why **it replaces the original rather than sitting
-beside it. Do not install both** — they claim the same hotkeys and register
-the same render pipelines, and the id makes them mutually exclusive by
-construction instead of letting them fight.
+This fork is **independent** of upstream `DRAMATIC_SHAPE`: different id,
+different folder, different pipeline registry keys (`terrarium_voxel` /
+`terrarium_tiltshift`). You can install Terrarium alone, the original alone,
+or both. The diorama design remains DramaticShape's work â€” see the fork note
+at the top of this file.
+
+**Letter hotkeys (TERRARIUM):** `v` VOXEL | `g` V-GRID | `t` T-SHIFT | `c` V-CURVE | `b` 3D-BTL | `n` WILD | `p` MAP. Upstream still uses digits.
+`c` V-CURVE | `b` 3D-BTL | `n` WILD | `p` MAP. Upstream still uses digits.
+
+## Quiver / launcher packaging
+
+- Install folder must be `mods/TERRARIUM` (matches `manifest.json` id).
+- Catalog metadata for a future index entry lives in
+  [`quiver-catalog-entry.json`](quiver-catalog-entry.json) (folder key
+  `breno@TERRARIUM`) and a one-mod local index in
+  [`quiver-local-index.json`](quiver-local-index.json).
+- Pack manifest with hashes: [`.modkit/pack.json`](.modkit/pack.json).
+- Reinstalling upstream `DRAMATIC_SHAPE` from Quiver only touches that
+  folder; it cannot overwrite `TERRARIUM`.
+
 
 Every feature is a row on the OPTIONS menu with an OFF. If something is too
 slow, too bright or too much, turn that row off; nothing here is load-bearing
@@ -212,17 +263,17 @@ for anything else.
 
 | path | what it is |
 | --- | --- |
-| [`FEATURES.md`](FEATURES.md) | the full manual — every row, every control, every rule |
+| [`FEATURES.md`](FEATURES.md) | the full manual â€” every row, every control, every rule |
 | [`MOBILE.md`](MOBILE.md) | why the fork exists and what was changed to make it run (Portuguese) |
 | [`CHANGELOG.md`](CHANGELOG.md) | thirty-one releases, with the reasoning for each |
 | `lib/` | the mod itself |
 | `tests/` | twenty self-contained probes that drive the real game and write numbers |
 | `assets/` | original art, CC0 audio, and the building/voxel documentation |
-| `tools/` | authoring scripts — they run by hand, not at play time |
+| `tools/` | authoring scripts â€” they run by hand, not at play time |
 
 ---
 
-## Licence — please read before forking
+## Licence â€” please read before forking
 
 **The upstream mod does not currently carry a licence file**, and neither does
 this fork. Under default copyright that means the code is *not* granted for
@@ -230,20 +281,26 @@ redistribution or modification, however freely it is shared in practice, and
 [an open request for one](https://github.com/DramaticShape/DramaticShapeVoxelMod/issues/45)
 is sitting on the original repository.
 
-This fork is published in the spirit the original was — freely, for other
-people to read, run and learn from — but I cannot grant you rights over code
+This fork is published in the spirit the original was â€” freely, for other
+people to read, run and learn from â€” but I cannot grant you rights over code
 that is not mine to license. If you plan to build on this, **please talk to
 Dramatic Shape first.** If a licence lands upstream, this fork will adopt it.
 
 ## Credits
 
 - **[Dramatic Shape](https://github.com/DramaticShape/DramaticShapeVoxelMod)**
-  — the voxel mod this is built on. The diorama, the battles and the shape of
+  â€” the voxel mod this is built on. The diorama, the battles and the shape of
   the whole thing are his.
 - **[bryanthaboi](https://github.com/bryanthaboi/gen1recomp)** and the
-  Gen1Recomp contributors — the engine, and a mod platform generous enough
+  Gen1Recomp contributors â€” the engine, and a mod platform generous enough
   that almost none of this needed a patch.
-- **Ambient audio** — CC0, every recordist named in
+- **Water shading heavily inspired by Roy Stanâ€™s Toon Water Shader tutorial**
+  ([article](https://roystan.net/articles/toon-water/),
+  [source](https://github.com/IronWarrior/ToonWaterShader)) â€” depth-rung
+  colour, binary surface-noise foam, and shoreline foam ideas adapted to the
+  modâ€™s voxel/cel system (hard steps, checker dither, analytic swell, no
+  depth/normals buffer RT). Not a port of the Unity shader.
+- **Ambient audio** â€” CC0, every recordist named in
   [`assets/audio/CREDITS.md`](assets/audio/CREDITS.md).
-- **Nintendo, Creatures Inc. and GAME FREAK Inc.** — for the game. It is
+- **Nintendo, Creatures Inc. and GAME FREAK Inc.** â€” for the game. It is
   theirs. This is only a coat of paint on a program that loads it.

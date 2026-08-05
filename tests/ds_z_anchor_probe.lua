@@ -27,7 +27,7 @@ return function(game)
     tap("a"); wait(10); f = f + 11; if f > 1500 then break end
   end
 
-  local lib = game.mods.exports.DRAMATIC_SHAPE.lib
+  local lib = game.mods.exports.TERRARIUM.lib
   local Interiors = lib.require("Interiors")
   Interiors.setting:sync("on")
 
