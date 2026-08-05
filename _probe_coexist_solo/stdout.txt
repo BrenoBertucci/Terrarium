@@ -1,0 +1,12 @@
+[error] options load failed: parse error at byte 1: expected return
+[info] generated data loaded (223 maps, 151 species, 165 moves)
+[error] options load failed: parse error at byte 1: expected return
+[error] options load failed: parse error at byte 1: expected return
+[info] loaded mod DRAMATIC_SHAPE 1.16.0-mobile.rain
+[info] loaded mod TERRARIUM 1.16.0-mobile.rain
+[error] options load failed: parse error at byte 1: expected return
+[info] game loaded
+[info] display: 1024x768 units, 1024x768 px, fit scale 5 px/GB px
+[error] options load failed: parse error at byte 1: expected return
+[error] options load failed: parse error at byte 1: expected return
+[info] map: REDS_HOUSE_2F at (3,6)
