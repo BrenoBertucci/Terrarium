@@ -65,10 +65,23 @@ save/
 # The probes write to whatever DS_PROBE_DIR points at. When that is pointed
 # inside the tree by accident, this keeps the screenshots and logs out of the
 # history -- they are evidence for one run, not source.
+#
+# Common local conventions that previously leaked into git: a root folder
+# named _probe_<run> (screenshots + console.txt + stdout/stderr) or DS_PROBE*.
+# *.log alone is not enough -- PNGs and console captures were committed.
 *.log
+_probe_*/
+DS_PROBE*/
 probe-out/
 probe_out/
 tests/out/
+
+# Captures written next to a driver when DS_PROBE_DIR is unset or mistyped.
+# tests/*.lua drivers stay tracked; only runtime dumps under tests/ are blocked.
+tests/**/console.txt
+tests/**/stdout.txt
+tests/**/stderr.txt
+tests/**/*.png
 
 # The legacy probe harness twenty-one dead probes used to load. It does not
 # exist in this tree or in the build; listed so a stray copy is never
