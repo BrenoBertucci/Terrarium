@@ -13,7 +13,9 @@
 -- dithered into the bottom of each one. Alternating two colours on a pixel grid
 -- is how a machine with four colours to a palette got a fifth, sixth and seventh
 -- out of them, and it is what keeps four bands reading as a gradient rather than
--- as four stripes. No clouds, nothing moving.
+-- as four stripes. CLOUDS are optional volumetric puffs raymarched inside
+-- the same sky pass (cel density steps + checker dither, wind-advected),
+-- not a second target -- see the cloud block in SHADER_SRC.
 --
 -- NOTHING IS RESAMPLED, which is the whole of why it is drawn this way. There is
 -- no baked 160x144 picture scaled up to the window and no downsized buffer blown
@@ -52,9 +54,30 @@ local V = ...
 
 local DayNight = V.require("DayNight")
 local Quality = V.require("Quality")
+local Weather = V.require("Weather")
+local Wind = V.require("Wind")
+local ModSetting = V.require("ModSetting")
 local PaletteFX = require("src.render.PaletteFX")
 
 local Sky = {}
+
+-- CLOUDS row: painted volume in the sky pass (not a particle layer).
+--   ON     fair-weather puffs that thicken with DayNight.overcast
+--   THICK  heavier deck even on a clear hour (showcase / screenshots)
+--   OFF    bands only -- the sky this file started as
+Sky.cloudSetting = ModSetting.new("clouds", "CLOUDS",
+                                  { 1, 2, 0 },
+                                  { "ON", "THICK", "OFF" })
+
+-- Coastal outdoor maps: denser low fog at dawn/dusk (cheap id table, not
+-- a tile scan). Extends the same idea as DayNight.CANOPY for forests.
+Sky.COAST = {
+  ROUTE_11 = true, ROUTE_12 = true, ROUTE_13 = true,
+  ROUTE_17 = true, ROUTE_18 = true, ROUTE_19 = true,
+  ROUTE_20 = true, ROUTE_21 = true, ROUTE_24 = true, ROUTE_25 = true,
+  PALLET_TOWN = true, VERMILION_CITY = true, FUCHSIA_CITY = true,
+  CINNABAR_ISLAND = true, CERULEAN_CITY = true,
+}
 
 -- The most bands a phase palette may paint with. Eight leaves headroom over
 -- DayNight's six-band ones without paying for more; the ramp the shader reads
@@ -87,12 +110,40 @@ Sky.SPAN = 0.23
 -- mode does.
 local cache = { bands = nil, key = {}, ramp = nil }
 
+-- Post-rain saturation amount 0..1 (hard steps for cel). 0 when idle.
+local function afterRainAmt()
+  local ok, v = pcall(Weather.afterRain)
+  if not ok then return 0 end
+  local n = tonumber(v) or 0
+  if n <= 0 then return 0 end
+  -- three plateaus so the sky does not airbrush back to normal
+  if n > 0.66 then return 1 end
+  if n > 0.33 then return 0.5 end
+  return 0.25
+end
+
+-- Push a 0..1 RGB toward higher chroma without leaving the 5-bit lattice
+-- neighbours too far: sat 0 = unchanged, 1 = hard pop after rain.
+local function satBoost(r, g, b, sat)
+  if sat <= 0 then return r, g, b end
+  local avg = (r + g + b) / 3
+  local nr = avg + (r - avg) * (1 + 0.55 * sat)
+  local ng = avg + (g - avg) * (1 + 0.55 * sat)
+  local nb = avg + (b - avg) * (1 + 0.55 * sat)
+  if nr < 0 then nr = 0 elseif nr > 1 then nr = 1 end
+  if ng < 0 then ng = 0 elseif ng > 1 then ng = 1 end
+  if nb < 0 then nb = 0 elseif nb > 1 then nb = 1 end
+  return nr, ng, nb
+end
+
 function Sky.bands()
   local pal = DayNight.palette()
   local shades = PaletteFX.effectiveColors(pal) or pal
   local n = math.min(#shades, #pal, Sky.MAX_BANDS)
+  local sat = afterRainAmt()
   local key, k = cache.key, 0
   local same = cache.bands ~= nil and #cache.bands == n
+               and cache.sat == sat
   for i = 1, n do
     local c = shades[i]
     for ch = 1, 3 do
@@ -112,10 +163,104 @@ function Sky.bands()
   for i = 1, n do
     -- backwards: the palette's darkest rung is the top band
     local c = shades[n - i + 1]
-    bands[i] = { c[1] / 255, c[2] / 255, c[3] / 255 }
+    local r, g, b = c[1] / 255, c[2] / 255, c[3] / 255
+    r, g, b = satBoost(r, g, b, sat)
+    bands[i] = { r, g, b }
   end
   cache.bands = bands
+  cache.sat = sat
   return bands
+end
+
+-- Low fog density 0..1 for the current hour + map. Dawn/dusk (and a share
+-- of golden hour) only; denser under canopy and on coast; zero under heavy
+-- rain (the shower owns the air) and at Quality.fogBands() == 0.
+function Sky.fogAmount(map)
+  local nBands = 0
+  if Quality.fogBands then
+    local ok, n = pcall(Quality.fogBands)
+    if ok then nBands = n or 0 end
+  end
+  if nBands <= 0 then return 0 end
+
+  local mix = DayNight.mix(DayNight.time())
+  local hour = (mix.dawn or 0) + (mix.dusk or 0)
+             + 0.40 * (mix.golden or 0)
+  if hour < 0.04 then return 0 end
+
+  -- rain owns the air; post-rain may keep a thin veil (half strength)
+  local wet = 0
+  local okv, kind, power = pcall(Weather.visible)
+  if okv and kind and power then wet = power end
+  if wet > 0.25 then
+    hour = hour * (1 - math.min(1, wet))
+  end
+  local ar = afterRainAmt()
+  if ar > 0 and wet <= 0 then
+    hour = math.max(hour, 0.22 * ar)
+  end
+  if hour < 0.04 then return 0 end
+
+  local dens = hour
+  if map and DayNight.isCanopy(map) then dens = dens * 1.55 end
+  if map and map.id and Sky.COAST[map.id] then dens = dens * 1.40 end
+  if dens > 1 then dens = 1 end
+  return dens
+end
+
+-- Cloud coverage 0..1 for the sky pass. Fair weather still carries a few
+-- puffs so the sky is not a bare ramp; overcast (Weather -> DayNight.overcast)
+-- and heavy rain fill the deck. CLOUDS row can pin OFF or force THICK.
+function Sky.cloudAmount()
+  local steps = 0
+  if Quality.cloudSteps then
+    local ok, n = pcall(Quality.cloudSteps)
+    if ok then steps = n or 0 end
+  end
+  if steps <= 0 then return 0 end
+
+  local mode = 1
+  do
+    local ok, v = pcall(Sky.cloudSetting.get, Sky.cloudSetting)
+    if ok and tonumber(v) then mode = tonumber(v) end
+  end
+  if mode <= 0 then return 0 end
+
+  local overcast = tonumber(DayNight.overcast) or 0
+  if overcast < 0 then overcast = 0 elseif overcast > 1 then overcast = 1 end
+
+  -- rain/snow visible power pulls a deck over even before overcast ramps
+  local wet = 0
+  local okv, kind, power = pcall(Weather.visible)
+  if okv and kind and power then wet = tonumber(power) or 0 end
+  if wet < 0 then wet = 0 elseif wet > 1 then wet = 1 end
+
+  local amt
+  if mode >= 2 then
+    -- THICK: showcase deck; weather can only make it heavier
+    amt = 0.62 + 0.38 * math.max(overcast, wet)
+  else
+    -- ON: sparse fair-weather puffs that thicken with the front
+    amt = 0.18 + 0.82 * math.max(overcast, wet * 0.95)
+  end
+
+  -- night still has clouds, but fewer of them (stars need room)
+  local mix = DayNight.mix(DayNight.time())
+  local night = (mix.night or 0)
+  if night > 0 then
+    amt = amt * (1.0 - 0.35 * night)
+  end
+
+  if amt < 0 then amt = 0 elseif amt > 1 then amt = 1 end
+  return amt
+end
+
+-- 0..1 how deep into night the cloud paint should cool (shader cloudNight).
+function Sky.cloudNight()
+  local mix = DayNight.mix(DayNight.time())
+  local n = (mix.night or 0) + 0.35 * (mix.dusk or 0)
+  if n < 0 then n = 0 elseif n > 1 then n = 1 end
+  return n
 end
 
 -- The hour's haze -- the palest band, in 0..1 -- which is both the sky's
@@ -137,6 +282,8 @@ function Sky.dress(sky)
   local bands = Sky.bands()
   local haze = bands and bands[#bands]
   if not (sky and haze) then return sky end
+  -- map id rides the descriptor so fog density can see canopy/coast without
+  -- Sky requiring the overworld (cycle risk). Caller may overwrite.
   sky[1], sky[2], sky[3] = haze[1], haze[2], haze[3]
   sky.bands = bands
   return sky
@@ -176,6 +323,16 @@ uniform float glowAmt;  // twilight warmth around the low sun; 0 = none
 uniform vec2 glowPos;   // the sun disc, in canvas pixels
 uniform float glowInvR; // 1 / the glow's reach
 uniform vec3 glowColor;
+// Volumetric clouds (cel density + wind advection). steps==0 skips the
+// march so a phone rung never pays for it.
+uniform float cloudAmt;    // coverage 0..1
+uniform float cloudTime;   // seconds * rate
+uniform vec2  cloudWind;   // unit XZ bearing
+uniform float cloudSteps;  // 0 / 4 / 6 / 8
+uniform vec3  cloudLit;    // sunlit face
+uniform vec3  cloudShade;  // self-shadow face
+uniform float cloudNight;  // 0 day .. 1 deep night dim
+uniform float frameW;      // canvas width for aspect-correct UVs
 
 // Band `i`, read from its own texel centre. The index is clamped rather than
 // trusted: `pos` below can land exactly on `count` when the arithmetic is
@@ -184,6 +341,46 @@ uniform vec3 glowColor;
 // end of the image.
 vec3 bandAt(float i) {
   return Texel(ramp, vec2((clamp(i, 0.0, count - 1.0) + 0.5) / count, 0.5)).rgb;
+}
+
+// Cheap value noise -- two hashes, bilinear. Good enough for puffy
+// density and free of any texture unit (the ramp already occupies one).
+float cloudHash(vec2 p) {
+  return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+}
+float cloudNoise(vec2 p) {
+  vec2 i = floor(p);
+  vec2 f = fract(p);
+  f = f * f * (3.0 - 2.0 * f);
+  float a = cloudHash(i);
+  float b = cloudHash(i + vec2(1.0, 0.0));
+  float c = cloudHash(i + vec2(0.0, 1.0));
+  float d = cloudHash(i + vec2(1.0, 1.0));
+  return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+}
+float cloudFbm(vec2 p) {
+  float v = 0.0;
+  float a = 0.5;
+  // fixed 4 octaves: unrolled by the compiler, safe on ES mediump
+  v += a * cloudNoise(p); p = p * 2.03 + vec2(17.0, 9.0); a *= 0.5;
+  v += a * cloudNoise(p); p = p * 2.03 + vec2(17.0, 9.0); a *= 0.5;
+  v += a * cloudNoise(p); p = p * 2.03 + vec2(17.0, 9.0); a *= 0.5;
+  v += a * cloudNoise(p);
+  return v;
+}
+
+// Density at a sample point inside the cloud slab. `h` is altitude in the
+// slab 0..1 (low = cloud base, high = tops), `xz` is world-ish UV advected
+// by wind so the deck TRAVELS rather than crawling in screen space.
+float cloudDensity(vec2 xz, float h, float thr) {
+  // slightly lower frequency with height so tops are softer than the base
+  float n = cloudFbm(xz * mix(1.35, 0.85, h) + vec2(0.0, h * 1.7));
+  // vertical envelope: flat base, puffy mid, thin tops (the "volume" read)
+  float envelope = smoothstep(0.02, 0.18, h) * (1.0 - smoothstep(0.62, 0.98, h));
+  // erode by a second noise so the mass is not one blob
+  float carve = cloudNoise(xz * 2.4 + vec2(h * 3.1, 11.0));
+  n = n - carve * 0.18;
+  return max(n - thr, 0.0) * envelope;
 }
 
 vec4 effect(vec4 color, Image tex, vec2 tc, vec2 sc) {
@@ -206,6 +403,66 @@ vec4 effect(vec4 color, Image tex, vec2 tc, vec2 sc) {
     float lvl = floor(g * 4.0);
     if (g * 4.0 - lvl > 0.5 && parity < 0.5) { lvl += 1.0; }
     c = mix(c, glowColor, min(lvl / 3.0, 1.0) * 0.65);
+  }
+  // ------- volumetric clouds
+  //
+  // A short front-to-back ray through a slab of density, sampled on the
+  // diorama's cell grid so the mass is painted rather than filtered. The
+  // steps uniform caps cost (Quality.cloudSteps); OFF / 1/4 RES sends 0
+  // and this whole block is one compare. Coverage from Sky.cloudAmount
+  // (fair weather + overcast + CLOUDS row). Not true 3D lighting -- the
+  // shade gradient is height in the slab, which is enough for a cel
+  // volume and costs no secondary ray.
+  if (cloudSteps > 0.5 && cloudAmt > 0.01) {
+    vec2 cc = (floor(sc / cell) + 0.5) * cell;
+    float y01 = clamp(cc.y / max(edge, 1.0), 0.0, 1.0);
+    float x01 = cc.x / max(frameW, 1.0);
+    // stay out of the very top cells (sun/moon disc room) and thin out
+    // hard against the horizon so the haze band still reads
+    float skyWindow = smoothstep(0.02, 0.14, y01) * (1.0 - smoothstep(0.72, 0.98, y01));
+    if (skyWindow > 0.01) {
+      // threshold drops as coverage rises: more of the noise becomes cloud
+      float thr = mix(0.58, 0.22, clamp(cloudAmt, 0.0, 1.0));
+      // view ray into the slab: y01 is "looking down the sky", so deeper
+      // steps also slide in X with perspective-ish foreshortening
+      vec2 origin = vec2((x01 - 0.5) * 4.2, y01 * 2.6);
+      vec2 adv = cloudWind * cloudTime;
+      float accum = 0.0;
+      float lightAcc = 0.0;
+      // fixed 8-iteration loop; early steps ignored when cloudSteps is lower
+      for (int i = 0; i < 8; i++) {
+        if (float(i) >= cloudSteps) break;
+        float t = (float(i) + 0.5) / max(cloudSteps, 1.0);
+        // altitude through the slab (base -> top)
+        float h = t;
+        // parallax: farther samples shift with view angle
+        vec2 xz = origin * mix(1.0, 1.55, t) + adv * mix(0.55, 1.15, t)
+                + vec2(0.0, t * 0.85);
+        float d = cloudDensity(xz, h, thr);
+        // front-to-back over: later samples only fill remaining air
+        float contribute = d * (1.0 - accum) * 0.72;
+        accum += contribute;
+        // lit weight favors samples high in the slab (sun hits the tops)
+        lightAcc += contribute * mix(0.35, 1.0, h);
+        if (accum > 0.92) break;
+      }
+      accum = clamp(accum * skyWindow * (0.55 + 0.70 * cloudAmt), 0.0, 1.0);
+      // cel quantize + checker between rungs (the sky's own idiom)
+      float lvl = floor(accum * 3.0 + 0.001);
+      if (accum * 3.0 - lvl > 0.45 && parity < 0.5) lvl += 1.0;
+      float dens = min(lvl / 3.0, 1.0);
+      float shade = 0.0;
+      if (accum > 1e-4) shade = clamp(lightAcc / accum, 0.0, 1.0);
+      vec3 cld = mix(cloudShade, cloudLit, shade);
+      // twilight: borrow a share of the sun glow so a sunset deck warms
+      if (glowAmt > 0.05) {
+        cld = mix(cld, glowColor, glowAmt * 0.35 * shade);
+      }
+      // night: cool and dim, never pure black (still a mass against stars)
+      vec3 nightCld = cld * 0.28 + vec3(0.04, 0.05, 0.10);
+      cld = mix(cld, nightCld, cloudNight);
+      c = mix(c, cld, dens);
+    }
   }
   return vec4(c, alpha);
 }
@@ -537,6 +794,136 @@ end
 
 Sky._paintStars = paintStars      -- named for the suite
 
+-- ------- low fog (cel bands + checker dither near the horizon)
+--
+-- Not a depth fog and not particles: a short stack of flat pale bands at
+-- the BOTTOM of the sky region, with the same xadrez dither the sky uses
+-- between its own bands. Dawn/dusk density from Sky.fogAmount; band count
+-- from Quality.fogBands so the phone rung can turn it off entirely.
+
+local FOG_COL = { 0.78, 0.82, 0.90 }
+
+local function paintFog(w, edge, cell, amount, nBands)
+  if amount <= 0 or nBands <= 0 then return end
+  local g = love.graphics
+  local fogH = math.floor(edge * (0.18 + 0.32 * amount))
+  if fogH < cell * 2 then fogH = cell * 2 end
+  local y0 = math.max(0, math.floor(edge - fogH))
+  local bandH = math.max(cell, math.floor(fogH / nBands))
+  local aBase = 0.18 + 0.42 * amount
+  -- one solid rect per band + a sparse checker second pass (cell*2 stride)
+  -- so the phone rung never pays a per-pixel loop over the sky region
+  for i = 0, nBands - 1 do
+    local y = y0 + i * bandH
+    local h = (i == nBands - 1) and (edge - y) or bandH
+    if h <= 0 then break end
+    local a = aBase * (0.45 + 0.55 * ((i + 1) / nBands))
+    g.setColor(FOG_COL[1], FOG_COL[2], FOG_COL[3], a * 0.50)
+    g.rectangle("fill", 0, y, w, h)
+    g.setColor(FOG_COL[1], FOG_COL[2], FOG_COL[3], a)
+    local step = cell * 2
+    for yy = y, y + h - 1, step do
+      local x0 = ((math.floor(yy / cell) + i) % 2) * cell
+      for xx = x0, w - 1, step do
+        g.rectangle("fill", xx, yy, cell, cell)
+      end
+    end
+  end
+  g.setColor(1, 1, 1, 1)
+end
+
+-- ------- rainbow (post-rain, temporary, painted as hard colour arcs)
+--
+-- Four flat spectral steps, no gradient, no bloom. Geometry is a set of
+-- concentric arc strips in the upper-right of the sky region so it reads
+-- as a rainbow without a mesh or a second render target.
+
+local RAINBOW = {
+  { 0.90, 0.22, 0.22 },
+  { 0.95, 0.55, 0.12 },
+  { 0.95, 0.90, 0.18 },
+  { 0.22, 0.72, 0.28 },
+  { 0.22, 0.42, 0.90 },
+  { 0.55, 0.22, 0.75 },
+}
+
+local function paintRainbow(w, edge, cell, amount)
+  if amount <= 0 then return end
+  if Quality.rainbow and not Quality.rainbow() then return end
+  local g = love.graphics
+  -- centre below the horizon so only the upper arc shows
+  local cx = math.floor(w * 0.55)
+  local cy = math.floor(edge + edge * 0.15)
+  local rOuter = math.floor(edge * 0.95)
+  local ring = math.max(cell * 2, math.floor(edge * 0.045))
+  local a = amount >= 0.5 and 0.55 or 0.30
+  -- stride cell*2: rainbow is a short-lived ornament, not a full-sky fill
+  local step = cell * 2
+  for i, col in ipairs(RAINBOW) do
+    local r1 = rOuter - (i - 1) * ring
+    local r0 = r1 - ring
+    if r0 < cell then break end
+    g.setColor(col[1], col[2], col[3], a)
+    for y = 0, edge - 1, step do
+      for x = 0, w - 1, step do
+        local dx = x + cell - cx
+        local dy = y + cell - cy
+        local d2 = dx * dx + dy * dy
+        if d2 >= r0 * r0 and d2 < r1 * r1 then
+          if ((x / cell) + (y / cell) + i) % 2 < 1 then
+            g.rectangle("fill", x, y, cell, cell)
+          end
+        end
+      end
+    end
+  end
+  g.setColor(1, 1, 1, 1)
+end
+
+Sky._paintFog = paintFog
+Sky._paintRainbow = paintRainbow
+
+-- Shaderless cloud stand-in: a handful of cel puffs on the cell grid so a
+-- driver that refused the sky shader still shows volume rather than a bare
+-- ramp. Not the raymarch -- just enough mass to read as "there are clouds".
+local function paintCloudsCPU(w, edge, cell, amount)
+  if amount <= 0 or edge < cell * 4 then return end
+  local g = love.graphics
+  local t = 0
+  if love.timer and love.timer.getTime then t = love.timer.getTime() end
+  local wx, wz = 0.94, 0.34
+  if Wind and Wind.DIR then
+    wx = tonumber(Wind.DIR[1]) or wx
+    wz = tonumber(Wind.DIR[2]) or wz
+  end
+  local drift = t * 12
+  local n = 5 + math.floor(amount * 7)
+  local litA = 0.35 + 0.40 * amount
+  for i = 1, n do
+    local seed = i * 97.13
+    local cx = ((seed * 13.7 + drift * wx) % (w + 80)) - 40
+    local cy = edge * (0.18 + (seed * 0.017) % 0.45)
+    local rx = cell * (4 + (seed * 0.03) % 6) * (0.7 + amount)
+    local ry = cell * (2 + (seed * 0.02) % 3) * (0.7 + amount)
+    -- two rungs: body + lighter top (fake volume)
+    g.setColor(0.55, 0.58, 0.68, litA * 0.85)
+    g.rectangle("fill",
+      math.floor((cx - rx) / cell) * cell,
+      math.floor((cy - ry * 0.4) / cell) * cell,
+      math.floor(rx * 2 / cell) * cell,
+      math.floor(ry * 1.2 / cell) * cell)
+    g.setColor(0.94, 0.96, 0.99, litA)
+    g.rectangle("fill",
+      math.floor((cx - rx * 0.7) / cell) * cell,
+      math.floor((cy - ry) / cell) * cell,
+      math.floor(rx * 1.4 / cell) * cell,
+      math.floor(ry * 0.85 / cell) * cell)
+  end
+  g.setColor(1, 1, 1, 1)
+end
+
+Sky._paintCloudsCPU = paintCloudsCPU
+
 -- Paint the sky into the bound canvas, filling it from the top edge down to
 -- `horizonY` (or to SPAN of the frame when the horizon is out of it).
 --
@@ -575,6 +962,13 @@ function Sky.paint(w, h, sky, horizonY, cell, body)
   if g.setBlendMode then g.setBlendMode("alpha") end
 
   local glowAmt = body and not body.moon and (body.glowAmt or 0) or 0
+  local cloudAmt = Sky.cloudAmount()
+  local cloudSteps = 0
+  if Quality.cloudSteps then
+    local okS, ns = pcall(Quality.cloudSteps)
+    if okS then cloudSteps = ns or 0 end
+  end
+  if cloudAmt <= 0 then cloudSteps = 0 end
   local sh = getShader()
   local ramp = sh and rampFor(bands)
   if not ramp then sh = nil end       -- no ramp, no gradient: paint it flat
@@ -594,7 +988,43 @@ function Sky.paint(w, h, sky, horizonY, cell, body)
         sh:send("glowPos", { body.x, body.y })
         sh:send("glowInvR", 1 / math.max(1, w * 0.55))
         sh:send("glowColor", { gc[1] / 255, gc[2] / 255, gc[3] / 255 })
+      else
+        -- still bind so the uniform is never stale from a prior frame
+        sh:send("glowPos", { 0, 0 })
+        sh:send("glowInvR", 0)
+        sh:send("glowColor", { 1, 1, 1 })
       end
+      -- volumetric clouds: always send (steps 0 is the off switch)
+      sh:send("cloudAmt", cloudAmt)
+      sh:send("cloudSteps", cloudSteps)
+      sh:send("cloudNight", Sky.cloudNight())
+      sh:send("frameW", w)
+      local t = 0
+      if love.timer and love.timer.getTime then t = love.timer.getTime() end
+      sh:send("cloudTime", t * 0.12)
+      local wx, wz = 0.94, 0.34
+      if Wind and Wind.DIR then
+        wx = tonumber(Wind.DIR[1]) or wx
+        wz = tonumber(Wind.DIR[2]) or wz
+      end
+      local len = math.sqrt(wx * wx + wz * wz)
+      if len > 1e-4 then wx, wz = wx / len, wz / len end
+      sh:send("cloudWind", { wx, wz })
+      -- overcast cools the deck toward DayNight's grey; clear day is white
+      local over = tonumber(DayNight.overcast) or 0
+      if over < 0 then over = 0 elseif over > 1 then over = 1 end
+      local lit = {
+        0.96 - 0.18 * over,
+        0.97 - 0.16 * over,
+        0.99 - 0.10 * over,
+      }
+      local shade = {
+        0.55 - 0.08 * over,
+        0.58 - 0.06 * over,
+        0.68 - 0.02 * over,
+      }
+      sh:send("cloudLit", lit)
+      sh:send("cloudShade", shade)
     end)
     if sent then
       g.setShader(sh)
@@ -605,7 +1035,32 @@ function Sky.paint(w, h, sky, horizonY, cell, body)
       sh = nil
     end
   end
-  if not sh then paintFlat(w, h, bands, edge, alpha, cell) end
+  if not sh then
+    paintFlat(w, h, bands, edge, alpha, cell)
+    -- shaderless path still gets a cheap cel puff field so OFF is the only
+    -- way to a bare sky, not a driver refusal
+    if cloudAmt > 0.05 and cloudSteps > 0 then
+      paintCloudsCPU(w, math.min(h, edge), cell, cloudAmt)
+    end
+  end
+
+  -- fog and rainbow sit ON the bands, UNDER stars/disc: atmosphere of the
+  -- day, not night ornaments. Map is optional (density still works without).
+  local map = sky and sky.map
+  local fogAmt = Sky.fogAmount(map)
+  local nFog = 0
+  if Quality.fogBands then
+    local okf, nf = pcall(Quality.fogBands)
+    if okf then nFog = nf or 0 end
+  end
+  if fogAmt > 0 and nFog > 0 then
+    paintFog(w, math.min(h, edge), cell, fogAmt, nFog)
+  end
+  local ar = afterRainAmt()
+  if ar > 0 then
+    paintRainbow(w, math.min(h, edge), cell, ar)
+  end
+
   -- the stars go over the bands and UNDER the moon -- a body that crossed
   -- one would be behind it, which is the one thing a sky may not do -- and
   -- like the disc they are plain rectangles, so they survive a frame the

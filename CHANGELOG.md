@@ -1,5 +1,58 @@
 # Changelog
 
+## Versioning
+
+Releases use **semver** plus an optional channel:
+
+```
+MAJOR.MINOR.PATCH[-CHANNEL]
+```
+
+| Part | Meaning |
+| --- | --- |
+| `MAJOR` | Breaking / large rework of the diorama contract |
+| `MINOR` | New features (still installable over the prior minor) |
+| `PATCH` | Fixes and small polish only |
+| `CHANNEL` | Build flavour only — today `mobile` (cheap RES/SHADOWS defaults). **Not** a feature name. |
+
+**Do not** encode features in the version string (no `.water`, `.rain`, `.grass`, …). Feature names live in this changelog and in release notes.
+
+Tags and packages:
+
+- Git tag: `v1.17.0-mobile`
+- Zip asset: `TERRARIUM-1.17.0-mobile.zip`
+- `manifest.json` / catalog `version` field: `1.17.0-mobile`
+
+## 1.17.0-mobile
+
+### Added
+
+- **Volumetric clouds** in the sky pass (cel density, wind-advected). New
+  **CLOUDS** options row: ON / THICK / OFF. Step count follows RES so 1/4
+  turns clouds off with the other ornaments.
+- **3D tall grass** from an authored tuft bake under `assets/ground/grass/`
+  (`grass.mesh.bin` + `grass.png`). Stamped per grass tile with random yaw
+  and scale. Falls back to the classic tileset slab if the bake is missing.
+- **Grass foot-crush**: player and walkers part the meadow (radial push +
+  height flatten) while wind leans the tips.
+- **Low fog bands** near the horizon at dawn/dusk (coast/canopy denser),
+  quality-gated; **post-rain rainbow** ornament.
+- Weather / overcast polish that feeds sky, clouds, and light together.
+
+### Changed
+
+- Wind: stronger outdoor range, three-harmonic wave shared by grass, roamers
+  and the vertex shader so the meadow stays on one clock.
+- Version **naming**: dropped feature suffixes (see Versioning above). This
+  release supersedes the interim `1.16.1-mobile.water` tag style.
+
+### Assets
+
+- `assets/ground/grass/grass.mesh.bin`, `grass.png`, `grass.meta.json`
+  (optimized from a source GLB; the GLB itself is authoring-only).
+- Source GLB stays out of the package; rebuild with
+  `tools/optimize_grass_glb.py`.
+
 ## 1.16.1-mobile.water
 
 ### Added

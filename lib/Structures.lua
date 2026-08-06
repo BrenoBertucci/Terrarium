@@ -224,7 +224,8 @@ function Structures.forMap(map)
   S = { shapeAt = shapeAt, tileAt = tileAt, outdoor = Map.isOutdoor(def),
         hideBareRing = hullRingOnly or nil,
         runs = {}, skip = {}, ground = {}, doorFold = {}, objectQuads = {},
-        grassQuads = {}, flowerQuads = {}, roundStamps = {}, figures = {} }
+        grassQuads = {}, grassInstances = {}, flowerQuads = {},
+        roundStamps = {}, figures = {} }
   Buildings.build(S, map, pixels(tileset), perRow)
 
   -- Fold doors into their buildings. A door cell is WALKABLE (the player
@@ -2468,6 +2469,16 @@ end
 function Structures.buildGrass(S, map, x0, x1, y0, y1, data)
   local templates = {}
   local quads = S.grassQuads
+  local instances = S.grassInstances
+  -- Prefer the authored 3D tuft (assets/ground/grass/) when the bake is
+  -- present. One instance per grass tile, random yaw/scale; the mesher
+  -- stamps the triangle mesh. Falls back to the classic tileset slab when
+  -- the bake is missing so a stripped package still has grass.
+  local Grass3D = nil
+  do
+    local ok, G = pcall(V.require, "Grass3D")
+    if ok and G and G.available and G.available() then Grass3D = G end
+  end
   for ty = y0, y1 do
     for tx = x0, x1 do
       Budget.tick()
@@ -2479,21 +2490,25 @@ function Structures.buildGrass(S, map, x0, x1, y0, y1, data)
       -- tile-level test sprouted tufts all over town plazas.
       if s and s.art == "grass"
          and map:isGrassCell(math.floor(tx / 2), math.floor(ty / 2)) then
-        local tileId = S.tileAt[k]
-        local tpl = templates[tileId]
-        if not tpl then
-          tpl = grassTemplate(map, data, tileId)
-          templates[tileId] = tpl
-        end
-        local wx, wz = tx * 8, ty * 8
-        for _, q in ipairs(tpl) do
-          quads[#quads + 1] = {
-            { q[1][1] + wx, q[1][2], q[1][3] + wz },
-            { q[2][1] + wx, q[2][2], q[2][3] + wz },
-            { q[3][1] + wx, q[3][2], q[3][3] + wz },
-            { q[4][1] + wx, q[4][2], q[4][3] + wz },
-            uv = q.uv, shade = q.shade,
-          }
+        if Grass3D then
+          instances[#instances + 1] = Grass3D.instanceForTile(tx, ty)
+        else
+          local tileId = S.tileAt[k]
+          local tpl = templates[tileId]
+          if not tpl then
+            tpl = grassTemplate(map, data, tileId)
+            templates[tileId] = tpl
+          end
+          local wx, wz = tx * 8, ty * 8
+          for _, q in ipairs(tpl) do
+            quads[#quads + 1] = {
+              { q[1][1] + wx, q[1][2], q[1][3] + wz },
+              { q[2][1] + wx, q[2][2], q[2][3] + wz },
+              { q[3][1] + wx, q[3][2], q[3][3] + wz },
+              { q[4][1] + wx, q[4][2], q[4][3] + wz },
+              uv = q.uv, shade = q.shade,
+            }
+          end
         end
       end
     end

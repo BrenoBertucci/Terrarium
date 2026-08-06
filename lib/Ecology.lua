@@ -217,6 +217,11 @@ local RAIN_PULL = {
   FIRE = -0.8, ROCK = -0.3, GROUND = -0.3,
 }
 
+-- While Weather.storming() (heavy rain that can strike), electric types
+-- get a real boost rather than the mild rain lean above. Same 1-way read
+-- as everything else that asks the weather -- no require cycle.
+local STORM_ELECTRIC = 1.85
+
 local SNOW_PULL = {
   ICE = 2.2, WATER = 0.4,
   FIRE = -0.7, BUG = -0.7, GRASS = -0.4,
@@ -230,9 +235,17 @@ local function weatherWeight(species, kind, power)
                and Game.data.pokemon[species]
   local types = def and def.types
   if not types then return 1 end
+  local storm = false
+  if kind == "rain" then
+    local ok, s = pcall(Weather.storming)
+    storm = ok and s and true or false
+  end
   local best = 0
   for _, t in ipairs(types) do
     local pull = pulls[t]
+    if storm and t == "ELECTRIC" then
+      pull = STORM_ELECTRIC
+    end
     -- the STRONGEST opinion wins rather than the average: a Poliwag is a
     -- water Pokemon in the rain, and averaging a second type in would say
     -- it is only half of one

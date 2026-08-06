@@ -109,6 +109,7 @@ local Light = V.require("Light")
 local RayFX = V.require("RayFX")
 local AmbientLife = V.require("AmbientLife")
 local Weather = V.require("Weather")
+local Sky = V.require("Sky")
 local GroundFX = V.require("GroundFX")
 local Ecology = V.require("Ecology")
 local AmbientSound = V.require("AmbientSound")
@@ -566,6 +567,16 @@ local SETTINGS = {
     .. "diorama rather than across the lens, and AUTO chooses it on its own "
     .. "through the winter of the same clock the DAYTIME row's SYNC rung "
     .. "follows.",
+    full = true },
+  -- `full = true` like WEATHER: clouds are what the sky is doing, not a
+  -- camera filter, and FULL is where people watch a storm roll in.
+  { Sky.cloudSetting,
+    "Volumetric clouds in the sky pass -- cel density, checker-dithered, "
+    .. "pushed along by the WIND row. ON keeps a few fair-weather puffs that "
+    .. "thicken into a deck as a shower builds (DayNight.overcast). THICK is "
+    .. "a heavy sky even on a clear hour. OFF is bands only. Step count "
+    .. "follows the RES row so a phone never raymarches what it cannot "
+    .. "afford; at 1/4 the clouds switch off with the other ornaments.",
     full = true },
   -- `full = true` like WEATHER, and for the same reason: what the ground is
   -- doing after a shower is what the world is doing, not a knob on the

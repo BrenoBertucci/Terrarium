@@ -43,11 +43,17 @@ graphify-out/
 *.nds
 *.rom
 *.bin
+# Shipped grass bake (tools/optimize_grass_glb.py). ROM dumps stay ignored.
+!assets/ground/grass/grass.mesh.bin
 *.bps
 *.ips
 *.ups
 *.xdelta
 assets/ground/source/*.zip
+# Authoring-only GLB (~20 MB); the bake is what ships.
+assets/ground/grass/*.glb
+publish-zip/
+probe_out_atm/
 
 # Save data: a player's own progress, and on some platforms their name.
 *.sav

@@ -174,18 +174,42 @@ Weather.STRIKE_EVERY_MIN = 12
 Weather.STRIKE_EVERY_MAX = 45
 Weather.FLASH_LEN = 0.34            -- seconds the sky stays lit
 
+-- After a rain shower clears: rainbow + saturated sky for a short spell of
+-- absolute (wall-clock) time, then gone with no residual flag left behind.
+-- 180s is three minutes of real time -- the same clock Weather.timer rides.
+Weather.AFTER_RAIN = 180
+
 local strike = { at = 1e9, next = 20, pending = false, far = 0 }
 
--- 0..1: how much white to lay over the frame this instant. Two blinks rather
--- than one fade -- a real strike flickers, and one clean ramp reads as a
--- screen transition.
-function Weather.flash()
+-- after.untilAbs is love.timer absolute seconds; 0 means idle.
+-- hadRain latches while a rain spell is (or was) in progress so a pin->OFF
+-- that nils `kind` before power hits zero still arms the post-rain spell.
+local after = { untilAbs = 0, hadRain = false }
+
+local function absNow()
+  if love and love.timer and love.timer.getTime then
+    return love.timer.getTime()
+  end
+  return 0
+end
+
+-- Continuous 0..1 curve (for math); Weather.flash posterises it to hard steps.
+local function flashRaw()
   local t = strike.at
   if t >= Weather.FLASH_LEN then return 0 end
   local shape = 1 - t / Weather.FLASH_LEN
   -- the flicker: bright, a gap, bright again
   if t > 0.06 and t < 0.11 then shape = shape * 0.15 end
   return shape * (0.55 + 0.45 * (1 - strike.far))
+end
+
+-- 0 / 0.5 / 1 only: a cel strike is a hard plate of light, not a soft ramp.
+-- Soft alpha read as bloom-adjacent and as a screen transition.
+function Weather.flash()
+  local cont = flashRaw()
+  if cont < 0.18 then return 0 end
+  if cont < 0.55 then return 0.5 end
+  return 1
 end
 
 -- Once per strike, when the sound has had time to arrive: the strike's
@@ -196,6 +220,52 @@ function Weather.thunderDue()
   if strike.at < delay then return nil end
   strike.pending = false
   return strike.far
+end
+
+-- Heavy rain that can strike: the same gate the strike scheduler uses.
+-- Ecology and AmbientSound read this; nothing writes back.
+function Weather.storming()
+  local kind, power = Weather.visible()
+  return kind == "rain" and (power or 0) >= Weather.STRIKE_ABOVE
+end
+
+-- 0..1 remaining intensity of the post-rain spell (rainbow + sky sat).
+-- Absolute time so two readers in one frame never desync on dt.
+function Weather.afterRain()
+  local u = after.untilAbs
+  if not u or u <= 0 then return 0 end
+  local left = u - absNow()
+  if left <= 0 then
+    after.untilAbs = 0
+    return 0
+  end
+  local n = left / Weather.AFTER_RAIN
+  if n > 1 then n = 1 end
+  return n
+end
+
+-- Probe / debug: arm a strike now. `far` 0 = overhead, 1 = distant.
+function Weather.forceStrike(far)
+  local f = tonumber(far)
+  if f == nil then f = 0.35 end
+  if f < 0 then f = 0 elseif f > 1 then f = 1 end
+  strike.at, strike.pending, strike.far = 0, true, f
+end
+
+-- Probe / debug: start (or refresh) the post-rain window.
+function Weather.armAfterRain(seconds)
+  local s = tonumber(seconds) or Weather.AFTER_RAIN
+  if s < 0 then s = 0 end
+  after.untilAbs = absNow() + s
+end
+
+-- Delay seconds until thunder for a given far (or the pending strike's far).
+function Weather.thunderDelay(far)
+  local f = far
+  if f == nil then f = strike.far end
+  f = tonumber(f) or 0
+  if f < 0 then f = 0 elseif f > 1 then f = 1 end
+  return 0.15 + f * 2.4
 end
 
 -- ------- what the rest of the mod asks
@@ -472,9 +542,26 @@ local function tick(dt)
   -- And only when it has finished falling is the spell really over: `kind`
   -- outlives `target` by the whole fade, because the rain still coming down
   -- has to know what it is while it thins out.
+  --
+  -- Leaving rain (not snow) arms the post-rain spell once: rainbow and a
+  -- short saturated sky. Snow does not leave a rainbow. Re-entering wet
+  -- cancels any leftover post-rain so the two states never stack.
+  if state.kind == "rain" then
+    after.hadRain = true
+  elseif state.kind == "snow" then
+    after.hadRain = false
+  end
+  if state.kind and state.power > 0.08 then
+    after.untilAbs = 0
+  end
   if state.target == 0 and state.power <= 0.005 then
+    local armAfter = after.hadRain
     state.power = 0
     state.kind = nil
+    after.hadRain = false
+    if armAfter then
+      after.untilAbs = absNow() + Weather.AFTER_RAIN
+    end
   end
 
   -- ------- what the world reads
@@ -581,6 +668,7 @@ function Weather.update(dt)
   if ok then return end
   failed = true
   state.kind, state.power, state.target = nil, 0, 0
+  after.untilAbs, after.hadRain = 0, false
   DayNight.overcast, Water.wet, Water.snow = 0, 0, 0
   if Water.freeze then Water.freeze = 0 end
   drops, motes = {}, {}
@@ -695,10 +783,12 @@ function Weather.draw(project, scale, w, h)
 
   -- the strike, over everything: the sky lighting the whole diorama at once,
   -- which is what it does
+  -- hard plate: lit is already 0 / 0.5 / 1; alpha is a fixed step, not a fade
   local lit = Weather.flash()
   if lit > 0 and w and h then
     g.setBlendMode("add")
-    g.setColor(0.55, 0.60, 0.72, lit * 0.55)
+    local a = lit >= 1 and 0.72 or 0.40
+    g.setColor(0.62, 0.66, 0.82, a)
     g.rectangle("fill", 0, 0, w, h)
   end
 
@@ -745,7 +835,8 @@ function Weather.paintFlat()
   local lit = Weather.flash()
   if lit > 0 then
     g.setBlendMode("add")
-    g.setColor(0.55, 0.60, 0.72, lit * 0.55)
+    local a = lit >= 1 and 0.72 or 0.40
+    g.setColor(0.62, 0.66, 0.82, a)
     g.rectangle("fill", 0, 0, w, h)
   end
   g.setBlendMode(prevBlend or "alpha", prevAlpha)

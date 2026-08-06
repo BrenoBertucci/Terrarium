@@ -150,7 +150,9 @@ end
 local function skyFor(map)
   local sky = VoxelScene.skyColor(map, skyStrength(Voxel.angle))
   if not sky then return nil end
-  return Sky.dress(sky)
+  sky = Sky.dress(sky)
+  if sky then sky.map = map end
+  return sky
 end
 
 VoxelScene._skyFor = skyFor           -- named for the suite
@@ -588,6 +590,15 @@ local function posesOf(state, spriteColors)
         local ok, _, lz = pcall(Wind.leanAt, e.px + 8, e.py + 8,
                                 Roamer.WIND_HEIGHT)
         if ok and lz then drawPy = e.py + lz end
+      elseif e ~= state.player and not e.roamer and not onWater then
+        -- NPC "cloth" substitute: whole billboard leans with the meadow wave
+        -- (no skeleton in Gen 1 sprites). heightFrac 0.55 = torso, not feet.
+        -- Share 0.55 keeps it subtler than grass tips so people do not skate.
+        local ok, lx, lz = pcall(Wind.leanAt, e.px + 8, e.py + 8, 0.55)
+        if ok and lx then
+          drawPx = drawPx + lx * 0.55
+          drawPy = drawPy + lz * 0.55
+        end
       end
       -- Swim cut / ice stand / freeze-thaw blend (keeps Surf as the mount).
       local wl, hop = 0, 0
@@ -1003,12 +1014,43 @@ function VoxelScene.render(state, w, h, vw, vh, paletteFor)
   -- not lean, or a character, whose card is a trick played on the camera
   -- and would read as the person swaying rather than the meadow.
   local sway = Wind.amount()
-  Voxel3D.draw(ChunkMesher.grass(state.map), atlasFor(state.map), nil, pull,
+  -- 3D grass bake (if present) + foot-crush physics from everyone walking
+  -- through the meadow this frame.
+  local grassTex = atlasFor(state.map)
+  local Grass3D = nil
+  do
+    local ok, G = pcall(V.require, "Grass3D")
+    if ok and G and G.available and G.available() then
+      Grass3D = G
+      grassTex = G.texture() or grassTex
+    end
+  end
+  do
+    local crush = { n = 0, p = {} }
+    for _, p in ipairs(posed) do
+      if crush.n >= 4 then break end
+      -- anyone standing in the world parts the grass; moving harder
+      local lift = p.lift or 0
+      local moving = math.abs(lift) > 0.15
+      crush.n = crush.n + 1
+      crush.p[crush.n] = {
+        (p.px or 0) + 8,
+        (p.py or 0) + 8,
+        moving and 12 or 10,
+        moving and 1.0 or 0.6,
+      }
+    end
+    Voxel3D.crush = crush
+  end
+  Voxel3D.draw(ChunkMesher.grass(state.map), grassTex, nil, pull,
                nil, sway)
   for _, nb in ipairs(state.neighbors or {}) do
-    Voxel3D.draw(ChunkMesher.grass(nb.map), atlasFor(nb.map),
+    local ntex = grassTex
+    if not Grass3D then ntex = atlasFor(nb.map) end
+    Voxel3D.draw(ChunkMesher.grass(nb.map), ntex,
                  Mat4.translate(nb.ox, 0, nb.oy), pull, nil, sway)
   end
+  Voxel3D.crush = nil
   -- flower billboards: pulled like the characters and the grass, MINUS
   -- the depth of 8 world pixels along the view (8 sin a -- the camera
   -- looks along (0, -cos a, -sin a), so that is exactly one tile row of
