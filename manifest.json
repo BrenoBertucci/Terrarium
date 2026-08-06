@@ -1,7 +1,7 @@
 {
   "id": "TERRARIUM",
   "name": "Terrarium (a Dramatic Shape Voxel Mod fork)",
-  "version": "1.16.0-mobile.rain",
+  "version": "1.16.1-mobile.water",
   "api": 2,
   "entry": "main.lua",
   "profile": "content",
