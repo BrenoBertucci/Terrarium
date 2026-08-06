@@ -454,9 +454,16 @@ function BattleScene.render(state, arena, textures, token)
     -- the same meadow, shot from lower down, and grass that froze the
     -- moment a battle started would say so
     local sway = Wind.amount()
-    Voxel3D.draw(ChunkMesher.grass(host), atlasFor(host), nil, pull, nil, sway)
+    local grassTex = atlasFor(host)
+    do
+      local ok, G = pcall(V.require, "Grass3D")
+      if ok and G and G.available and G.available() and G.texture() then
+        grassTex = G.texture()
+      end
+    end
+    Voxel3D.draw(ChunkMesher.grass(host), grassTex, nil, pull, nil, sway)
     for _, nb in ipairs(neighbors) do
-      Voxel3D.draw(ChunkMesher.grass(nb.map), atlasFor(nb.map),
+      Voxel3D.draw(ChunkMesher.grass(nb.map), grassTex,
                    Mat4.translate(nb.ox, 0, nb.oy), pull, nil, sway)
     end
     local fpull = math.max(0, pull - 8 * math.sin(math.max(pitch, 0.05)))

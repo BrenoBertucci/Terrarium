@@ -43,6 +43,12 @@ assets/ground/source/snowpesadoarvore.png
 # needs PowerShell and System.Drawing, neither of which a player has.
 tools/sheet2strip.ps1
 
+# Source GLB for the 3D grass tuft (~21 MB of 4K PBR maps). The shipped
+# bake is assets/ground/grass/grass.png + grass.mesh.bin (~90 KB); rebuild
+# with tools/optimize_grass_glb.py after replacing the GLB.
+assets/ground/grass/grass-texture.glb
+tools/optimize_grass_glb.py
+
 # The probes for the newest features, on the same rule as the suite above.
 tests/ecology_ground_probe.lua
 tests/rayfx_water_probe.lua

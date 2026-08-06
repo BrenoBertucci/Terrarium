@@ -1041,8 +1041,20 @@ end
 -- characters so the southern row of a grass cell still overdraws a
 -- walker's feet (characters stamp over terrain, Gen 1 style, so ordinary
 -- terrain could never do this).
+--
+-- When assets/ground/grass/ ships a 3D tuft bake (Grass3D), the mesh is a
+-- triangle stamp of that model per grass tile and carries its own texture.
+-- Otherwise the classic tileset-slab quads.
 local function buildGrassMesh(map)
-  return quadsMesh(Structures.forMap(map).grassQuads)
+  local S = Structures.forMap(map)
+  if S.grassInstances and #S.grassInstances > 0 then
+    local ok, G = pcall(V.require, "Grass3D")
+    if ok and G and G.meshFromInstances then
+      local mesh = G.meshFromInstances(S.grassInstances)
+      if mesh then return mesh end
+    end
+  end
+  return quadsMesh(S.grassQuads)
 end
 
 -- The flower billboards as their own mesh, for the same reason as the

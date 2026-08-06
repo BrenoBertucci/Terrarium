@@ -1,0 +1,11 @@
+{
+  "format": "terrarium-grass-v1",
+  "bin": "grass.mesh.bin",
+  "texture": "grass.png",
+  "verts": 1719,
+  "indices": 5400,
+  "tris": 1800,
+  "height": 10.0,
+  "radius": 5.2674880027771,
+  "source": "grass-texture.glb"
+}

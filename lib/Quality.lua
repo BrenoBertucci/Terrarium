@@ -161,6 +161,32 @@ function Quality.starCount()
   return 32
 end
 
+-- Low fog bands (Sky.paintFog). RES values: 1=FULL, 2=1/2, 3=1/3, 4=1/4
+-- (same as starCount — higher number is the cheaper phone rung).
+-- 1/4 offs fog entirely; 1/3 is thin; FULL and 1/2 get the full stack.
+function Quality.fogBands()
+  local s = Quality.scale()
+  if s >= 4 then return 0 end
+  if s == 3 then return 2 end
+  return 4
+end
+
+-- Rainbow arc after rain. Off only at 1/4 RES.
+function Quality.rainbow()
+  return Quality.scale() < 4
+end
+
+-- Volumetric cloud raymarch steps inside the sky shader (Sky.lua).
+-- Higher RES scale number = cheaper phone rung. 0 turns clouds off so the
+-- sky rectangle stays a handful of ALU ops on the bottom rung.
+function Quality.cloudSteps()
+  local s = Quality.scale()
+  if s >= 4 then return 0 end
+  if s == 3 then return 4 end
+  if s == 2 then return 6 end
+  return 8
+end
+
 -- Whether the neighbouring maps cast into the shadow map. They are drawn
 -- in the scene either way; this is only about whether their geometry is
 -- also rasterised into the sun's own pass, which doubles or triples the

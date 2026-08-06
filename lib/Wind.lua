@@ -65,9 +65,10 @@ Wind.FLOWER_SHARE = 0.55
 
 -- Radians per second. Slow: a gust that crosses a screen in a beat is a
 -- flag, not weather. Live rate scales a little with strength so a storm
--- clocks slightly faster than a calm day.
-Wind.RATE = 1.35
-Wind.RATE_LIVE = 1.35
+-- clocks slightly faster than a calm day. A touch slower than the old
+-- 1.35 so the 3D tufts (more geometry, more read) roll rather than buzz.
+Wind.RATE = 1.15
+Wind.RATE_LIVE = 1.15
 
 -- Rest bearing (east-southeast). Live DIR meanders from climate + time.
 Wind.DIR0 = { 0.94, 0.34 }
@@ -165,11 +166,12 @@ function Wind.step(dt)
 
   local drive = clamp01(Wind.drive)
   if row <= 2 then
-    -- BREEZE: natural outdoor range ~0.35..2.8 tip px
-    Wind.liveAmount = 0.35 + drive * 2.45
+    -- BREEZE: natural outdoor range ~0.45..3.2 tip px (3D tufts read more
+    -- lean than the old slab, so the floor is a little higher)
+    Wind.liveAmount = 0.45 + drive * 2.75
   else
-    -- GALE: climate, fiercer ~1.2..4.5
-    Wind.liveAmount = 1.2 + drive * 3.3
+    -- GALE: climate, fiercer ~1.4..5.0
+    Wind.liveAmount = 1.4 + drive * 3.6
   end
 
   -- storm clocks a bit faster
@@ -231,8 +233,19 @@ function Wind.leanAt(wx, wz, heightFrac)
   local bend = h * h
   local phase = Wind.phase()
   local p = wx * Wind.FREQ[1] + wz * Wind.FREQ[2] - phase
-  local amp = sway * bend * (math.sin(p) + 0.35 * math.sin(p * 2.3 + 1.7))
-  return Wind.DIR[1] * amp, Wind.DIR[2] * amp
+  -- Match the vertex shader's three-harmonic wave so roamers in grass and
+  -- the tufts next to them lean on one clock (Voxel3D sway block).
+  local wave = math.sin(p)
+             + 0.38 * math.sin(p * 2.25 + 1.7)
+             + 0.14 * math.sin(p * 5.3 + h * 2.1 + 0.4)
+  local amp = sway * bend * wave
+  local dx = Wind.DIR[1] * amp
+  local dz = Wind.DIR[2] * amp
+  -- mild cross-axis (shader twin)
+  local cross = 0.18 * math.sin(p * 1.6 + 0.9) * bend * sway
+  dx = dx + (-Wind.DIR[2]) * cross
+  dz = dz + (Wind.DIR[1]) * cross
+  return dx, dz
 end
 
 return Wind

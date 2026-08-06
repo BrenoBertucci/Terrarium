@@ -128,6 +128,14 @@ local SHADER = [[
   uniform float pull;
   uniform vec3 curve;         // xy = the focus in world XZ, z = k; 0 = off
   uniform float sway;         // wind reach at the tip, world px; 0 = planted
+  // Foot-crush on grass (packed vec4: xz pos, radius, strength). Up to 4
+  // feet; crushN is how many are live this draw. Zero when not the grass
+  // pass so terrain never folds under a walker.
+  uniform vec4 crush0;
+  uniform vec4 crush1;
+  uniform vec4 crush2;
+  uniform vec4 crush3;
+  uniform float crushN;
   uniform vec2 windDir;       // its bearing in world XZ, unit length
   uniform vec2 windFreq;      // phase gained per world pixel, per axis
   uniform float windPhase;    // advanced by the clock
@@ -173,10 +181,47 @@ local SHADER = [[
     // Two harmonics rather than one so the crest is not a clean sine
     // rolling past -- real gusts have a shove in them.
     if (sway > 0.0) {
-      float bend = clamp(vertex_position.y * 0.0625, 0.0, 1.0);
-      bend *= bend;
+      // Height fraction: 3D tufts stand ~10 world px, the old slab ~8.
+      // 0.1 maps both onto 0..1 without needing a per-mesh uniform.
+      float hN = clamp(vertex_position.y * 0.10, 0.0, 1.0);
+      float bend = hN * hN;
       float p = dot(w.xz, windFreq) - windPhase;
-      w.xz += windDir * (sway * bend * (sin(p) + 0.35 * sin(p * 2.3 + 1.7)));
+      // Three harmonics: travelling gust + shove + tip flutter. Flutter
+      // is small and high-frequency so a meadow shimmers rather than
+      // waving like a flag.
+      float wave = sin(p)
+                 + 0.38 * sin(p * 2.25 + 1.7)
+                 + 0.14 * sin(p * 5.3 + hN * 2.1 + 0.4);
+      // mild cross-axis drift so blades do not all lean on one line
+      vec2 crossDir = vec2(-windDir.y, windDir.x);
+      float cross = 0.18 * sin(p * 1.6 + 0.9) * bend;
+      w.xz += windDir * (sway * bend * wave)
+            + crossDir * (sway * cross);
+      // tip bob: a little vertical give under the same gust
+      w.y += sway * bend * 0.07 * sin(p * 1.85 + 0.6);
+      // Foot crush: radial push + height flatten near player/roamers.
+      // Strength falls with distance; bend keeps roots planted.
+      if (crushN > 0.5) {
+        for (int ci = 0; ci < 4; ci++) {
+          if (float(ci) >= crushN) break;
+          vec4 cr = (ci == 0) ? crush0
+                  : (ci == 1) ? crush1
+                  : (ci == 2) ? crush2
+                  : crush3;
+          vec2 d = w.xz - cr.xy;
+          float dist = length(d);
+          float rad = max(cr.z, 0.5);
+          if (dist < rad) {
+            float t = 1.0 - dist / rad;
+            t = t * t * cr.w;
+            vec2 dir = (dist > 0.05) ? (d / dist) : windDir;
+            // outward part + a little with the wind so a step reads as a wake
+            w.xz += dir * (t * bend * 4.2)
+                  + windDir * (t * bend * 1.1);
+            w.y *= 1.0 - t * (0.25 + 0.55 * hN);
+          }
+        }
+      }
     }
     // THE WATER SURFACE, which is the only geometry in this world that
     // stands below zero -- it is recessed to -2 so the shoreline shows a
@@ -1486,6 +1531,13 @@ function Voxel3D.beginScene(w, h, cx, cy, vw, vh, sky, slot)
   pcall(sh.send, sh, "windFreq", Wind.FREQ)
   pcall(sh.send, sh, "windPhase", Wind.phase())
   pcall(sh.send, sh, "sway", 0)
+  -- crush off until the grass pass fills Voxel3D.crush
+  Voxel3D.crush = nil
+  pcall(sh.send, sh, "crushN", 0)
+  pcall(sh.send, sh, "crush0", { 0, 0, 0, 0 })
+  pcall(sh.send, sh, "crush1", { 0, 0, 0, 0 })
+  pcall(sh.send, sh, "crush2", { 0, 0, 0, 0 })
+  pcall(sh.send, sh, "crush3", { 0, 0, 0, 0 })
   -- the curved world bends about the camera's focus, so the horizon keeps
   -- a fixed distance ahead of the player rather than sitting on the map.
   -- A placed camera may decline it outright (Voxel3D.camera.curve = 0).
@@ -1869,6 +1921,27 @@ function Voxel3D.draw(mesh, texture, model, pull, sunModel, sway)
   pcall(sh.send, sh, "sunModel", "row", sunModel or model or IDENTITY)
   pcall(sh.send, sh, "pull", pull or 0)
   pcall(sh.send, sh, "sway", sway or 0)
+  -- Foot-crush only on the grass (and flower) pass: the caller fills
+  -- Voxel3D.crush via Grass3D before drawing, and anything else leaves n=0
+  -- so terrain never folds under a walker.
+  do
+    local n = 0
+    local c = Voxel3D.crush
+    if sway and sway > 0 and c and c.n and c.n > 0 then
+      n = c.n
+      if n > 4 then n = 4 end
+      for i = 1, 4 do
+        local p = (c.p and c.p[i]) or { 0, 0, 0, 0 }
+        pcall(sh.send, sh, "crush" .. (i - 1),
+              { p[1] or 0, p[2] or 0, p[3] or 0, p[4] or 0 })
+      end
+    else
+      for i = 0, 3 do
+        pcall(sh.send, sh, "crush" .. i, { 0, 0, 0, 0 })
+      end
+    end
+    pcall(sh.send, sh, "crushN", n)
+  end
   -- the snow lying on this mesh's up-faces, read from the field the caller
   -- set rather than passed as an argument: every existing call site would
   -- have needed a new parameter for a value that is the same for a whole
