@@ -16,6 +16,11 @@
 -- Still a four-colour diorama: hard steps, checker dither, three varyings
 -- (vWater, vWave, vSwellH), identity only `y < -1`. No mesh attribute, no
 -- second RT, no normal map, no soft airbrush.
+--
+-- SURFACE ART (optional drop-in): put a PNG at `assets/water/water.png` and
+-- lakes / rivers sample it in world XZ instead of the tileset's water tile.
+-- Same contract as assets/ground/: replace the file and it is used; delete
+-- it and the tileset art comes back. No constant, no rebuild.
 
 -- the mod namespace (see main.lua): V.require loads a sibling module
 local V = ...
@@ -27,6 +32,11 @@ local Water = {}
 Water.setting = ModSetting.new("swell", "WATER",
                                { 0.8, 1.4, 0 },
                                { "CALM", "SWELL", "FLAT" })
+
+-- World pixels one full cycle of water.png covers. 64 = four map cells.
+Water.ART_SCALE = 64
+Water.ASSET_DIR = "assets/water/"
+Water.ASSET_FILE = "water.png"
 
 -- Rest wavelengths (phase gain per world px). Live WAVE_A/B are mutated.
 Water.WAVE_A0 = { 0.070, 0.038 }
@@ -523,6 +533,84 @@ function Water.paints()
   local ok, v = pcall(Water.setting.get, Water.setting)
   local n = (ok and tonumber(v)) or 0
   return n > 0
+end
+
+-- ------- optional surface art (assets/water/water.png)
+--
+-- Cached Image or false ("there is none"). nil = not tried yet. A 1x1 blank
+-- is always available for the scene sampler so an unbound Image is never
+-- sent (driver-dependent crash, same pattern as GlassMask.blank).
+
+local artImage = nil   -- Image | false
+local artBlank = nil   -- Image | false
+
+local function loadArt()
+  if artImage ~= nil then return artImage or nil end
+  local okA, Assets = pcall(require, "src.render.Assets")
+  if not okA or not Assets then
+    artImage = false
+    return nil
+  end
+  local path = V.path .. "/" .. Water.ASSET_DIR .. Water.ASSET_FILE
+  local okE, exists = pcall(Assets.exists, path)
+  if not (okE and exists) then
+    artImage = false
+    return nil
+  end
+  local ok, img = pcall(Assets.image, path)
+  if not (ok and img) then
+    artImage = false
+    return nil
+  end
+  pcall(img.setFilter, img, "linear", "linear")
+  pcall(img.setWrap, img, "repeat", "repeat")
+  artImage = img
+  return img
+end
+
+-- The shipped water surface texture, or nil when the file is missing.
+function Water.art()
+  return loadArt()
+end
+
+-- 1 when art() is a real file, 0 when the tileset tile should stay.
+function Water.artOn()
+  return loadArt() and 1 or 0
+end
+
+function Water.artScale()
+  local n = tonumber(Water.ART_SCALE) or 64
+  if n < 8 then n = 8 end
+  return n
+end
+
+-- Always-bound stand-in for the scene shader's waterArt sampler.
+function Water.artBlank()
+  if artBlank == nil then
+    local ok, img = pcall(function()
+      local data = love.image.newImageData(1, 1)
+      data:setPixel(0, 0, 0.1, 0.35, 0.75, 1)
+      local i = love.graphics.newImage(data)
+      pcall(i.setFilter, i, "nearest", "nearest")
+      pcall(i.setWrap, i, "repeat", "repeat")
+      return i
+    end)
+    artBlank = (ok and img) or false
+  end
+  return artBlank or nil
+end
+
+-- Hot reload / window resize: drop GPU objects so the next frame reloads
+-- assets/water/water.png if it appeared or changed on disk.
+function Water.dropGPU()
+  if artImage and artImage ~= false and artImage.release then
+    pcall(artImage.release, artImage)
+  end
+  artImage = nil
+  if artBlank and artBlank ~= false and artBlank.release then
+    pcall(artBlank.release, artBlank)
+  end
+  artBlank = nil
 end
 
 -- Walk-on-ice: frozen water cells count as ground IF the party can Surf

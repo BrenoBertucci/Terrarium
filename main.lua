@@ -362,6 +362,7 @@ mod.content.render_pipelines:register(PIPE_VOXEL, {
     -- the ground decals are GPU objects on the same footing: meshes and two
     -- generated strips, all rebuilt on demand
     GroundFX.dropGPU()
+    Water.dropGPU()
     MiniMap.invalidate()
   end,
 })

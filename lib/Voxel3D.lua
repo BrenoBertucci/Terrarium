@@ -92,7 +92,8 @@ local SHADER = [[
   // quantise away into bands.
   varying LOVE_HIGHP_OR_MEDIUMP vec3 vWorld;
   varying vec3 vSun;          // this fragment's place in the sun's view
-  varying float vWater;       // 1 on the water surface, 0 everywhere else
+  varying float vWater;       // 1 when swell/ice paint runs, 0 otherwise
+  varying float vWaterSurf;   // 1 on recessed water geometry always (y < -1)
   varying vec3 vWave;         // and the normal of the swell under it
   varying float vSwellH;      // the swell's own height here, -1 .. 1
   // Wave trains live in BOTH stages: the vertex displaces continuously so
@@ -198,6 +199,9 @@ local SHADER = [[
     // difference of samples, and it is what the sparkle below reflects
     // the sun off.
     vWater = 0.0;
+    // Always mark recessed water geometry so optional surface art
+    // (assets/water/water.png) can replace the tileset tile even under FLAT.
+    vWaterSurf = (vertex_position.y < -1.0) ? 1.0 : 0.0;
     vWave = vec3(0.0, 1.0, 0.0);
     vSwellH = 0.0;
     if (vertex_position.y < -1.0 && (swell > 0.0 || iceLift > 0.0)) {
@@ -473,6 +477,11 @@ local SHADER = [[
   uniform float iceSparkle;   // cold silver glint on frozen plates
   uniform float stepJitter;   // 0..1 footstep crack on ice (visual only)
   uniform float waterWet;     // 0..1 rain on water (micro-ripples + heavy foam)
+  // Optional world-XZ surface art (assets/water/water.png). Sampler always
+  // bound (blank when the file is missing); waterArtOn gates the replace.
+  uniform Image waterArt;
+  uniform float waterArtOn;   // 0 = tileset tile, 1 = sample waterArt
+  uniform float waterArtScale;// world pixels per one full UV cycle
   // iceLift / bodyKx / bodyKz live with the vertex swell uniforms
   uniform Image glassMask;    // opaque where the atlas texel is window glass
   uniform vec2 glassSize;     // the mask's dimensions: tc -> atlas texels
@@ -516,6 +525,19 @@ local SHADER = [[
     float lit = sunlight(vSun);
     vec3 light = skyTint + sunTint * lit;
     vec3 rgb = p.rgb * vShade * light;
+    // Optional water surface art: replace the tileset water tile's albedo
+    // on every recessed water face (lakes / rivers). Cel paint below still
+    // multiplies on top when swell / freeze is active. Scrolls gently with
+    // the same phase + current the foam uses so the picture moves with the
+    // pond rather than sitting like a decal.
+    if (waterArtOn > 0.5 && vWaterSurf > 0.01) {
+      float scale = waterArtScale;
+      if (scale < 8.0) scale = 64.0;
+      vec2 scroll = waterCurrent * foamPhase * 0.04;
+      vec2 uv = fract(vWorld.xz / scale + scroll);
+      vec3 art = Texel(waterArt, uv).rgb;
+      rgb = mix(rgb, art * vShade * light, clamp(vWaterSurf, 0.0, 1.0));
+    }
     // THE CEL WATER. Three effects, all analytic, all keyed off varyings
     // the mesh already carries -- and all of them FLAT-shaded on purpose:
     // this is a four-colour world drawn on a pixel grid, and a smooth
@@ -1419,6 +1441,24 @@ function Voxel3D.beginScene(w, h, cx, cy, vw, vh, sky, slot)
   pcall(sh.send, sh, "paintPhaseStep", tonumber(Water.PAINT_PHASE_STEP) or 0)
   pcall(sh.send, sh, "paintWCell", tonumber(Water.PAINT_WCELL) or 4)
   pcall(sh.send, sh, "paintWCellIce", tonumber(Water.PAINT_WCELL_ICE) or 6)
+  -- optional surface art (assets/water/water.png). Sampler always bound.
+  do
+    local art = nil
+    local on = 0
+    local okA, a = pcall(Water.art)
+    if okA and a then art, on = a, 1 end
+    if not art then
+      local okB, blank = pcall(Water.artBlank)
+      art = (okB and blank) or nil
+      on = 0
+    end
+    if art then pcall(sh.send, sh, "waterArt", art) end
+    pcall(sh.send, sh, "waterArtOn", on)
+    local scale = 64
+    local okS, s = pcall(Water.artScale)
+    if okS and tonumber(s) then scale = tonumber(s) end
+    pcall(sh.send, sh, "waterArtScale", scale)
+  end
   -- sparkleNow, not SPARKLE: the row's strength with the rain taken out of it
   -- (Water.wet), so a shower dulls the pond's glint on the same tick it starts
   pcall(sh.send, sh, "sparkle", Water.sparkleNow())

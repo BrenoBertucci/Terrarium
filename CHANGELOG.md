@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.16.1-mobile.water
+
+### Added
+
+- **Custom water surface art for lakes and rivers.** Drop a PNG at
+  `assets/water/water.png` and the diorama samples it in world XZ on every
+  recessed water face (the same geometry identity as the swell surface,
+  `y < -1`), replacing the tileset's 8×8 water tile albedo. Delete the file
+  and the tileset art comes back — same drop-in contract as `assets/ground/`.
+  Cel swell / freeze / foam paint still multiplies on top when WATER is not
+  FLAT. Hot-reload drops the GPU object with the rest of the invalidate path
+  (`Water.dropGPU`).
+
+### Assets
+
+- Shipped `assets/water/water.png` (1024×1024) as the default lake/river
+  surface texture.
+
 ## 1.16.0-mobile.rain
 
 ### Added
