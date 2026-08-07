@@ -1,0 +1,16 @@
+{
+  "format": "terrarium-prop-v2",
+  "kind": "lamppost",
+  "bin": "lamppost.mesh.bin",
+  "texture": "lamppost.png",
+  "verts": 1856,
+  "indices": 5397,
+  "tris": 1799,
+  "bodyTris": 1685,
+  "glassTris": 114,
+  "height": 28.0,
+  "radius": 2.583987075229197,
+  "lampY": 21.107865200593036,
+  "lampR": 3.188913216304717,
+  "source": "lamppost_texture.glb"
+}

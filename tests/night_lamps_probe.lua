@@ -21,6 +21,33 @@ return function(game)
   local t2 = DayNight.tint(true)
   log(string.format("SOFT night tint: %.3f %.3f %.3f", t2[1], t2[2], t2[3]))
   DayNight.darkSetting:sync("deep")
+  local Voxel3D = lib.require("Voxel3D")
+  local shader = Voxel3D.shader()
+  log("voxel shader:", shader and "PASS" or "FAIL", tostring(Voxel3D.shaderError))
+  local okLights, initialLights = pcall(StreetLamps.lights, game.overworld.map, 0, 0)
+  log("initial light query:", okLights and "PASS" or "FAIL",
+      okLights and #initialLights or tostring(initialLights))
+  -- Local illumination is selected before terrain is drawn.  It must be
+  -- bounded for mobile GPUs, non-empty on a city night, and absent in the
+  -- daytime; count() alone cannot catch a regression in that shader path.
+  game.overworld:setMap("VIRIDIAN_CITY", 10, 10, "up")
+  wait(80)
+  StreetLamps.invalidate()
+  local city = game.overworld.map
+  local lights = StreetLamps.lights(city, 10 * 16, 10 * 16)
+  log("VIRIDIAN local lights=", #lights, "limit=", StreetLamps.LIGHT_LIMIT)
+  if #lights > 0 and #lights <= StreetLamps.LIGHT_LIMIT then
+    log("PASS: bounded local night lights")
+  else
+    log("FAIL: local night lights missing or unbounded")
+  end
+  DayNight.setting:sync("day")
+  if #StreetLamps.lights(city, 10 * 16, 10 * 16) == 0 then
+    log("PASS: local lights off in day")
+  else
+    log("FAIL: local lights remain on in day")
+  end
+  DayNight.setting:sync("night")
   local maps = {"VIRIDIAN_CITY","PEWTER_CITY","CERULEAN_CITY","VERMILION_CITY","LAVENDER_TOWN","CELADON_CITY","SAFFRON_CITY","FUCHSIA_CITY","CINNABAR_ISLAND"}
   for _,id in ipairs(maps) do
     local ok = pcall(function() game.overworld:setMap(id, 10, 10, "up") end)
