@@ -51,6 +51,10 @@ tools/optimize_grass_glb.py
 assets/ground/lamppost/lamppost_texture.glb
 tools/optimize_lamppost_glb.py
 
+# Source GLB for the player model. Nothing loads a GLB at runtime; this is
+# 26 MB of authoring asset and a player has no use for it.
+assets/mc/Mc.glb
+
 # The probes for the newest features, on the same rule as the suite above.
 tests/ecology_ground_probe.lua
 tests/rayfx_water_probe.lua
@@ -59,3 +63,19 @@ tests/puddle_debug.lua
 tests/daynight_dial_probe.lua
 tests/night_probe.lua
 tests/shadow_length_probe.lua
+tests/grass_physics_probe.lua
+tests/wind_sway_probe.lua
+tests/after_rain_probe.lua
+tests/fog_probe.lua
+tests/thunder_probe.lua
+tests/lamppost_probe.lua
+tests/night_lamps_probe.lua
+
+# NOTE: twenty older probes are still NOT listed here and therefore still
+# ship (ambient_beds, ambsound_cost, carry_headless, coexist, ds_z_anchor,
+# hidden_glint, ice_sprite, mesh_lod, minimap, puddle_rtx, qol_extras,
+# seam_stream, snow_shot, town_rain, voxel_figure, water_physics,
+# water_roam, water_shimmer, weather_life). They were in the 1.17.0 package
+# too. Left as found rather than swept in on a release that is about the
+# grass -- but it is a gap against this file's own rule, and it is written
+# down here so the next person does not have to rediscover it.

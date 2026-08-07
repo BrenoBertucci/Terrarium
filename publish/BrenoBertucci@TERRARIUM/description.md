@@ -12,7 +12,7 @@ This fork is **independent**: different mod id (`TERRARIUM`), different install 
 
 1. Import the release zip through FIND MODS / Import, or drop the folder into `mods/TERRARIUM`.
 2. Enable **Terrarium** in the mod manager.
-3. Optional: keep **Dramatic Shape Voxel Mod** installed too ? they do not share folder or id.
+3. Optional: keep **Dramatic Shape Voxel Mod** installed too -- they do not share folder or id.
 
 ## Hotkeys (this fork)
 
@@ -32,8 +32,32 @@ Upstream Dramatic Shape still uses `3` / `5` / `6` / `7` / `8` / `9`.
 
 - 3D extruded overworld with cast shadows and tilt-shift
 - Day/night cycle, weather, puddles and snow on the ground
-- Wild Pok?mon visible in the grass; ecology / shelter / city life systems
+- Wild Pokemon visible in the grass; ecology / shelter / city life systems
 - Tuned defaults for lower-end / mobile hardware
+
+## New in 1.18.0-mobile
+
+The tall grass is geometry out here, and this release makes it behave like it.
+
+- **WIND / AUTO**, the new default. BREEZE and GALE are two fixed windows onto
+  the same climate, so keeping a storm feeling like a storm meant a trip back
+  to the options menu every time the sky changed. AUTO spans both on one
+  curve: near-still on a calm night, breeze by day, gale on its own under a
+  front.
+- **Grass that bends instead of sliding.** The tip drops as it goes over
+  rather than stretching sideways, every tuft has its own stiffness and phase
+  so a meadow is many plants rather than one animated surface, and the gust
+  arrives in bands that travel across it.
+- **Weather lands ON the grass.** Rain is weight: it damps the sway and adds a
+  fast tick as drops hit. Settled snow bows the tufts over, stiffens them, and
+  now piles white on the crowns with green showing underneath -- before this,
+  a meadow stood green beside ground that had gone white.
+- **Walk through it and it lies down**, springs back past upright, and leaves
+  a **trail** behind you that recovers over a few seconds. Stop, turn round,
+  and the way you came is still there.
+- **Wind you can see off the grass**: dust on a clear day, spray under a
+  shower, blown white under a fall -- plus a gust front that crosses the frame
+  as a line while the meadow bows under it.
 
 ## Source
 
