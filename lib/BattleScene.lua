@@ -401,6 +401,12 @@ function BattleScene.render(state, arena, textures, token)
   VoxelGrid.override = true
   local out = nil
   local ok, err = pcall(function()
+    -- No street lamps in an arena. The pools are world-space and the field is
+    -- staged somewhere else entirely, so a battle opened from a lit city
+    -- street would otherwise carry eight patches of light from the overworld
+    -- onto ground that has no posts standing on it.
+    Voxel3D.lampLights = nil
+    Voxel3D.lampFlicker = 0
     -- its own canvas slot: this renders at the window's pixel size and the
     -- free-roam pass does too, but the two are alive at different moments
     -- and a shared slot would reallocate on every battle entry and exit

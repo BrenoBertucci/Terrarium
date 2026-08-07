@@ -48,6 +48,8 @@ tools/sheet2strip.ps1
 # with tools/optimize_grass_glb.py after replacing the GLB.
 assets/ground/grass/grass-texture.glb
 tools/optimize_grass_glb.py
+assets/ground/lamppost/lamppost_texture.glb
+tools/optimize_lamppost_glb.py
 
 # The probes for the newest features, on the same rule as the suite above.
 tests/ecology_ground_probe.lua
