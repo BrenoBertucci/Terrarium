@@ -207,7 +207,7 @@ else {
         $uploadUri = $uploadTemplate.Replace('{?name,label}', ("?name={0}" -f [Uri]::EscapeDataString($assetName)))
         Write-ApiCall -Method 'POST' -Uri $uploadUri -Extra ("upload InFile={0} ContentType=application/zip" -f $zipPath)
         Write-Host ''
-        Write-Host ("[DryRun] Would publish release for tag {0} (no html_url yet — release not created)." -f $Tag)
+        Write-Host ("[DryRun] Would publish release for tag {0} (no html_url yet - release not created)." -f $Tag)
         exit 0
     }
     Write-Host ("Creating release: POST {0}" -f $createUri)
