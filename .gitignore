@@ -54,6 +54,10 @@ assets/ground/source/*.zip
 # Authoring-only GLBs (~20 MB); the bake is what ships.
 assets/ground/grass/*.glb
 assets/ground/lamppost/*.glb
+# Same rule, and it had been missed: assets/mc/Mc.glb is 26 MB of source
+# model. Nothing loads a GLB at runtime -- the bakes do -- so a clone that
+# carried this would carry it forever for no one.
+assets/mc/*.glb
 publish-zip/
 probe_out_atm/
 

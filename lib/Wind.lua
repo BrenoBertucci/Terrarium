@@ -45,14 +45,23 @@ local Wind = {}
 
 -- The row is a PLAYER PREFERENCE on top of natural wind, not a manual
 -- weather switch:
+--   AUTO    hands the row itself to the climate. BREEZE and GALE are two
+--           fixed windows onto the same drive, and a player who wants the
+--           storm to actually feel like a storm ends up walking to the menu
+--           every time the sky changes -- which is the row doing the
+--           climate's job by hand. AUTO spans BOTH windows on one
+--           continuous curve: near-still on a calm night, breeze by day,
+--           and it reaches gale on its own under a front. Default.
 --   BREEZE  living outdoor air -- strength and bearing follow climate
---           (showers, snow fronts, hour, season). You do not flip this
---           when rain starts; the rain brings its own wind.
+--           (showers, snow fronts, hour, season), but inside a fixed band.
 --   GALE    same climate, amplified (stormy coast feel).
 --   OFF     silence -- accessibility / screenshots / quiet sessions.
+--
+-- Stored values are numeric and UNCHANGED for the three old rows (2/4/0),
+-- so a save from before AUTO existed still reads back as what it was.
 Wind.setting = ModSetting.new("wind", "WIND",
-                              { 2, 4, 0 },
-                              { "BREEZE", "GALE", "OFF" })
+                              { 1, 2, 4, 0 },
+                              { "AUTO", "BREEZE", "GALE", "OFF" })
 
 -- How tall a tuft is taken to be, for the bend. Over-estimating only makes
 -- the lean gentler, so this errs high on purpose.
@@ -86,9 +95,29 @@ Wind.FREQ = { 0.062, 0.047 }
 -- in -- the same contract as Water.wet.
 Wind.weatherDrive = 0
 
+-- What is LYING ON the grass, as opposed to what is pushing it. Both are
+-- pushed in from outside for the same cycle reason as `weatherDrive`:
+--   grassWet   rain falling on the blades right now (Weather.tick). Water
+--              is weight and damping -- a wet tuft is heavier, leans over
+--              further and stops sooner -- plus the fast tick of drops
+--              landing on it.
+--   grassSnow  snow already SETTLED (GroundFX.tick, the accumulated cover
+--              rather than the fall). Snow is weight that stays: it bows a
+--              tuft over and holds it there, and it stiffens what is left.
+-- Kept here rather than read from those modules so the shader uniforms and
+-- the CPU lean helper take one number each with nothing to look up.
+Wind.grassWet = 0
+Wind.grassSnow = 0
+
 -- Smoothed climate 0..1 and live tip-reach in world px (what amount() returns).
 Wind.drive = 0.15
 Wind.liveAmount = 1.2
+
+-- The squall envelope, 0..1: how far into a GUST this instant is, separate
+-- from how strong the air is on average. The shader widens the wave with it
+-- and the VFX spawn off it, so a gust is a thing that arrives and passes
+-- rather than a slider that happens to be high.
+Wind.gustNow = 0
 
 local function clamp01(n)
   n = tonumber(n) or 0
@@ -140,6 +169,9 @@ function Wind.climateTarget()
              + 0.12 * math.sin(t * 1.13 + 0.4)
   if gust < 0.25 then gust = 0.25 end
   if gust > 1.35 then gust = 1.35 end
+  -- the same envelope, normalised onto 0..1 for everything that wants to
+  -- know whether a gust is passing rather than how hard the air is
+  Wind.gustNow = clamp01((gust - 0.25) / 1.10)
   d = d * gust
   if d > 1 then d = 1 end
   return d
@@ -151,10 +183,11 @@ function Wind.step(dt)
   if dt < 0 then dt = 0 elseif dt > 0.1 then dt = 0.1 end
 
   local ok, v = pcall(Wind.setting.get, Wind.setting)
-  local row = (ok and tonumber(v)) or 2
-  if row <= 0 then
+  local row = (ok and tonumber(v)) or 1
+  if row == 0 then
     Wind.drive = 0
     Wind.liveAmount = 0
+    Wind.gustNow = 0
     Wind.RATE_LIVE = Wind.RATE
     return
   end
@@ -165,7 +198,25 @@ function Wind.step(dt)
   Wind.drive = Wind.drive + (target - Wind.drive) * math.min(1, k * dt)
 
   local drive = clamp01(Wind.drive)
-  if row <= 2 then
+  if row == 1 then
+    -- ------- AUTO
+    --
+    -- One curve across the WHOLE range the other two rows split between
+    -- them: BREEZE's floor at the bottom, GALE's ceiling at the top, and
+    -- the climate deciding where on it this minute sits. Bent by an
+    -- exponent above 1 so calm stays genuinely calm -- a linear ramp over
+    -- that span leaves an idle afternoon already halfway to a storm, which
+    -- is what makes a fixed row feel like it needs turning up.
+    --
+    -- The front gets its own term on top: a shower's drive already lifts
+    -- `drive`, but the point of AUTO is that a downpour reads as a
+    -- downpour without anybody walking to the menu, so it is pushed the
+    -- last of the way rather than merely allowed to drift up.
+    local shaped = drive * drive * (3 - 2 * drive)   -- smoothstep, S-curved
+    shaped = shaped * 0.55 + drive * drive * 0.45    -- and biased low
+    local front = clamp01(Wind.weatherDrive)
+    Wind.liveAmount = 0.30 + shaped * 4.30 + front * front * 0.90
+  elseif row == 2 then
     -- BREEZE: natural outdoor range ~0.45..3.2 tip px (3D tufts read more
     -- lean than the old slab, so the floor is a little higher)
     Wind.liveAmount = 0.45 + drive * 2.75
@@ -174,8 +225,11 @@ function Wind.step(dt)
     Wind.liveAmount = 1.4 + drive * 3.6
   end
 
-  -- storm clocks a bit faster
-  Wind.RATE_LIVE = Wind.RATE * (0.85 + 0.45 * drive)
+  -- storm clocks a bit faster. AUTO leans on this harder than a fixed row
+  -- does: half of what tells a storm from a breeze is the RATE, not the
+  -- reach, and AUTO is the row that has to make that difference on its own.
+  local rateK = (row == 1) and 0.62 or 0.45
+  Wind.RATE_LIVE = Wind.RATE * (0.85 + rateK * drive)
 
   -- bearing meanders; weather fronts bias a little more south-east
   local t = 0
@@ -193,8 +247,8 @@ end
 
 function Wind.amount()
   local ok, v = pcall(Wind.setting.get, Wind.setting)
-  local row = (ok and tonumber(v)) or 2
-  if row <= 0 then return 0 end
+  local row = (ok and tonumber(v)) or 1
+  if row == 0 then return 0 end
   local n = tonumber(Wind.liveAmount) or 1.2
   if n < 0 then n = 0 end
   if n > 8 then n = 8 end
@@ -203,6 +257,25 @@ end
 
 function Wind.enabled()
   return Wind.amount() > 0
+end
+
+function Wind.isAuto()
+  local ok, v = pcall(Wind.setting.get, Wind.setting)
+  return ((ok and tonumber(v)) or 1) == 1
+end
+
+-- The squall envelope this instant, 0..1. Zero under WIND OFF so nothing
+-- downstream has to ask twice.
+function Wind.gust()
+  if Wind.amount() <= 0 then return 0 end
+  return clamp01(Wind.gustNow)
+end
+
+-- What the grass is carrying and what is passing over it, as the one
+-- three-number packet the scene shader takes (Voxel3D `grassLoad`):
+-- rain on the blades, settled snow on them, and the gust.
+function Wind.load()
+  return clamp01(Wind.grassWet), clamp01(Wind.grassSnow), Wind.gust()
 end
 
 -- The phase, from absolute time rather than an accumulator: this is read
@@ -233,16 +306,30 @@ function Wind.leanAt(wx, wz, heightFrac)
   local bend = h * h
   local phase = Wind.phase()
   local p = wx * Wind.FREQ[1] + wz * Wind.FREQ[2] - phase
+  -- The SQUALL FRONT, the shader's twin: a second, much longer wave riding
+  -- the same bearing, so the air arrives in bands rather than at one flat
+  -- amplitude everywhere. A body standing in a meadow has to be inside the
+  -- same band as the tufts around it or it reads as leaning on its own.
+  local front = 0.72 + 0.28 * math.sin(wx * Wind.FREQ[1] * 0.21
+                                       + wz * Wind.FREQ[2] * 0.21
+                                       - phase * 0.37)
+  -- Rain and snow are load, and load is the same on a person as on a blade:
+  -- water damps, settled snow stiffens. No per-tuft stiffness here -- that
+  -- one is the meadow's own scatter and a walker has no tuft.
+  local wet, snow, gust = Wind.load()
+  local amp = sway * (0.55 + 0.45 * front) * (1 + 0.55 * gust)
+                   * (1 - 0.28 * wet) * (1 - 0.62 * snow)
   -- Match the vertex shader's three-harmonic wave so roamers in grass and
   -- the tufts next to them lean on one clock (Voxel3D sway block).
   local wave = math.sin(p)
              + 0.38 * math.sin(p * 2.25 + 1.7)
              + 0.14 * math.sin(p * 5.3 + h * 2.1 + 0.4)
-  local amp = sway * bend * wave
-  local dx = Wind.DIR[1] * amp
-  local dz = Wind.DIR[2] * amp
+             + wet * 0.22 * math.sin(p * 9.1)
+  local a = amp * bend * wave
+  local dx = Wind.DIR[1] * a
+  local dz = Wind.DIR[2] * a
   -- mild cross-axis (shader twin)
-  local cross = 0.18 * math.sin(p * 1.6 + 0.9) * bend * sway
+  local cross = 0.18 * math.sin(p * 1.6 + 0.9) * bend * amp
   dx = dx + (-Wind.DIR[2]) * cross
   dz = dz + (Wind.DIR[1]) * cross
   return dx, dz

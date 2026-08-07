@@ -80,6 +80,11 @@ local DayNight = V.require("DayNight")
 local Weather = V.require("Weather")
 local Voxel3D = V.require("Voxel3D")
 local Mat4 = V.require("Mat4")
+-- Safe: Wind requires ModSetting and DayNight only, and Voxel3D above
+-- already requires it. This file is where the SETTLED snow lives, and
+-- settled snow is what bows a grass tuft over -- so it is pushed from here
+-- (Wind.grassSnow), the same way Weather pushes the falling half.
+local Wind = V.require("Wind")
 
 local Map = require("src.world.Map")
 
@@ -922,6 +927,13 @@ local function tick(dt)
   if state.cover < 0 then state.cover = 0
   elseif state.cover > 1 then state.cover = 1 end
 
+  -- What the snow is doing to the grass, pushed rather than pulled (Wind
+  -- must never require this file back). The full cover would bury a tuft
+  -- outright, so this is the share of it a blade can actually hold: enough
+  -- that a snowed meadow stands bowed and half-still, not enough that it
+  -- lies flat and stops being grass.
+  Wind.grassSnow = state.cover * 0.85
+
   local Game = game()
   local ow = Game and Game.overworld
   if not (ow and ow.map and ow.player) then return end
@@ -953,6 +965,7 @@ function GroundFX.update(dt)
   if ok then return end
   failed = true
   state.wet, state.cover = 0, 0
+  Wind.grassSnow = 0
   prints = {}
   chunks = {}
   if V.mod and V.mod.log then

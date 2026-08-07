@@ -19,9 +19,88 @@ MAJOR.MINOR.PATCH[-CHANNEL]
 
 Tags and packages:
 
-- Git tag: `v1.17.0-mobile`
-- Zip asset: `TERRARIUM-1.17.0-mobile.zip`
-- `manifest.json` / catalog `version` field: `1.17.0-mobile`
+- Git tag: `v1.18.0-mobile`
+- Zip asset: `TERRARIUM-1.18.0-mobile.zip`
+- `manifest.json` / catalog `version` field: `1.18.0-mobile`
+
+## 1.18.0-mobile
+
+### Added
+
+- **WIND / AUTO**, and it is now the default rung. BREEZE and GALE are two
+  fixed windows onto the same climate, so keeping a storm feeling like a
+  storm meant walking back to the options menu every time the sky changed.
+  AUTO spans both windows on one continuous curve — bent low so a clear
+  afternoon stays calm, pushed the rest of the way by a front so a downpour
+  reaches gale on its own. Stored values for the three old rungs are
+  unchanged, so an existing save still reads back as whatever it was set to.
+- **Grass reacts to the weather.** Falling rain is weight: it damps the sway
+  (a wet meadow moves *less*), bows the blades, and adds a fast tick on each
+  tuft's own phase as drops land. Settled snow — read off the accumulated
+  cover, not the snowfall — bows the tufts over on their own bearings and
+  stiffens what is left, so a meadow stays loaded after the sky clears.
+- **Wind VFX**: flat comet-tail streaks of what the air is carrying (dust,
+  spray under a shower, blown white under a fall), plus a **gust front** — a
+  rank thrown abreast off the same squall envelope the grass is bending to,
+  so the gust crosses the frame as a line. Drawn only outdoors, above a wind
+  floor, and never under WIND OFF. New `lib/WindFX.lua`.
+- **Snow settles ON the grass.** Every other surface takes its snow from
+  its face normal, and by that rule a blade is a *side* along its whole
+  length — correct about the normal, wrong about the winter, and the reason
+  a meadow stood green beside ground that had gone white. Tufts now carry a
+  snow **cap**, weighted by how far up the blade you are and how much has
+  settled, fed through the same snow path a roof ridge uses (threshold,
+  drift, grain, sun glitter). White on top, green underneath.
+- **A walk leaves a trail.** A moving foot drops crumbs every ten world
+  pixels — weaker, narrower crushes at the places it just left, spaced
+  closer than their own reach so they join into one laid line — fading on
+  a squared curve over four seconds with no spring, because grass walked
+  flat and left recovers rather than snapping back. Stop, and the way you
+  came is still there for about two seconds.
+
+### Changed
+
+- **Grass physics**, now that the tufts are real geometry:
+  - the bend normalises over the mesh's **own** height (the bake hands it
+    over) instead of a hardcoded ten pixels, so a taller or shorter bake is
+    no longer bent on a stretched curve;
+  - the tip **drops** as it goes over (arc length held, `lean² / 2H`) rather
+    than sliding sideways for free, which was the stretch that made grass
+    read as a rug being pulled;
+  - **per-tuft identity** from a hash of the cell it stands in — stiffness,
+    phase and slump bearing — so a meadow is many plants rather than one
+    animated surface, with no per-instance attribute added;
+  - a **squall front** modulates the amplitude itself, so wind arrives in
+    bands instead of blowing everywhere at one strength.
+- **Foot-crush springs back.** The crush list is kept between frames with a
+  strength and a velocity per foot: fast chase down, underdamped spring up.
+  A tuft passes upright about a third of a second after the foot lifts,
+  stands a quarter proud at the top of the kick, and settles inside two
+  seconds. It used to snap flat and snap upright.
+- **A crushed blade lies DOWN** instead of getting shorter: the tip travels
+  outward by most of its own height and drops by nearly all of it, so it
+  ends up along the ground pointing where the walker went. Shortening it
+  read as the meadow deflating.
+- Crush slots **4 → 8**, and now one `vec4[8]` array uniform instead of
+  four scalars — one send for the lot. Three slots are live feet, five are
+  trail, split fixed so a crowd cannot crowd out the trail and a long walk
+  cannot crowd out the foot standing in the grass.
+- Flowers take the crush too. A boot that lays the grass flat and steps
+  over a flower bed untouched is the seam showing.
+- The grass springs and trail integrate on **time since the last grass
+  pass** rather than `love.timer.getDelta()`, so a frame that renders the
+  scene twice (a staged battle over the overworld) no longer runs the
+  meadow at double speed.
+- `Wind.leanAt` gained the front and the load terms, so roamers standing in
+  a meadow stay on exactly the shader's clock.
+
+### Probes
+
+- `tests/grass_physics_probe.lua`: the AUTO span, the rain/snow load
+  reaching the grass and damping it, the crush spring's overshoot, WindFX
+  under gale and under OFF, and three screenshots with mean brightness —
+  because a shader that fails to compile fails silently and every other
+  number still passes.
 
 ## 1.17.0-mobile
 

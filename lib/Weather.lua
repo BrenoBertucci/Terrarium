@@ -588,6 +588,13 @@ local function tick(dt)
       drive = out * 0.55
     end
     Wind.weatherDrive = drive
+    -- and what the shower is LYING ON the grass, which is a different
+    -- number from what it is doing to the air: water is weight and damping
+    -- on a blade, and it is the falling rain that does it, so this is the
+    -- shower's own power rather than the ground's accumulated wetness.
+    -- (The settled snow half is pushed by GroundFX, off `cover` -- snow
+    -- keeps bowing a tuft over long after the fall has stopped.)
+    Wind.grassWet = state.kind == "rain" and out or 0
     if Wind.step then pcall(Wind.step, dt) end
   end
   if Water.step then pcall(Water.step, dt) end
@@ -670,6 +677,7 @@ function Weather.update(dt)
   state.kind, state.power, state.target = nil, 0, 0
   after.untilAbs, after.hadRain = 0, false
   DayNight.overcast, Water.wet, Water.snow = 0, 0, 0
+  if Wind then Wind.weatherDrive, Wind.grassWet = 0, 0 end
   if Water.freeze then Water.freeze = 0 end
   drops, motes = {}, {}
   if V.mod and V.mod.log then

@@ -33,6 +33,12 @@ local Map = require("src.world.Map")
 
 local VoxelScene = {}
 
+-- When the grass pass last ran, in love.timer seconds. The grass springs
+-- and the walked trail are integrated per PASS rather than per frame (see
+-- the crush block in render), so this is what tells them how much time
+-- actually went by. nil until the first pass.
+local lastGrassAt = nil
+
 -- What the active display mode actually paints with.
 --
 -- paletteFor hands back a map's RAW SGB zone palette, and that is not what
@@ -861,6 +867,31 @@ function VoxelScene.render(state, w, h, vw, vh, paletteFor)
   Voxel3D.glassMask = outdoor and GlassMask.texture(state.map.tileset) or nil
   Voxel3D.glassNight = outdoor and DayNight.windowLight() or 0
   Voxel3D.lampColor = DayNight.lampColor()
+  -- Send only the nearby active posts to the shader.  This belongs before
+  -- beginScene: the ground is the first mesh drawn and must receive the same
+  -- warm pools as the post itself.
+  -- Map data must never be allowed to abort the whole 3D frame.  A bad or
+  -- half-streamed map simply gets no local pools for that frame and retries
+  -- on the next one; the post meshes and the rest of the renderer stay live.
+  if outdoor then
+    local ok, lamps = pcall(StreetLamps.lights, state.map, cx, cy)
+    Voxel3D.lampLights = ok and lamps or nil
+    -- The flame's height belongs to whichever post is shipping, not to a
+    -- number the renderer assumes: the authored bake measures its own lantern
+    -- and the box models put theirs somewhere else entirely.
+    local okH, y = pcall(StreetLamps.flameHeight)
+    Voxel3D.lampHeight = okH and y or nil
+    -- The gas clock. Wrapped so a long session cannot walk sin() out into the
+    -- range where a float has no fraction left and the flicker freezes.
+    Voxel3D.lampFlicker =
+      (Voxel3D.lampLights and #Voxel3D.lampLights > 0)
+      and ((love.timer and love.timer.getTime and love.timer.getTime() or 0)
+           * 2.4) % 6283.185
+      or 0
+  else
+    Voxel3D.lampLights = nil
+    Voxel3D.lampFlicker = 0
+  end
   local g = VoxelScene.glintStep(glint, cx, cy)
   Voxel3D.glassPhase, Voxel3D.glassGlint = g.phase, g.amp
 
@@ -1018,27 +1049,91 @@ function VoxelScene.render(state, w, h, vw, vh, paletteFor)
   -- through the meadow this frame.
   local grassTex = atlasFor(state.map)
   local Grass3D = nil
+  local GrassMod = nil
   do
     local ok, G = pcall(V.require, "Grass3D")
-    if ok and G and G.available and G.available() then
-      Grass3D = G
-      grassTex = G.texture() or grassTex
+    if ok and G then
+      -- the module is wanted either way: the springs below are physics on
+      -- whatever the grass pass is drawing, and the classic extruded slab
+      -- is crushed underfoot exactly like a bake is
+      GrassMod = G
+      if G.available and G.available() then
+        Grass3D = G
+        grassTex = G.texture() or grassTex
+      end
     end
   end
+  -- ------- how tall the thing that is about to lean stands
+  --
+  -- The bake knows its own height; the classic slab does not, and takes the
+  -- default. Handed over rather than assumed, so the bend curve runs over
+  -- the geometry actually in front of the shader (see Voxel3D's sway block).
   do
-    local crush = { n = 0, p = {} }
-    for _, p in ipairs(posed) do
-      if crush.n >= 4 then break end
-      -- anyone standing in the world parts the grass; moving harder
+    local h = nil
+    if Grass3D and Grass3D.meta then
+      local okm, m = pcall(Grass3D.meta)
+      if okm and m and tonumber(m.height) and m.height > 0.5 then
+        h = m.height
+      end
+    end
+    Voxel3D.grassH = h
+    -- and what is lying on the blades this frame: rain, settled snow, gust
+    local wet, snow, gust = 0, 0, 0
+    local okl, a, b, c = pcall(Wind.load)
+    if okl then wet, snow, gust = a or 0, b or 0, c or 0 end
+    Voxel3D.grassLoad = { wet, snow, gust }
+  end
+  do
+    -- Everyone standing in the world parts the grass; moving parts it
+    -- harder. Handed to Grass3D rather than sent straight down, because
+    -- what the shader wants is not where the feet are this frame -- it is
+    -- how far each tuft has got in bending down and standing back up, and
+    -- that is a thing with a memory (Grass3D.crushFrame).
+    -- ------- and the player goes FIRST
+    --
+    -- There are only so many live foot slots, and `posed` is in draw order
+    -- -- ghosts on neighbouring maps, then this map's cast, with the
+    -- player wherever they happen to fall in it. Filling the slots in that
+    -- order means three wild Pokemon standing near you can take all of
+    -- them, and then the one walker whose trail anybody is looking at --
+    -- yours -- silently drops out. Measured: a walk down Route 1 laid two
+    -- crumbs instead of five, all of them a Rattata's.
+    local feet = {}
+    local function foot(p)
+      if not p or #feet >= 4 then return end
       local lift = p.lift or 0
       local moving = math.abs(lift) > 0.15
-      crush.n = crush.n + 1
-      crush.p[crush.n] = {
+      feet[#feet + 1] = {
         (p.px or 0) + 8,
         (p.py or 0) + 8,
         moving and 12 or 10,
         moving and 1.0 or 0.6,
       }
+    end
+    foot(me)
+    for _, p in ipairs(posed) do
+      if p ~= me then foot(p) end
+    end
+    -- Time since the LAST grass pass, not love.timer.getDelta(): the
+    -- springs and the trail are integrated in here, and a frame that
+    -- renders the scene twice (a staged battle over the overworld) would
+    -- otherwise step them twice and run the meadow at double speed. Asked
+    -- this way, a second pass in the same frame gets dt = 0 and changes
+    -- nothing, which is exactly right -- it is the same instant.
+    local now = (love.timer and love.timer.getTime and love.timer.getTime())
+                or 0
+    local dt = (lastGrassAt and (now - lastGrassAt)) or 0
+    lastGrassAt = now
+    if dt < 0 then dt = 0 elseif dt > 0.1 then dt = 0.1 end
+    local crush = nil
+    if GrassMod and GrassMod.crushFrame then
+      local okc, c = pcall(GrassMod.crushFrame, feet, dt)
+      if okc then crush = c end
+    end
+    if not crush then
+      -- springs unavailable: the old per-frame list, which is still right,
+      -- just instant
+      crush = { n = #feet, p = feet }
     end
     Voxel3D.crush = crush
   end
@@ -1050,7 +1145,14 @@ function VoxelScene.render(state, w, h, vw, vh, paletteFor)
     Voxel3D.draw(ChunkMesher.grass(nb.map), ntex,
                  Mat4.translate(nb.ox, 0, nb.oy), pull, nil, sway)
   end
-  Voxel3D.crush = nil
+  -- The crush stays ON through the flowers. They are the other thing out
+  -- here with a base in the ground and a top free to give, they grow in
+  -- the same beds people walk through, and a boot that lays the grass flat
+  -- and steps over a flower bed untouched is the seam showing.
+  -- and the flowers stand on their own height again: they are the tileset's
+  -- own slab whatever the grass bake is, so a tall bake must not stretch
+  -- their bend curve with it
+  Voxel3D.grassH = nil
   -- flower billboards: pulled like the characters and the grass, MINUS
   -- the depth of 8 world pixels along the view (8 sin a -- the camera
   -- looks along (0, -cos a, -sin a), so that is exactly one tile row of
@@ -1075,6 +1177,8 @@ function VoxelScene.render(state, w, h, vw, vh, paletteFor)
                  Mat4.translate(nb.ox, 0, nb.oy), fpull,
                  ShadowMap.snug(Mat4.translate(nb.ox, 0, nb.oy)), fsway)
   end
+  Voxel3D.crush = nil
+  Voxel3D.grassLoad = nil
 
   -- Street lamps last among the world props: poles take the hour's light,
   -- heads flatten to lampColor after dusk so a DEEP night still has light
