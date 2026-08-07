@@ -244,9 +244,11 @@ end
 
 -- Crush points for the grass pass this frame: player + roamers that are
 -- walking on tall grass. Populated by Grass3D.gatherCrush from VoxelScene
--- and sent into the scene shader as up to 4 packed vec4s.
-local crush = { n = 0, p = { { 0, 0, 0, 0 }, { 0, 0, 0, 0 },
-                              { 0, 0, 0, 0 }, { 0, 0, 0, 0 } } }
+-- and sent into the scene shader as up to 8 packed vec4s.
+-- Eight slots, not four: the first few are feet standing in the meadow
+-- right now and the rest are the TRAIL behind them (see crushFrame).
+local crush = { n = 0, p = {} }
+for i = 1, 8 do crush.p[i] = { 0, 0, 0, 0 } end
 
 function Grass3D.clearCrush()
   crush.n = 0
@@ -254,7 +256,7 @@ end
 
 -- Add a foot at world (wx, wz). `strength` 0..1, `radius` world px.
 function Grass3D.addCrush(wx, wz, radius, strength)
-  if crush.n >= 4 then return end
+  if crush.n >= 8 then return end
   crush.n = crush.n + 1
   local p = crush.p[crush.n]
   p[1] = tonumber(wx) or 0
@@ -265,6 +267,216 @@ end
 
 function Grass3D.crushCount()
   return crush.n
+end
+
+-- ------- and the part a per-frame list cannot do: SPRING-BACK
+--
+-- Rebuilding the crush list from who is standing where, every frame, gives
+-- grass that is flattened while a foot is in it and perfectly upright the
+-- instant that foot leaves. That is not what a plant does. It is also the
+-- single most visible thing wrong with foot-crush, because the eye is
+-- already tracking the walker and lands on the tuft behind them.
+--
+-- So the list is kept BETWEEN frames instead, and each slot carries a
+-- strength AND a velocity. Going down it is a plain fast chase -- a boot
+-- does not bounce on its way into the ground. Coming back up it is a
+-- damped SPRING, integrated rather than eased, and the difference is the
+-- whole point: an ease can only approach upright from below and stops
+-- being visible the moment it is close, while a spring carries momentum
+-- through upright, overshoots, and comes back. That little kick past
+-- vertical is what the eye reads as a plant standing up rather than as a
+-- flattened patch fading out.
+--
+-- Underdamped on purpose: zeta below 1. At K=46 and C=5 the tuft passes
+-- upright about a third of a second after the foot lifts, stands roughly a
+-- quarter proud at the top of the kick half a second in, and is settled
+-- inside two seconds -- grass, not jelly.
+-- ------- and the part a spring cannot do either: the TRAIL
+--
+-- The spring is right about one tuft and wrong about a WALK. Somebody
+-- crossing a meadow parts it the whole way, and what they leave behind is
+-- a line of laid grass that stands up over several seconds -- a path you
+-- can look back at and see where you came from. A springy foot gives none
+-- of that: the crush is a disc that follows the walker, and two steps
+-- later there is no evidence anybody was ever there.
+--
+-- So a moving foot DROPS CRUMBS. Every TRAIL_STEP world pixels it leaves a
+-- weaker, narrower crush at the place it just left, and that crumb fades
+-- on its own clock over TRAIL_TTL -- no spring, because a blade that has
+-- been walked flat and left does not snap back, it recovers.
+--
+-- The eight shader slots are split rather than shared: live feet take the
+-- first CRUSH_LIVE, the trail takes what is left. A fixed split means a
+-- crowd of roamers can never crowd the trail out, and a long walk can
+-- never crowd out the foot that is actually in the grass.
+Grass3D.CRUSH_FALL = 14.0     -- per second, toward a foot that is present
+Grass3D.CRUSH_K = 46.0        -- spring stiffness on the way back up
+Grass3D.CRUSH_C = 5.0         -- and its damping (below critical: it kicks)
+Grass3D.CRUSH_KEEP = 0.015    -- below this, and still, a slot is done
+-- How far a foot may travel between frames and still be recognised as the
+-- same foot. Twenty rather than ten because this machine is not the only
+-- machine: at twenty frames a second a walking sprite covers most of a
+-- tile per frame, and a snap too tight turns one walker into a stream of
+-- one-frame strangers -- each opening a slot, none of them living long
+-- enough to drop a crumb.
+Grass3D.CRUSH_SNAP = 20       -- world px a foot may move and stay the same slot
+Grass3D.CRUSH_SLOTS = 8       -- what the shader takes (Voxel3D.CRUSH_SLOTS)
+Grass3D.CRUSH_LIVE = 3        -- of those, how many may be live feet
+
+-- Spacing against radius is the whole of whether this reads as a PATH or
+-- as a row of dents: ten apart with a nine-pixel reach, the discs overlap
+-- and the eye joins them into one laid line, and five of them span fifty
+-- world pixels -- three tiles of trail behind you, which is about as far
+-- back as anybody turns to look.
+Grass3D.TRAIL_STEP = 10       -- world px a foot travels between crumbs
+Grass3D.TRAIL_TTL = 4.2       -- seconds a crumb takes to fade out entirely
+Grass3D.TRAIL_STR = 0.90      -- how hard a crumb lies, against the foot's own
+Grass3D.TRAIL_RAD = 9         -- world px -- narrower than a foot: it is a path
+Grass3D.TRAIL_MAX = 5         -- crumbs kept (CRUSH_SLOTS - CRUSH_LIVE)
+
+-- live slots: { x, z, r, s (live strength), v (its velocity), tgt, seen,
+--               lx, lz (where this foot last dropped a crumb) }
+local tracks = {}
+-- crumbs: { x, z, r, s0 (strength at birth), t (age) }
+local trail = {}
+
+local function nearestTrack(x, z)
+  local best, bd = nil, Grass3D.CRUSH_SNAP * Grass3D.CRUSH_SNAP
+  for i = 1, #tracks do
+    local t = tracks[i]
+    local dx, dz = t.x - x, t.z - z
+    local d = dx * dx + dz * dz
+    if d <= bd then best, bd = t, d end
+  end
+  return best
+end
+
+-- One frame of foot-crush from the poses already gathered for the draw.
+-- `feet` is a list of { x, z, radius, strength } in world pixels -- what
+-- the old inline block in VoxelScene built -- and what comes back is the
+-- same `{ n, p }` packet Voxel3D.crush takes, with the springs applied.
+function Grass3D.crushFrame(feet, dt)
+  dt = tonumber(dt) or 0
+  if dt < 0 then dt = 0 elseif dt > 0.1 then dt = 0.1 end
+
+  for i = 1, #tracks do tracks[i].tgt, tracks[i].seen = 0, false end
+
+  for i = 1, #(feet or {}) do
+    local f = feet[i]
+    local x, z = tonumber(f[1]) or 0, tonumber(f[2]) or 0
+    local r, s = tonumber(f[3]) or 10, tonumber(f[4]) or 1
+    local t = nearestTrack(x, z)
+    if t then
+      -- the same foot, moved: follow it rather than opening a second slot.
+      -- And if it has travelled far enough since its last crumb, leave one
+      -- WHERE IT WAS -- the trail is the places a foot has been, not the
+      -- place it is.
+      local ddx, ddz = x - (t.lx or x), z - (t.lz or z)
+      if ddx * ddx + ddz * ddz
+         >= Grass3D.TRAIL_STEP * Grass3D.TRAIL_STEP then
+        trail[#trail + 1] = {
+          x = t.lx or t.x, z = t.lz or t.z,
+          r = Grass3D.TRAIL_RAD,
+          s0 = math.max(s, t.s) * Grass3D.TRAIL_STR,
+          t = 0,
+        }
+        -- oldest first out: the far end of a walk is the part nobody is
+        -- looking at any more
+        while #trail > Grass3D.TRAIL_MAX do table.remove(trail, 1) end
+        t.lx, t.lz = x, z
+      end
+      t.x, t.z, t.r = x, z, r
+      if s > t.tgt then t.tgt = s end
+      t.seen = true
+    elseif #tracks < Grass3D.CRUSH_LIVE then
+      tracks[#tracks + 1] = { x = x, z = z, r = r, lx = x, lz = z,
+                              s = 0, v = 0, tgt = s, seen = true }
+    end
+  end
+
+  for i = #trail, 1, -1 do
+    local c = trail[i]
+    c.t = c.t + dt
+    if c.t >= Grass3D.TRAIL_TTL then table.remove(trail, i) end
+  end
+
+  for i = #tracks, 1, -1 do
+    local t = tracks[i]
+    -- The branch is "is a foot in this tuft", NOT "is the strength below
+    -- its target". Those read the same until the spring overshoots, and
+    -- then they are opposites: past upright the strength is NEGATIVE, so a
+    -- test on `tgt > s` sees a zero target above it, calls that a foot
+    -- arriving, and zeroes the very velocity that was carrying the kick --
+    -- which clamps every spring to the instant it crosses zero and turns
+    -- the whole thing back into the ease it was written to replace.
+    if t.seen and t.tgt > t.s then
+      -- a foot arriving: fast, and it does not overshoot -- a boot going
+      -- down does not bounce. The velocity goes with it, so the spring
+      -- below starts from rest under the foot rather than from whatever
+      -- the last release left behind.
+      t.s = t.s + (t.tgt - t.s) * math.min(1, Grass3D.CRUSH_FALL * dt)
+      t.v = 0
+    else
+      -- and standing back up: a damped spring, integrated. Explicit Euler
+      -- is stable here because the step is a frame and the stiffness is
+      -- deliberately low (K dt^2 well under 1).
+      t.v = t.v + (t.tgt - t.s) * Grass3D.CRUSH_K * dt
+      t.v = t.v - t.v * Grass3D.CRUSH_C * dt
+      t.s = t.s + t.v * dt
+    end
+    if not t.seen
+       and math.abs(t.s) < Grass3D.CRUSH_KEEP
+       and math.abs(t.v) < 0.12 then
+      table.remove(tracks, i)
+    end
+  end
+
+  crush.n = 0
+  for i = 1, #tracks do
+    if crush.n >= Grass3D.CRUSH_LIVE then break end
+    local t = tracks[i]
+    if math.abs(t.s) >= Grass3D.CRUSH_KEEP then
+      crush.n = crush.n + 1
+      local p = crush.p[crush.n]
+      -- a negative strength is the overshoot: the shader reads it as a
+      -- push the other way, which is the blade passing upright
+      p[1], p[2], p[3], p[4] = t.x, t.z, t.r, t.s
+    end
+  end
+  -- and the trail behind them, NEWEST FIRST: a walk longer than the slot
+  -- budget should lose its far end, not its near one.
+  --
+  -- SQUARED, not cubed and not linear. Linear reads as the path dimming
+  -- evenly, which is a fade rather than a recovery. Cubed was the first
+  -- try and collapses too fast to look at: a crumb at four fifths of its
+  -- life still has half its lie under a square and only a fifth under a
+  -- cube, and a screenshot taken a moment after the walker stopped came
+  -- back with one crumb left out of four. Squared holds the path long
+  -- enough to turn round and see, then lets it go.
+  for i = #trail, 1, -1 do
+    if crush.n >= Grass3D.CRUSH_SLOTS then break end
+    local c = trail[i]
+    local k = 1 - c.t / Grass3D.TRAIL_TTL
+    if k > 0 then
+      local s = c.s0 * k * k
+      if s >= Grass3D.CRUSH_KEEP then
+        crush.n = crush.n + 1
+        local p = crush.p[crush.n]
+        p[1], p[2], p[3], p[4] = c.x, c.z, c.r, s
+      end
+    end
+  end
+  return crush
+end
+
+function Grass3D.trailCount()
+  return #trail
+end
+
+function Grass3D.clearTracks()
+  tracks = {}
+  trail = {}
+  crush.n = 0
 end
 
 function Grass3D.crushAt(i)
@@ -288,7 +500,7 @@ function Grass3D.gatherCrush(state)
   if ok and Roamer and Roamer.forEach then
     pcall(Roamer.forEach, function(r)
       if not r or not r.x then return end
-      if crush.n >= 4 then return end
+      if crush.n >= 8 then return end
       local str = (r.moving or r.step) and 0.85 or 0.4
       Grass3D.addCrush((r.x or 0) + 8, (r.y or 0) + 8, 10, str)
     end)

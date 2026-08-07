@@ -108,7 +108,7 @@ the over-the-shoulder battles. All of that is his work, and it is the reason
 any of this exists.
 
 Everything below was added in the `-mobile` line (versions 1.4.0 through
-1.16.0 â€” see [`CHANGELOG.md`](CHANGELOG.md) for the full history, and
+1.18.0 â€” see [`CHANGELOG.md`](CHANGELOG.md) for the full history, and
 [`MOBILE.md`](MOBILE.md), written in Portuguese, for the reasoning).
 
 ### It runs on weak hardware
@@ -147,6 +147,7 @@ rolls its dice precisely as it always did.**
 | **CITY** | PokÃ©mon loose in the streets of every town, and civilian NPCs that glance as you pass |
 | **ROUTINES / SHELTER** | civilians look around, turn toward the sign they are standing beside, talk in pairs â€” and walk to the nearest doorway when a shower comes down hard |
 | **WEATHER** | rain and snow, folded into the light rather than drawn over it |
+| **WIND** | the tall grass is geometry, so wind is a bend and not a slid picture: the base stays planted, the tip gives and drops as it goes over, each tuft has its own stiffness, and the gust travels across a meadow. Rain weighs the blades down and damps them; settled snow bows them and piles white on the crowns; walkers lay them flat and they spring back, leaving a trail you can turn round and see. AUTO hands the row to the climate -- calm night, breeze by day, gale under a front, no menu trips. Plus the air itself: dust and spray streaks, and a gust front crossing the frame as a line |
 | **GROUND** | what the weather leaves behind: puddles that gather through a shower and are still there ten minutes later wearing the sky's own colour, snow settling in drifts, footprints behind everyone walking on it |
 | **ECOLOGY** | Gen 2's time-of-day encounters built out of Gen 1's single table â€” the nocturnal half of the dex comes up after dark, birds and caterpillars by day, by reweighting the map's own ten slot buckets rather than adding or removing anything |
 | **WATER** | a cel-shaded swell: two crossing wave trains, analytic normals, depth-rung colour and binary foam (toon water ideas, hard steps only â€” not PBR). CALM / SWELL / FLAT. Rain and wind feed chop energy; freeze turns the surface into walkable ice when the party can Surf |

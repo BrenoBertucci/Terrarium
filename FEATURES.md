@@ -259,6 +259,118 @@ the answer is still *raining*, which is right for the sound and wrong for the
 picture. `Weather.visible` is the one every draw path asks, and it is gated on
 the same open-sky test the sky, the sun and the hour's tint already rest on.
 
+## The air — the WIND row
+
+The tall grass out here is **geometry**, not a picture: a tuft is a real
+stamped mesh with a base in the ground and a top free to give. That is the
+whole reason this row can exist. A tile animation is one image shared by
+every cell drawing that tile, so every tuft on a route moves in perfect
+unison forever — machinery, at any price. A vertex shader knows *where each
+vertex is*, so the wave's phase can come from the tuft's own world position,
+and then the gust **travels**: it arrives at the near edge of a meadow,
+crosses it, and leaves.
+
+| Rung | What it does |
+| --- | --- |
+| `AUTO` | the row hands itself to the climate — **default** |
+| `BREEZE` | living outdoor air, inside a fixed band |
+| `GALE` | the same air, amplified |
+| `OFF` | silence — accessibility, screenshots, quiet sessions |
+
+**AUTO** is the answer to the one complaint the older ladder earned: BREEZE
+and GALE are two fixed windows onto the same climate, so a player who wants
+a storm to actually feel like a storm walks back to this menu every time the
+sky changes — the row doing the weather's job by hand. AUTO spans both
+windows on one continuous curve, bent low so a calm afternoon stays calm,
+and pushed the last of the way by a front so a downpour arrives at gale on
+its own. Measured: about **0.7 px** of tip reach on a clear day and **3.4–4.7
+px** under a shower, with nobody touching anything.
+
+### What the blade actually does
+
+- **The bend is a bend.** Displacement grows with the vertex's own height
+  above the base, squared, so the roots stay planted and the tip folds.
+- **The tip comes down as it goes over.** A stem is not a rubber band:
+  moving XZ alone silently *stretches* every blade as it leans, which is
+  exactly the look of grass sliding. Holding the arc length instead drops
+  the tip by about `lean² / 2H`.
+- **Every tuft is its own plant.** One hash off the 8×8 cell a tuft stands
+  in gives it a stiffness (some are young and whippy, some are woody), a
+  phase offset, and a bearing it slumps along. Nothing is stored per
+  instance — the mesh is one buffer for a whole map, and the only thing a
+  vertex knows about which tuft it belongs to is where it is.
+- **The gust is a front.** A second, much longer wave on the same bearing
+  modulates the amplitude itself, so the air arrives in bands rather than
+  blowing everywhere at one flat strength.
+- **Rain is weight.** Falling rain damps the sway — a wet meadow moves
+  *less*, not more — bows the blades down, and adds a fast little tick on
+  each tuft's own phase as drops land.
+- **Settled snow is worse, and it stays.** It reads off the accumulated
+  cover rather than the snowfall, so a meadow is still bowed and half-still
+  after the sky clears. Blades slump on their own bearings, so a snowed-in
+  patch looks *loaded* rather than leaning together.
+- **And snow PILES ON it.** This one needed a channel of its own. Every
+  other surface in the world takes its snow from its face normal — a roof
+  ridge points at the sky and goes white, a wall does not — and by that
+  rule a grass blade is a *side*, correctly, along its whole length. So a
+  meadow took the flank's third and stopped, standing green next to ground
+  that had gone white. But snow does not care that a blade is vertical: it
+  lands from above and rests on the **crown**, which is why real winter
+  grass is white on top with green showing underneath. The tuft now carries
+  a cap weighted by how far up the blade you are and how much has settled,
+  and it feeds the same snow path a roof does — threshold, drift, grain and
+  the sun's glitter all run on it — so a snowed meadow gets the world's own
+  snow rather than a white decal laid over it.
+- **Feet flatten it and it springs back.** The crush list is kept between
+  frames with a strength and a velocity per foot: a fast chase on the way
+  down (a boot does not bounce) and an underdamped spring on the way up,
+  which carries the tuft *past* upright about a third of a second after the
+  foot lifts and settles inside two. That kick is what reads as a plant
+  standing up rather than as a flattened patch fading out.
+- **And it lies DOWN, rather than getting shorter.** Shrinking a blade's
+  height reads as the meadow deflating — the tuft stays upright and simply
+  becomes a smaller upright tuft. A walked blade folds: the tip travels
+  outward by most of its own height and comes down by nearly all of it, so
+  it ends up along the ground pointing where the walker went.
+- **A walk leaves a TRAIL.** A spring is right about one tuft and wrong
+  about a walk — the crush is a disc that follows the walker, and two steps
+  later nothing says anybody was ever there. So a moving foot drops
+  **crumbs** every ten world pixels: weaker, narrower crushes at the places
+  it just left, spaced closer than their own reach so the eye joins them
+  into one laid line, fading on their own clock over four seconds with no
+  spring, because grass that has been walked flat and left does not snap
+  back, it recovers. Stop, turn around, and the way you came is still there
+  for a couple of seconds. Roamers and street Pokémon lay one too, and
+  flowers are in it — the beds people walk through are the same beds.
+
+The eight shader slots are split rather than shared: the first three are
+live feet, the rest are trail. A crowd of roamers can never crowd out the
+trail, and a long walk can never crowd out the foot actually standing in
+the grass.
+
+Roamers standing in the meadow lean on the **same clock** — `Wind.leanAt`
+is the CPU twin of the vertex shader's wave, front and load included, so a
+body and the tuft beside it are never on two schedules.
+
+### Wind you can see, off the grass
+
+A meadow only reports the air that is *inside* it. On paving, on sand, on a
+path with no tall grass in frame, a gale used to be invisible. So the air
+carries **streaks** — short flat comet-tails of what is in it: dust on a
+clear day, the rain's own pale blue as spray under a shower, blown white
+under a fall. Nothing round, soft-edged or additive; a soft particle over a
+cel-shaded diorama is the one thing that reads as a filter laid on the world
+rather than as something in it.
+
+And when the squall envelope crosses over — the same number the grass is
+bending to — a **rank goes across abreast**, perpendicular to the bearing
+and all on one clock, so the gust crosses the frame as a line while the
+grass bows under it. The two are one event seen twice.
+
+Below a floor of wind, indoors, under a canopy, or with the row OFF, it
+draws nothing at all: a calm day is calm, and motes drifting through a still
+meadow would be the effect announcing itself.
+
 ## What the rain leaves behind — the GROUND row
 
 The WEATHER row draws what is falling. This draws what has **fallen**, and

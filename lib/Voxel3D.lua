@@ -92,6 +92,19 @@ local SHADER = [[
   // quantise away into bands.
   varying LOVE_HIGHP_OR_MEDIUMP vec3 vWorld;
   varying vec3 vSun;          // this fragment's place in the sun's view
+  // Snow SETTLED on a grass blade, 0..1, weighted by how far up the tuft
+  // this fragment sits. Grass is the one thing in the world whose snow the
+  // face normal cannot answer for: a blade is a SIDE by every honest
+  // measure of its geometry, so `vUp` is correctly zero on all of it and
+  // the snow block below correctly gives the whole meadow the flank's
+  // share and no more -- a tuft tinted a third pale, in a world where the
+  // ground beside it has gone white. But snow does not care that a blade
+  // is vertical; it lands from above and RESTS ON THE CROWN, which is why
+  // real winter grass is white on top and green underneath. This carries
+  // that, and it is a separate channel from vUp rather than a fudge of it
+  // precisely because it is a different fact: not "which way does this
+  // face point" but "how much has piled on this blade".
+  varying float vGrassCap;
   varying float vWater;       // 1 when swell/ice paint runs, 0 otherwise
   varying float vWaterSurf;   // 1 on recessed water geometry always (y < -1)
   varying vec3 vWave;         // and the normal of the swell under it
@@ -128,20 +141,42 @@ local SHADER = [[
   uniform float pull;
   uniform vec3 curve;         // xy = the focus in world XZ, z = k; 0 = off
   uniform float sway;         // wind reach at the tip, world px; 0 = planted
-  // Foot-crush on grass (packed vec4: xz pos, radius, strength). Up to 4
-  // feet; crushN is how many are live this draw. Zero when not the grass
-  // pass so terrain never folds under a walker.
-  uniform vec4 crush0;
-  uniform vec4 crush1;
-  uniform vec4 crush2;
-  uniform vec4 crush3;
+  // Foot-crush on grass (packed vec4: xz pos, radius, strength). crushN is
+  // how many are live this draw. Zero when not the grass pass so terrain
+  // never folds under a walker.
+  //
+  // EIGHT, and an array rather than the four separate uniforms this used
+  // to be, because half of them are no longer feet: the first few are the
+  // walkers standing in the meadow right now and the rest are the TRAIL
+  // they left -- crumbs dropped along the path behind them, fading over
+  // seconds rather than springing back in one. Four slots could hold the
+  // feet or the trail and not both. An array also means one send for the
+  // lot instead of eight, which is what makes the extra slots free.
+  uniform vec4 crush[8];
   uniform float crushN;
   uniform vec2 windDir;       // its bearing in world XZ, unit length
   uniform vec2 windFreq;      // phase gained per world pixel, per axis
   uniform float windPhase;    // advanced by the clock
+  uniform float grassH;       // tuft height in world px -- the bend normaliser
+  // What the blades are CARRYING and what is passing over them:
+  //   x  rain on them now       weight + damping + the tick of drops landing
+  //   y  settled snow on them   weight that stays, and stiffens what is left
+  //   z  gust envelope 0..1     how far into a squall this instant is
+  uniform vec3 grassLoad;
   uniform float swell;        // water's rise at the crest, world px; 0 = flat
   uniform float iceLift;      // freeze raises the surface a little (still y<-1 id)
   attribute float VertexShade;
+  // One number per TUFT, from the 8x8 cell it stands in. The grass mesh is
+  // one buffer for a whole map and carries no per-instance attribute, so
+  // the only thing a vertex knows about which tuft it belongs to is where
+  // it is -- and a tuft is exactly one cell wide, so the floor of the world
+  // position over 8 is that tuft's name. Everything a blade should not
+  // share with its neighbour (stiffness, phase, which way snow slumps it)
+  // comes off this, which is what stops a meadow reading as one object
+  // being shaken.
+  float tuftHash(vec2 cell) {
+    return fract(sin(dot(cell, vec2(127.1, 311.7))) * 43758.5453);
+  }
   vec4 position(mat4 transform_projection, vec4 vertex_position) {
     // magnitude is the shading, sign is the face normal's Y (see vUp). A
     // shade is a product of positive factors with a floor well above zero,
@@ -180,34 +215,125 @@ local SHADER = [[
     //
     // Two harmonics rather than one so the crest is not a clean sine
     // rolling past -- real gusts have a shove in them.
+    // Zero for everything that is not the grass pass, and set inside the
+    // block below when it is -- the same discipline `vWater` keeps, and
+    // for the same reason: a varying left over from the previous draw is
+    // a snowed hedge on a bare wall.
+    vGrassCap = 0.0;
     if (sway > 0.0) {
-      // Height fraction: 3D tufts stand ~10 world px, the old slab ~8.
-      // 0.1 maps both onto 0..1 without needing a per-mesh uniform.
-      float hN = clamp(vertex_position.y * 0.10, 0.0, 1.0);
+      // Height fraction. `grassH` is what the mesh in front of the shader
+      // actually stands (the bake's own height for a 3D tuft, the slab's
+      // for the classic path) rather than the flat 0.1 that used to stand
+      // in for both -- a bake taller or shorter than ten pixels was having
+      // its bend curve stretched or clipped, which is why a tall tuft went
+      // stiff at the top and a short one bent from the root.
+      float H = max(grassH, 1.0);
+      float hN = clamp(vertex_position.y / H, 0.0, 1.0);
       float bend = hN * hN;
-      float p = dot(w.xz, windFreq) - windPhase;
+
+      // ------- which tuft this is
+      //
+      // Taken off vWorld, which is the position BEFORE any of this moves
+      // it: a name that changed as the blade bent would make the blade's
+      // own stiffness flicker.
+      float id = tuftHash(floor(vWorld.xz * 0.125));
+      // Stiffness scatter. A real meadow is not one plant: some tufts are
+      // young and whippy, some are woody and barely give, and it is the
+      // DISAGREEMENT that reads as many plants rather than one animated
+      // surface. Divided into the amplitude, so a stiff tuft leans less.
+      float stiff = 0.78 + id * 0.55;
+      float ph = id * 6.2831;
+
+      float wet  = clamp(grassLoad.x, 0.0, 1.0);
+      float snow = clamp(grassLoad.y, 0.0, 1.0);
+      float gust = clamp(grassLoad.z, 0.0, 1.0);
+
+      float p = dot(w.xz, windFreq) - windPhase + ph * 0.35;
+      // ------- the squall front
+      //
+      // A second wave on the same bearing at a fifth of the frequency and
+      // a third of the clock -- so the amplitude ITSELF travels. The wave
+      // below says which way a blade is leaning this instant; this says
+      // whether the air is on it at all. Without it a meadow is uniformly
+      // windy forever, which is the tell that separates an animation from
+      // weather no matter how good the wave is.
+      float front = 0.72 + 0.28 * sin(dot(w.xz, windFreq * 0.21)
+                                      - windPhase * 0.37);
+      float amp = sway * (0.55 + 0.45 * front) * (1.0 + 0.55 * gust) / stiff;
+      // Rain is water on a blade: heavier, so it damps -- a wet meadow
+      // moves less, not more. Settled snow is worse, and it also freezes
+      // the stems it is sitting on, so it takes most of the give away.
+      amp *= (1.0 - 0.28 * wet) * (1.0 - 0.62 * snow);
+
       // Three harmonics: travelling gust + shove + tip flutter. Flutter
       // is small and high-frequency so a meadow shimmers rather than
       // waving like a flag.
       float wave = sin(p)
                  + 0.38 * sin(p * 2.25 + 1.7)
                  + 0.14 * sin(p * 5.3 + hN * 2.1 + 0.4);
+      // and the rain's own note on top: drops landing are fast and small
+      // and land on each tuft on its own phase, so a meadow under a shower
+      // twitches under the sway instead of only leaning harder.
+      wave += wet * 0.22 * sin(p * 9.1 + ph * 3.0);
+
       // mild cross-axis drift so blades do not all lean on one line
       vec2 crossDir = vec2(-windDir.y, windDir.x);
       float cross = 0.18 * sin(p * 1.6 + 0.9) * bend;
-      w.xz += windDir * (sway * bend * wave)
-            + crossDir * (sway * cross);
+      vec2 lean = windDir * (amp * bend * wave) + crossDir * (amp * cross);
+      w.xz += lean;
+      // ------- and the tip comes DOWN as it goes over
+      //
+      // A stem is not a rubber band: bending it does not make it longer.
+      // Displacing XZ alone silently stretches every blade as it leans,
+      // which is exactly the look of grass sliding rather than bending.
+      // Holding the arc length instead, the tip drops by about lean^2/2H
+      // -- the second-order term of the circular arc, which at these
+      // amplitudes is the whole of it. Capped at half the vertex's own
+      // height so a gale folds a tuft over rather than through the floor.
+      float L = length(lean);
+      w.y -= min(L * L / (2.0 * H), vertex_position.y * 0.5);
       // tip bob: a little vertical give under the same gust
-      w.y += sway * bend * 0.07 * sin(p * 1.85 + 0.6);
-      // Foot crush: radial push + height flatten near player/roamers.
-      // Strength falls with distance; bend keeps roots planted.
+      w.y += amp * bend * 0.07 * sin(p * 1.85 + 0.6);
+
+      // ------- WEIGHT: what is lying on the blade, which is not the wind
+      //
+      // Rain and snow do not push a tuft downwind, they pull it DOWN --
+      // and snow keeps pulling after the fall stops, which is why it reads
+      // off the settled cover rather than off the snowfall. The bearing is
+      // the tuft's own (`ph`), so a snowed-under meadow slumps in every
+      // direction like something loaded, instead of leaning as one.
+      float load = wet * 0.16 + snow * 0.46;
+      if (load > 0.0) {
+        vec2 slump = vec2(cos(ph), sin(ph));
+        w.xz += slump * (load * bend * H * 0.22);
+        w.y -= load * bend * H * 0.30;
+      }
+
+      // ------- FOOT CRUSH, and the TRAIL behind it
+      //
+      // A blade somebody walks through does not get shorter, it LIES DOWN:
+      // it folds away from the foot and ends up along the ground pointing
+      // where the walker went. Shrinking its height was the first version
+      // of this and it reads as the meadow deflating -- the tuft stays
+      // upright and merely becomes a smaller upright tuft. So there are
+      // three parts, and the first two are the ones that matter:
+      //
+      //   LAY OVER   the tip travels outward by most of the blade's own
+      //              height, which is what folding a stem flat actually
+      //              looks like from above
+      //   DROP       and comes down by nearly all of it, so the fold ends
+      //              near the ground rather than sticking out sideways
+      //   SQUASH     a little residual shortening, because a folded blade
+      //              is foreshortened as well as bent
+      //
+      // Slots past the live feet are TRAIL: same maths, weaker and much
+      // wider-lived, so the path somebody walked stays parted behind them.
+      // Nothing here needs to know which is which -- a crumb is a foot
+      // that is fading.
       if (crushN > 0.5) {
-        for (int ci = 0; ci < 4; ci++) {
+        for (int ci = 0; ci < 8; ci++) {
           if (float(ci) >= crushN) break;
-          vec4 cr = (ci == 0) ? crush0
-                  : (ci == 1) ? crush1
-                  : (ci == 2) ? crush2
-                  : crush3;
+          vec4 cr = crush[ci];
           vec2 d = w.xz - cr.xy;
           float dist = length(d);
           float rad = max(cr.z, 0.5);
@@ -216,12 +342,28 @@ local SHADER = [[
             t = t * t * cr.w;
             vec2 dir = (dist > 0.05) ? (d / dist) : windDir;
             // outward part + a little with the wind so a step reads as a wake
-            w.xz += dir * (t * bend * 4.2)
-                  + windDir * (t * bend * 1.1);
-            w.y *= 1.0 - t * (0.25 + 0.55 * hN);
+            w.xz += dir * (t * bend * H * 0.62)
+                  + windDir * (t * bend * H * 0.16);
+            // and DOWN with it: this is the difference between a blade that
+            // has been folded over and one that has been made shorter
+            w.y -= t * bend * vertex_position.y * 0.78;
+            // A NEGATIVE strength is Grass3D's spring-back overshoot -- the
+            // blade passing upright on its way back -- so the flatten runs
+            // the other way and the tuft stands a shade proud for a moment.
+            // Clamped both ends: a full crush may not fold a blade through
+            // its own root, and a kick may not shoot it into the sky.
+            w.y *= clamp(1.0 - t * (0.10 + 0.22 * hN), 0.72, 1.08);
           }
         }
       }
+
+      // ------- and what has piled on this blade (see vGrassCap)
+      //
+      // Weighted toward the top of the tuft, because that is where snow
+      // that fell out of the sky ends up: a crown catches it, the stem
+      // under the crown does not. smoothstep rather than a linear ramp so
+      // there is a green base rather than a gradient from root to tip.
+      vGrassCap = snow * smoothstep(0.30, 0.95, hN);
     }
     // THE WATER SURFACE, which is the only geometry in this world that
     // stands below zero -- it is recessed to -2 so the shoreline shows a
@@ -535,6 +677,25 @@ local SHADER = [[
   uniform float glassPhase;   // the glint's phase: advances with TRAVEL
   uniform float glassGlint;   // and its strength: 0 while standing still
   uniform float glassOn;      // 0 for sprite-sheet draws (see Voxel3D.glass)
+  // Up to eight nearby street lamps. xy = world XZ, z = radius and w =
+  // intensity.  They are individual warm pools, not a global yellow tint.
+  //
+  // The flame is a POINT at (lamp.xy, lampHeight), not a disc painted on the
+  // floor: a lamp that only knows its ground position lights a wall beside it
+  // exactly as hard as the road beneath it, which is the single thing that
+  // makes fake lighting look fake. See localLamp.
+  uniform vec4 lamp0;
+  uniform vec4 lamp1;
+  uniform vec4 lamp2;
+  uniform vec4 lamp3;
+  uniform vec4 lamp4;
+  uniform vec4 lamp5;
+  uniform vec4 lamp6;
+  uniform vec4 lamp7;
+  uniform float lampGlow;
+  uniform float lampHeight;   // world y of the flame (from the post's bake)
+  uniform float lampFlicker;  // the gas clock; 0 holds every lamp perfectly still
+  uniform vec3 lampCore;      // the hot near-white at the centre of a pool
   // SNOW ON THE GEOMETRY ITSELF. 0..1, and it lands on the faces that point
   // at the sky -- vUp, which is a real face normal rather than a guess read
   // off how bright the face draws (see the `lie` line below for what that
@@ -547,6 +708,63 @@ local SHADER = [[
   uniform float snowTop;
   uniform vec3 snowColor;
   uniform float snowSide;     // how much of it a flank takes; 1 on the top
+
+  // One lamp's contribution here. Returns the energy in .x and how near the
+  // flame this fragment is in .y, which the caller uses to run the pool from
+  // amber at the rim to near-white at the core -- a real flame is not one
+  // colour, and a pool that IS one colour reads as a painted circle.
+  vec2 localLamp(vec4 lamp) {
+    if (lamp.w <= 0.0 || lamp.z <= 0.0) return vec2(0.0);
+    // How far the pool REACHES is a ground measurement, and how bright it is
+    // at a point is a 3D one. Keeping them apart matters: run the cutoff off
+    // the 3D distance instead and the lantern's own height eats most of the
+    // radius before the light ever touches the road, so raising LIGHT_RADIUS
+    // to widen a pool also dims it, and the two can never be tuned at once.
+    // `ground`, not `flat`: flat is a GLSL interpolation qualifier, and using
+    // it as a name compiles nowhere -- the whole scene shader fails and the
+    // engine drops to the 2D renderer without a word.
+    vec2 ground = vWorld.xz - lamp.xy;
+    float rad2 = dot(ground, ground);
+    float r2 = lamp.z * lamp.z;
+    if (rad2 >= r2) return vec2(0.0);         // early out: most fragments
+
+    vec3 d = vec3(lamp.x, lampHeight, lamp.y) - vWorld;
+    float dist2 = dot(d, d);
+
+    // The window falls to zero WITH a zero derivative at the rim. An
+    // unwindowed inverse square has to be cut off somewhere, and the eye finds
+    // that ring before it finds anything else in the frame.
+    float nd2 = rad2 / r2;
+    float win = 1.0 - nd2 * nd2;
+    // Inverse square softened by the flame's own height, so the fragment
+    // directly under the lantern sits at half strength and there is somewhere
+    // left to climb as you walk in under it.
+    float k = max(lampHeight * lampHeight, 1.0);
+    float atten = win * win * k / (dist2 + k);
+
+    // Lambert against the only normal this renderer carries. vUp is the
+    // mesher's own face normal (see the sign of VertexShade), so an up-facing
+    // surface takes the light from directly overhead and a flank takes the
+    // horizontal share instead. Which way a flank FACES is unknowable here,
+    // so it gets the horizontal magnitude -- correct for the walls turned
+    // toward the post, generous for the ones turned away, and both are better
+    // than the flat wash that ignores the question.
+    float invd = inversesqrt(max(dist2, 1.0));
+    vec3 L = d * invd;
+    float ndl = mix(length(L.xz), max(0.0, L.y), vUp);
+    // Bounce: a street is not a vacuum, and a face the flame cannot see is
+    // dim rather than black.
+    ndl = 0.20 + 0.80 * ndl;
+
+    // A gas flame is never quite still. Two octaves, phased off the post's own
+    // world position so a row of lamps breathes out of step instead of
+    // blinking as one, and only +-6% so it reads as life, not as a fault.
+    float ph = lamp.x * 0.017 + lamp.y * 0.011;
+    float flick = 1.0 + 0.06 * sin(lampFlicker + ph)
+                            * (0.6 + 0.4 * sin(lampFlicker * 2.7 + ph * 3.1));
+
+    return vec2(atten * ndl * lamp.w * flick, atten);
+  }
 
   vec4 effect(vec4 color, Image tex, vec2 tc, vec2 sc) {
     vec4 p = Texel(tex, tc);
@@ -569,6 +787,32 @@ local SHADER = [[
     // on every frame of a snowfall.
     float lit = sunlight(vSun);
     vec3 light = skyTint + sunTint * lit;
+    vec2 lamps = localLamp(lamp0) + localLamp(lamp1)
+               + localLamp(lamp2) + localLamp(lamp3)
+               + localLamp(lamp4) + localLamp(lamp5)
+               + localLamp(lamp6) + localLamp(lamp7);
+    // The lamp adds light BEFORE the material is shaded, so paving, walls and
+    // foliage keep their own colour under the warm spill instead of becoming
+    // a flat yellow overlay.
+    //
+    // Saturating rather than clamping. min() puts a hard edge wherever two
+    // pools overlap -- a visible seam down the middle of a street, exactly
+    // where the light should be strongest -- while x/(1+kx) keeps climbing,
+    // just ever more slowly, so an overlap is brighter than either lamp and
+    // still never blows the four-colour look out to white.
+    //
+    // The 1.6 is the ceiling, and it is the difference between a lit street
+    // and a lit AFTERNOON: a city block puts eight pools inside one phone
+    // screen, and with a loose ceiling they summed until the whole frame was
+    // brighter than the sky above it and the night was simply gone. This
+    // asymptote holds the total at ~0.6 however many posts overlap, so the
+    // dark BETWEEN the pools survives -- which is the only thing that makes
+    // the pools read as light at all.
+    float energy = lamps.x / (1.0 + lamps.x * 1.6);
+    // Amber at the rim, hot near the flame. Scaled because a single pool's
+    // attenuation peaks near a half, and the core should still reach white.
+    vec3 warm = mix(lampColor, lampCore, clamp(lamps.y * 1.6, 0.0, 1.0));
+    light += warm * energy * lampGlow;
     vec3 rgb = p.rgb * vShade * light;
     // Optional water surface art: replace the tileset water tile's albedo
     // on every recessed water face (lakes / rivers). Cel paint below still
@@ -846,7 +1090,24 @@ local SHADER = [[
       // roof, a ledge, the ground and the crown of a tree take all of it; a
       // wall, a facade and a tree's front take SNOW_SIDE, whatever brightness
       // any of them happen to draw at.
-      float lie = mix(snowSide, 1.0, vUp);
+      // ------- and the one surface a face normal cannot answer for
+      //
+      // A grass blade is a SIDE. Every honest reading of its geometry says
+      // so, vUp is correctly zero along the whole tuft, and the rule above
+      // therefore hands a meadow the flank's third and stops -- which is
+      // right about the normal and wrong about the winter. Snow lands from
+      // above and RESTS ON THE CROWN: winter grass is white on top with
+      // green showing underneath, and the boundary between the two is a
+      // height on the blade, not a face.
+      //
+      // `vGrassCap` is that height, already weighted by how much snow has
+      // settled (see the vertex stage), and it goes in through the same
+      // `lie` the normal does -- so a capped tip takes the full depth and
+      // runs through every layer below it (threshold, drift, grain,
+      // sparkle) exactly as a roof ridge does. No second snow path, no
+      // decal floating over the meadow, and the base of the tuft stays
+      // green because its cap is zero.
+      float lie = mix(snowSide, 1.0, max(vUp, vGrassCap));
       float depth = snowTop * lie;      // how deep it lies on this face
 
       // ------- the two noises every layer below is cut from
@@ -932,8 +1193,12 @@ local SHADER = [[
         // deep blue. Half again the local snow keeps a highlight proportional
         // to whatever is lighting it, and clamps out at the top end by day,
         // which is what a highlight does anyway.
+        // A capped grass tip is an up-surface for this purpose too -- it is
+        // the same snow catching the same sun, and leaving it out would put
+        // a glittering field behind a dull white meadow.
         float spark = step(0.93, grain) * step(0.62, drift)
-                      * step(0.55, lit) * vUp * step(0.5, depth);
+                      * step(0.55, lit) * max(vUp, step(0.5, vGrassCap))
+                      * step(0.5, depth);
         snow = mix(snow, snowColor * light * 1.5, spark);
 
         rgb = mix(rgb, snow, lay);
@@ -1071,6 +1336,50 @@ local function slotCanvas(name, w, h)
 end
 
 local IDENTITY = Mat4.identity()
+
+-- ------- the crush array
+--
+-- `crush` is a vec4[8] in the shader (feet, then the trail behind them),
+-- and LOVE sends an array uniform as one call with one value per element.
+-- The scratch table is reused rather than built per draw: this runs on
+-- every grass and flower draw of every frame, and eight fresh tables a
+-- draw is garbage for no reason. The whole array is always sent, zeros
+-- included, for the same reason `sway` is: a slot left behind by the last
+-- draw is a dent in the grass where nobody is standing.
+Voxel3D.CRUSH_SLOTS = 8
+local crushScratch = {}
+for i = 1, 8 do crushScratch[i] = { 0, 0, 0, 0 } end
+
+local function sendCrush(sh, c)
+  local n = 0
+  if c and c.n then
+    n = c.n
+    if n > 8 then n = 8 end
+    if n < 0 then n = 0 end
+  end
+  for i = 1, 8 do
+    local s = crushScratch[i]
+    local p = (i <= n) and c.p and c.p[i] or nil
+    if p then
+      s[1], s[2], s[3], s[4] = p[1] or 0, p[2] or 0, p[3] or 0, p[4] or 0
+    else
+      s[1], s[2], s[3], s[4] = 0, 0, 0, 0
+    end
+  end
+  -- An array uniform is one send with one value per element, and it either
+  -- takes the whole array or none of it. Recorded rather than swallowed:
+  -- a driver that refused this would leave the meadow with no crush and no
+  -- trail at all, and every count on the CPU side would still be perfect
+  -- -- exactly the silent-visual-failure shape a probe cannot otherwise
+  -- see. `Voxel3D.crushSendOk` is what a probe asks.
+  local ok = pcall(sh.send, sh, "crush",
+                   crushScratch[1], crushScratch[2],
+                   crushScratch[3], crushScratch[4],
+                   crushScratch[5], crushScratch[6],
+                   crushScratch[7], crushScratch[8])
+  Voxel3D.crushSendOk = ok
+  return n
+end
 
 -- Whether the driver admits to supporting derivatives. Only a hint --
 -- the compile below is the real test -- but it saves building a shader
@@ -1288,6 +1597,34 @@ Voxel3D.glassNight = 0
 -- what it drew before.
 Voxel3D.lampColor = { 1.0, 0.84, 0.5 }
 
+-- ------- the street lamps' own pools of light
+--
+-- lampColor above is what a lamp burns; these three are what its light DOES
+-- to the street it stands on, and they are separate because a pane of window
+-- glass and a pool on the paving are lit by the same flame to different ends.
+--
+-- The core is the flame's centre, not its colour: every real light source
+-- desaturates toward white where it is brightest, and a pool that stays one
+-- flat amber all the way to the middle is the tell that says "decal". The
+-- shader ramps lampColor -> lampCore with nearness (see localLamp).
+Voxel3D.LAMP_CORE = { 1.0, 0.95, 0.82 }
+Voxel3D.lampCore = nil               -- override; nil uses the constant
+
+-- Where the flame hangs, in world pixels above the post's feet. The authored
+-- bake measures its own lantern and pushes the real number in through
+-- Voxel3D.lampHeight; this default matches the box models' lantern.
+Voxel3D.LAMP_HEIGHT = 19.0
+Voxel3D.lampHeight = nil
+
+-- How much of the pool actually lands. Held well below 1 on purpose: the
+-- hour's own tint is still the scene's light, and a lamp that overpowers it
+-- does not make a lit street, it makes a badly tinted afternoon.
+Voxel3D.LAMP_GLOW = 0.85
+
+-- The gas clock, advanced by whoever runs the frame (VoxelScene). Left at 0
+-- the flicker term is constant and folds out of the shader entirely.
+Voxel3D.lampFlicker = 0
+
 -- the glint, fed by the camera's TRAVEL rather than by a clock (see
 -- VoxelScene.glintStep): the phase is radians already wrapped to 2pi, and
 -- the strength is 0 whenever the view has been still for a beat
@@ -1452,6 +1789,25 @@ function Voxel3D.beginScene(w, h, cx, cy, vw, vh, sky, slot)
                                Voxel3D.skyAmount or 0)
   pcall(sh.send, sh, "skyTint", sky)
   pcall(sh.send, sh, "sunTint", sun)
+  -- Local night lights. Every uniform is sent every scene so a day frame (or
+  -- a map change) cannot retain a lamp from the previous city.
+  local lamps = Voxel3D.lampLights or {}
+  for i = 1, 8 do
+    local lamp = lamps[i]
+    pcall(sh.send, sh, "lamp" .. (i - 1), {
+      lamp and lamp.x or 0,
+      lamp and lamp.z or 0,
+      lamp and lamp.radius or 0,
+      lamp and lamp.power or 0,
+    })
+  end
+  pcall(sh.send, sh, "lampGlow", #lamps > 0 and Voxel3D.LAMP_GLOW or 0)
+  pcall(sh.send, sh, "lampHeight", Voxel3D.lampHeight or Voxel3D.LAMP_HEIGHT)
+  pcall(sh.send, sh, "lampCore", Voxel3D.lampCore or Voxel3D.LAMP_CORE)
+  -- Zero rather than the clock when the flicker is off, so the uniform is a
+  -- constant and the sin() folds away instead of costing a frame's worth of
+  -- wobble nobody asked for.
+  pcall(sh.send, sh, "lampFlicker", Voxel3D.lampFlicker or 0)
   -- and the water: the swell, its two wave trains, and the slope window a
   -- crest has to reach to catch the sun. The window is measured FROM the
   -- flat surface's own alignment with the light (-ray.y is what a level
@@ -1531,13 +1887,17 @@ function Voxel3D.beginScene(w, h, cx, cy, vw, vh, sky, slot)
   pcall(sh.send, sh, "windFreq", Wind.FREQ)
   pcall(sh.send, sh, "windPhase", Wind.phase())
   pcall(sh.send, sh, "sway", 0)
+  -- the grass load and the tuft height, reset per frame like `sway` is and
+  -- for the same reason: the grass pass fills them and nothing else may
+  -- inherit them (see Voxel3D.draw)
+  Voxel3D.grassH = nil
+  Voxel3D.grassLoad = nil
+  pcall(sh.send, sh, "grassH", Voxel3D.GRASS_H)
+  pcall(sh.send, sh, "grassLoad", { 0, 0, 0 })
   -- crush off until the grass pass fills Voxel3D.crush
   Voxel3D.crush = nil
   pcall(sh.send, sh, "crushN", 0)
-  pcall(sh.send, sh, "crush0", { 0, 0, 0, 0 })
-  pcall(sh.send, sh, "crush1", { 0, 0, 0, 0 })
-  pcall(sh.send, sh, "crush2", { 0, 0, 0, 0 })
-  pcall(sh.send, sh, "crush3", { 0, 0, 0, 0 })
+  sendCrush(sh, nil)
   -- the curved world bends about the camera's focus, so the horizon keeps
   -- a fixed distance ahead of the player rather than sitting on the map.
   -- A placed camera may decline it outright (Voxel3D.camera.curve = 0).
@@ -1704,6 +2064,18 @@ Voxel3D.SNOW_COLOR = { 0.93, 0.95, 0.99 }
 -- hedge reads as snowed rather than as green with a lid, little enough that
 -- a wall keeps its own art down its flank.
 Voxel3D.SNOW_SIDE = 0.34
+
+-- How tall a leaning thing stands, in world pixels, when the caller does
+-- not say. Ten is the classic extruded slab plus a little: it is only the
+-- normaliser the bend curve runs over, so an over-estimate makes a tuft
+-- gentler rather than wrong -- but a 3D bake knows its own height and
+-- should hand it over (VoxelScene reads Grass3D.meta().height).
+Voxel3D.GRASS_H = 10
+-- Set by the grass pass right before its draws (nil = the default above),
+-- exactly like `snowTop` and `crush`: one value for a whole pass.
+Voxel3D.grassH = nil
+-- { rain on the blades, settled snow on them, gust envelope }, each 0..1.
+Voxel3D.grassLoad = nil
 
 Voxel3D.SHADOW_EPS = 0.25     -- float above the ground to dodge z-fighting
 Voxel3D.SHADOW_ALPHA = 0.40   -- how far into black a shadowed surface goes
@@ -1921,26 +2293,30 @@ function Voxel3D.draw(mesh, texture, model, pull, sunModel, sway)
   pcall(sh.send, sh, "sunModel", "row", sunModel or model or IDENTITY)
   pcall(sh.send, sh, "pull", pull or 0)
   pcall(sh.send, sh, "sway", sway or 0)
+  -- How tall the thing that is about to lean stands, and what is lying on
+  -- it. Both ride the same field-set-by-the-caller contract `snowTop` and
+  -- `crush` do -- one value for a whole pass, and no new parameter on the
+  -- dozen call sites that will never set either. Sent unconditionally, so
+  -- a pass that leaves them nil cannot inherit the grass pass's load.
+  do
+    local sw = sway or 0
+    if sw > 0 then
+      pcall(sh.send, sh, "grassH", Voxel3D.grassH or Voxel3D.GRASS_H)
+      local l = Voxel3D.grassLoad
+      pcall(sh.send, sh, "grassLoad",
+            l and { l[1] or 0, l[2] or 0, l[3] or 0 } or { 0, 0, 0 })
+    else
+      pcall(sh.send, sh, "grassH", Voxel3D.GRASS_H)
+      pcall(sh.send, sh, "grassLoad", { 0, 0, 0 })
+    end
+  end
   -- Foot-crush only on the grass (and flower) pass: the caller fills
   -- Voxel3D.crush via Grass3D before drawing, and anything else leaves n=0
   -- so terrain never folds under a walker.
   do
-    local n = 0
     local c = Voxel3D.crush
-    if sway and sway > 0 and c and c.n and c.n > 0 then
-      n = c.n
-      if n > 4 then n = 4 end
-      for i = 1, 4 do
-        local p = (c.p and c.p[i]) or { 0, 0, 0, 0 }
-        pcall(sh.send, sh, "crush" .. (i - 1),
-              { p[1] or 0, p[2] or 0, p[3] or 0, p[4] or 0 })
-      end
-    else
-      for i = 0, 3 do
-        pcall(sh.send, sh, "crush" .. i, { 0, 0, 0, 0 })
-      end
-    end
-    pcall(sh.send, sh, "crushN", n)
+    local live = (sway and sway > 0 and c and c.n and c.n > 0) and c or nil
+    pcall(sh.send, sh, "crushN", sendCrush(sh, live))
   end
   -- the snow lying on this mesh's up-faces, read from the field the caller
   -- set rather than passed as an argument: every existing call site would

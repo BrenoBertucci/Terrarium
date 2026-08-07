@@ -108,6 +108,7 @@ local Water = V.require("Water")
 local Light = V.require("Light")
 local RayFX = V.require("RayFX")
 local AmbientLife = V.require("AmbientLife")
+local WindFX = V.require("WindFX")
 local Weather = V.require("Weather")
 local Sky = V.require("Sky")
 local GroundFX = V.require("GroundFX")
@@ -248,6 +249,14 @@ mod.content.render_pipelines:register(PIPE_VOXEL, {
     -- ground is is a fact about Kanto, so it keeps soaking while you are
     -- indoors, in a fight, or playing with the camera switched off.
     GroundFX.update(dt)
+    -- and the air itself, made visible. BEHIND Weather, because the gust
+    -- envelope it throws its fronts off is advanced by Wind.step and that
+    -- call is inside Weather's tick -- reading it ahead of that would spawn
+    -- every front one frame late and off the previous gust. Gated on the
+    -- camera unlike the two above, and honestly so: dust blowing across a
+    -- meadow is a DRAWING, not a fact about Kanto, and there is nothing for
+    -- it to blow across on the flat 2D path.
+    WindFX.update(dt, Voxel.active())
     -- and what it sounds like out there. Also ahead of the gate, and for a
     -- plainer reason than the weather's: a sound needs no camera, so the
     -- crickets come out at night on the flat 2D world too.
@@ -332,6 +341,13 @@ mod.content.render_pipelines:register(PIPE_VOXEL, {
       -- the same camera -- but with its height honest, so a bird crossing
       -- at 40 world pixels is projected AT 40 world pixels
       AmbientLife.draw(Voxel3D.project, ctx.scale)
+      -- the air, through the same projection and immediately behind the
+      -- ambient life: a blown leaf and a streak of dust are the same wind
+      -- carrying two different things, and they have to be composited
+      -- together or the leaf reads as flying under its own power. Ahead of
+      -- the weather for the same reason everything else is -- rain falls in
+      -- front of what it is falling past.
+      WindFX.draw(Voxel3D.project, ctx.scale)
       -- the steam off a mug and the Zs over a sleeping Meowth, indoors,
       -- through the same projection for the same reason
       Interiors.draw(Voxel3D.project, ctx.scale)
@@ -502,12 +518,16 @@ local SETTINGS = {
   -- menu there would hide the one row that decides whether the world looks
   -- alive.
   { Wind.setting,
-    "Wind through the tall grass and the flowers. BREEZE follows the "
-    .. "weather and the hour on its own -- showers bring a front, nights "
-    .. "go quieter, winter has a bite -- so you do not toggle it with the "
-    .. "rain. GALE amplifies that living air; OFF is silence. The grass is "
-    .. "geometry here: the base stays planted, the tip gives, and the gust "
-    .. "TRAVELS across a meadow.",
+    "Wind through the tall grass and the flowers, and the dust and spray "
+    .. "it carries across open ground. AUTO hands the row itself to the "
+    .. "climate: near-still on a calm night, breeze by day, and it reaches "
+    .. "gale on its own under a front -- so a storm feels like a storm "
+    .. "without you walking back to this menu. BREEZE and GALE are the two "
+    .. "fixed windows onto that same living air; OFF is silence. The grass "
+    .. "is geometry here: the base stays planted, the tip bends and DROPS "
+    .. "as it goes over, each tuft has its own stiffness, rain weighs it "
+    .. "down and damps it, settled snow bows it over, feet flatten it and "
+    .. "it springs back.",
     full = true },
   { Water.setting,
     "The water surface as geometry rather than a scrolling picture: it "
