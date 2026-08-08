@@ -3,7 +3,7 @@
   "title": "Terrarium",
   "author": "BrenoBertucci",
   "summary": "Independent fork of DramaticShape's 3D voxel diorama: own id, folder, pipelines and letter hotkeys; installs beside DRAMATIC_SHAPE.",
-  "version": "1.18.0-mobile",
+  "version": "1.19.0-mobile",
   "categories": [
     "ART",
     "GAMEPLAY"
