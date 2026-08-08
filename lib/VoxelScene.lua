@@ -28,6 +28,7 @@ local Wind = V.require("Wind")
 local Water = V.require("Water")
 local Roamer = V.require("Roamer")
 local StreetLamps = V.require("StreetLamps")
+local Skyline = V.require("Skyline")
 local PaletteFX = require("src.render.PaletteFX")
 local Map = require("src.world.Map")
 
@@ -924,6 +925,16 @@ function VoxelScene.render(state, w, h, vw, vh, paletteFor)
   -- either sinks into it or hovers over it, and the second is the one you
   -- cannot stop seeing. There is nothing to float here. The face the camera
   -- is already looking at is the face that turns white.
+  -- THE HORIZON FIRST, before anything real. The far silhouettes
+  -- (lib/Skyline.lua) are the most distant thing in the frame by an order
+  -- of magnitude, so they go down first and the depth buffer lets every
+  -- actual map overwrite them -- which is also why they need no culling
+  -- box and no sort. Ahead of the snow tint on purpose: a silhouette is a
+  -- shape, not a surface, and whitening its crowns would put a snowfield
+  -- on a hill nobody can reach.
+  Skyline.frame()
+  Skyline.draw(state, cx, cy, vh)
+
   Voxel3D.snowTop = GroundFX.snowTint(state.map)
   local box = VoxelScene.bounds(cx, cy, vw, vh, false)
   Voxel3D.drawGroup(terrain, atlasFor(state.map), nil, nil, nil, box)

@@ -42,6 +42,7 @@ local V = ...
 local DayNight = V.require("DayNight")
 local Wind = V.require("Wind")
 local Weather = V.require("Weather")
+local Quality = V.require("Quality")
 
 local Map = require("src.world.Map")
 
@@ -76,6 +77,10 @@ WindFX.FLOOR = 0.85
 --                       so it is the wind's own speed that draws it
 --   brighter            over green grass at half alpha, warm dust is the
 --                       grass. It has to sit clearly above its background.
+-- The ceiling. What the device will actually carry is Quality.windStreaks,
+-- which cuts it by RES rung and reaches zero at 1/4 -- each streak is two
+-- world-space projections and a line, and at the bottom rung the frame is
+-- 23 thousand pixels and a streak is a smear across four of them.
 WindFX.MAX = 30                -- streaks alive at once, gale and gust included
 WindFX.REACH = 10              -- cells from the player anything lives within
 WindFX.SPAWN_AHEAD = 4         -- cells UPWIND a streak is thrown in from
@@ -120,8 +125,18 @@ local function carried()
   return WindFX.DUST, 0.58
 end
 
+-- What this device will carry this frame, ceiling included.
+local function budget()
+  local n = WindFX.MAX
+  local ok, q = pcall(Quality.windStreaks)
+  if ok and tonumber(q) then n = math.floor(q) end
+  if n < 0 then n = 0 end
+  if n > WindFX.MAX then n = WindFX.MAX end
+  return n
+end
+
 local function spawn(px, pz, amount, opts)
-  if #motes >= WindFX.MAX then return end
+  if #motes >= budget() then return end
   opts = opts or {}
   local dx, dz = Wind.DIR[1] or 1, Wind.DIR[2] or 0
   -- upwind of the player by SPAWN_AHEAD cells, scattered across the bearing
@@ -155,9 +170,10 @@ end
 local function spawnFront(px, pz, amount)
   local n = WindFX.FRONT_N
   if n < 1 then return end
+  local cap = budget()
   local wide = WindFX.FRONT_WIDE * 16
   for i = 1, n do
-    if #motes >= WindFX.MAX then break end
+    if #motes >= cap then break end
     -- -1 .. 1 across the rank. The span is guarded because FRONT_N is a
     -- tunable and a rank of ONE would divide by zero here -- and a NaN
     -- position does not crash, it silently puts the streak nowhere.
@@ -183,9 +199,10 @@ function WindFX.update(dt, voxelOn)
   local okA, n = pcall(Wind.amount)
   if okA then amount = n or 0 end
 
+  local cap = budget()
   local Game = game()
   local ow = Game and Game.overworld
-  local live = voxelOn and amount > WindFX.FLOOR
+  local live = voxelOn and cap > 0 and amount > WindFX.FLOOR
                 and ow and ow.map and ow.player
                 and openSky(ow.map)
                 and Game.stack and Game.stack:top() == ow
@@ -202,9 +219,10 @@ function WindFX.update(dt, voxelOn)
   -- carries a few specks and a gale carries a stream.
   local over = amount - WindFX.FLOOR
   local want = math.floor(6 + over * 7.0)
-  if want > WindFX.MAX - WindFX.FRONT_N then
-    want = WindFX.MAX - WindFX.FRONT_N
+  if want > cap - WindFX.FRONT_N then
+    want = cap - WindFX.FRONT_N
   end
+  if want < 0 then want = 0 end
   local standing = 0
   for i = 1, #motes do
     if not motes[i].front then standing = standing + 1 end
@@ -257,27 +275,48 @@ function WindFX.draw(project, scale)
   local prevWidth = g.getLineWidth and g.getLineWidth() or 1
   g.setBlendMode("alpha")
 
-  for i = 1, #motes do
-    local m = motes[i]
-    -- the tail is where this mote WAS: projected as a second world point
-    -- rather than smeared in screen space, so a streak lies down along the
-    -- ground the way the camera sees the ground and not along the screen
-    local sx, sy, ps = project(m.x, m.y, m.z)
-    if sx then
-      local tx = m.x - (m.vx or 0) * WindFX.TAIL
-      local tz = m.z - (m.vz or 0) * WindFX.TAIL
-      local ex, ey = project(tx, m.y, tz)
-      local s = math.max(1, (scale or 1) * (ps or 1))
-      -- in over the first fifth, out over the last third
-      local fade = math.min(1, m.t * 5, (m.ttl - m.t) * 3)
-      local a = bright * fade * (m.front and 1.25 or 0.9)
-      if a > 0.01 then
-        g.setColor(colour[1], colour[2], colour[3], math.min(1, a))
-        if ex then
-          g.setLineWidth(math.max(1, s * (m.front and 1.1 or 0.8)))
-          g.line(sx, sy, ex, ey)
-        else
-          g.rectangle("fill", sx - s * 0.5, sy - s * 0.5, s, s)
+  -- ------- two passes, and the reason is state changes
+  --
+  -- Drawn in one loop, a streak sets the line width, sets the colour, and
+  -- draws one two-point line: three calls each and a width change between
+  -- every pair of them, thirty times a frame. Line width is the expensive
+  -- one -- it is pipeline state, not a uniform. So the field is walked
+  -- twice, once for the trailing streaks and once for the front's, with
+  -- the width set ONCE per group. Alpha still varies per streak, so the
+  -- colour call stays; there is no batching a per-streak fade without a
+  -- mesh, and a mesh for thirty lines costs more than it saves.
+  local scl = scale or 1
+  for pass = 0, 1 do
+    local wantFront = (pass == 1)
+    local widthSet = false
+    for i = 1, #motes do
+      local m = motes[i]
+      if (m.front and true or false) == wantFront then
+        -- the tail is where this mote WAS: projected as a second world
+        -- point rather than smeared in screen space, so a streak lies down
+        -- along the ground the way the camera sees the ground and not
+        -- along the screen
+        local sx, sy, ps = project(m.x, m.y, m.z)
+        if sx then
+          -- in over the first fifth, out over the last third
+          local fade = math.min(1, m.t * 5, (m.ttl - m.t) * 3)
+          local a = bright * fade * (wantFront and 1.25 or 0.9)
+          if a > 0.01 then
+            local s = math.max(1, scl * (ps or 1))
+            if not widthSet then
+              g.setLineWidth(math.max(1, s * (wantFront and 1.1 or 0.8)))
+              widthSet = true
+            end
+            local tx = m.x - (m.vx or 0) * WindFX.TAIL
+            local tz = m.z - (m.vz or 0) * WindFX.TAIL
+            local ex, ey = project(tx, m.y, tz)
+            g.setColor(colour[1], colour[2], colour[3], math.min(1, a))
+            if ex then
+              g.line(sx, sy, ex, ey)
+            else
+              g.rectangle("fill", sx - s * 0.5, sy - s * 0.5, s, s)
+            end
+          end
         end
       end
     end

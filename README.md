@@ -217,6 +217,36 @@ The most recent work went here, and it is measured rather than eyeballed:
   shadow for 300 seconds of every 1200 â€” right through the golden hour. It is
   now derived from the fade angle instead, so it can only ever shorten a
   shadow already on its way out. Measured cost: `+0.015 ms` per frame.
+- **The rain arrives instead of switching on.** A far curtain stands the
+  shower on the horizon as vertical shafts, and it is full at a power where
+  the drops near you are still almost nothing -- so weather is something you
+  watch close in over most of a minute. Not a forecast: nothing here knows the
+  future, it is the same shower drawn where a shower is visible *as* one.
+- **The cloud deck sits over the map, not over the screen.** It reads the
+  camera now, and shifts *less* than anything else in frame -- that difference
+  is the distance cue. It also changes shape as it drifts, because the erosion
+  noise moves at its own rate against the wind carrying the mass; a rigid
+  pattern being towed past reads as a backdrop however fast you tow it.
+- **God rays, where the deck is thin.** For the length of the post-rain spell,
+  and drawn out of the cloud density the raymarch already computed -- so the
+  whole effect is one `atan` and one `sin` on top of existing work. Hard rungs
+  and the sky's own checker: a soft falloff here is bloom.
+- **A storm register.** Heavy rain bruises the sky violet rather than only
+  greying it, blended after the stratus on the same hour weight. It only
+  leaves zero above the same threshold that arms the lightning, so a drizzle
+  keeps the neutral grey it always had and a purple sky is one that can flash.
+- **Stars go out one at a time.** Each has its own threshold, weighted by its
+  own magnitude with a scatter off its twinkle phase, so the field empties in
+  a scattered order instead of fading as one sheet. A clear deep night is
+  unchanged.
+
+  All five were isolated and measured (`tests/sky_weather_probe.lua`) because
+  they landed in one shader, where a screenshot cannot say which of them
+  moved: 59.7% of sky pixels move between two cameras at the same instant
+  (0.0% with parallax zeroed); the curtain hits 38.9% in the lower sky and
+  0.0% in the upper; the rays 30.3% near the disc against 8.2% away and 0.0%
+  off a moon. Cost, as an off/on/on/off palindrome: `+4.6%` per sky paint with
+  curtain and rays both forced on -- a state the game never reaches.
 
 ---
 

@@ -259,6 +259,50 @@ the answer is still *raining*, which is right for the sound and wrong for the
 picture. `Weather.visible` is the one every draw path asks, and it is gated on
 the same open-sky test the sky, the sun and the hour's tint already rest on.
 
+### Watching it arrive
+
+A shower **builds over twenty seconds**, not seven, and the length of that
+number is the feature. From about a fifth of the way up the ramp there is a
+**curtain** on the horizon — the same shower, drawn as vertical shafts under
+the cloud deck and over the haze band, where a shower is the only place it is
+ever visible *as* a shower: from far enough away to see the shape of it.
+
+It is **not a forecast**. Nothing in this mod knows the future, and building a
+lookahead would have meant leaking the next spell's roll to every reader for
+one picture's sake. It reads as *coming* because it **leads** the near field:
+`Weather.curtain` is full at a power where the streaks are still a drop here
+and there, so the wall is drawn and finished with thirteen seconds of approach
+still to run. That ordering is the whole effect.
+
+Snow gets a thinner one. A squall coming in reads as the horizon going soft,
+not as shafts — shafts are what falling water does, and snow does not fall in
+lines.
+
+### The sky that can flash
+
+The stratus grey is deliberately **neutral**: what says "it is raining" is the
+loss of blue, not the loss of light, and an overcast noon is bright. That is
+still right for an ordinary shower and it is left alone.
+
+It is wrong for the shower that throws lightning, which is not a darker grey
+but a **bruised** one. So `DayNight.storm` is a *second* register above the
+stratus rather than a replacement for it, and it only leaves zero above
+`Weather.STRIKE_ABOVE` — the same gate that arms the strike. A drizzle keeps
+the grey it always had; a sky that has gone violet is, by definition, a sky
+that can flash. Two storms is all it takes to learn that pairing, and it costs
+nothing to teach.
+
+### And after it stops
+
+**God rays**, for the length of the post-rain spell. They are drawn where the
+deck is **thin**, because that is what a ray is — light through a gap — and
+the cloud raymarch has already worked out how thick the deck is at each pixel,
+so the entire effect is one `atan` and one `sin` on top of work already done.
+
+Hard rungs and the same checker dither as the bands, never a smooth falloff: a
+soft ramp here is bloom, and bloom is the one thing this sky may not become. A
+moon throws none — a moonrise is silver, not gold.
+
 ## The air — the WIND row
 
 The tall grass out here is **geometry**, not a picture: a tuft is a real

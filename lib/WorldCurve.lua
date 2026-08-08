@@ -84,10 +84,28 @@ end
 -- overworld's 2D field FX (the "!" bubble, the fishing rod, the Fly bird)
 -- to their ground points. Miss this and every one of them floats off its
 -- own feet the moment the ground under it bends.
-function WorldCurve.drop(k, cx, cy, wx, wz)
+function WorldCurve.drop(k, cx, cy, wx, wz, cap)
   if k <= 0 then return 0 end
   local dx, dz = wx - cx, wz - cy
-  return (dx * dx + dz * dz) * k
+  local d = (dx * dx + dz * dz) * k
+  if cap and d > cap then return cap end
+  return d
+end
+
+-- HOW DEEP THE BEND MAY GO, in world pixels for a view `vh` tall.
+--
+-- The quadratic has no far end: at ten view-heights out it has dropped a
+-- hundred times what it drops at one, and the far skyline
+-- (lib/Skyline.lua) would be buried before it was drawn. So the roll
+-- stops. Past the cap the world lies flat, which is what a horizon
+-- actually looks like -- curvature near, plateau far -- and the cap is
+-- deep enough that nothing which existed before the skyline can reach it:
+-- at rung 2 the bend needs about three and a half view-heights of distance
+-- to get there, and the drawn world runs out at half of one.
+WorldCurve.CAP_VH = 1.2
+
+function WorldCurve.cap(vh)
+  return (vh or 0) * WorldCurve.CAP_VH
 end
 
 function WorldCurve.row()

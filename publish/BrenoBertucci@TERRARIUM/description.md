@@ -25,6 +25,8 @@ This fork is **independent**: different mod id (`TERRARIUM`), different install 
 | `b` | 3D-BTL overworld battles |
 | `n` | WILD roam mode |
 | `p` | Minimap |
+| `h` | V-HAZE aerial perspective |
+| `k` | HORIZON far silhouettes |
 
 Upstream Dramatic Shape still uses `3` / `5` / `6` / `7` / `8` / `9`.
 
@@ -35,9 +37,45 @@ Upstream Dramatic Shape still uses `3` / `5` / `6` / `7` / `8` / `9`.
 - Wild Pokemon visible in the grass; ecology / shelter / city life systems
 - Tuned defaults for lower-end / mobile hardware
 
-## New in 1.18.0-mobile
+## New in 1.19.0-mobile
 
-The tall grass is geometry out here, and this release makes it behave like it.
+The sky, and how far away everything is.
+
+- **You can see the rain coming.** A curtain of it stands on the horizon as
+  vertical shafts, and it fills in while the drops near you are still nothing
+  -- so the weather arrives as something you watch approach for the better
+  part of a minute instead of something that switches on.
+- **Clouds travel over Kanto, not over your monitor.** The deck reads the
+  camera now, and it shifts *less* than everything else on screen, which is
+  what makes it read as far away. It also changes shape while it drifts,
+  instead of being one rigid pattern towed past.
+- **God rays after a shower**, thrown where the deck is breaking up -- light
+  through the gaps, not a glow pasted over the sun. In hard steps with the
+  same dither as the rest of the sky, so it stays painted rather than bloomed.
+- **A storm sky.** Heavy rain now bruises the sky violet instead of only
+  greying it -- and only the rain heavy enough to throw lightning does, so a
+  purple sky is a promise. A drizzle looks exactly as it always did.
+- **Stars go out one at a time** as cloud comes over, scattered, faint ones
+  first, rather than the whole field dimming together.
+- **V-HAZE** (`h`): the far ground goes paler and bluer with distance. Equal
+  contrast reads as equal distance, and that one cue is most of why a map used
+  to feel the size of one screen.
+- **HORIZON** (`k`): the rest of Kanto standing on the skyline. The maps were
+  never missing -- the game already knows where eight to twenty-one of them
+  sit relative to you -- they were just never drawn.
+- **ANIME** (OFF / CEL / FULL): cel-banded light, rim light and an ink line,
+  with no new render pass at any rung.
+- **IMPACT**: hand-drawn sprite-sheet effects (CC0 packs, see
+  `assets/vfx/LICENSE.md`).
+
+Every sky change above was isolated and measured rather than eyeballed -- they
+all landed in one shader, where a screenshot cannot tell you which of them
+moved. The whole lot costs under 5% of a sky paint, measured at a ceiling the
+game never actually reaches.
+
+## Previously, in 1.18.0-mobile
+
+The tall grass is geometry out here, and that release made it behave like it.
 
 - **WIND / AUTO**, the new default. BREEZE and GALE are two fixed windows onto
   the same climate, so keeping a storm feeling like a storm meant a trip back
