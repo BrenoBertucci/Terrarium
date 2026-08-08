@@ -187,6 +187,59 @@ function Quality.cloudSteps()
   return 8
 end
 
+-- ------- how much grass physics this device can afford
+--
+-- The grass pass is the heaviest VERTEX work in the mod, and unlike every
+-- other cost on this page it does not shrink with RES: the scene canvas
+-- gets smaller, the tuft count does not. A route's grass mesh is tens of
+-- thousands of vertices and each one was, briefly, paying for ten sines, a
+-- square root and an eight-slot crush loop -- which is a desktop's price
+-- charged to a machine that picked 1/2 because it could not afford a
+-- desktop's price anywhere else.
+--
+-- So the physics comes in tiers, and the tier rides the same RES rung
+-- everything else here does:
+--
+--   0  (1/4, 1/3)  the travelling wave and nothing else. Grass still bends,
+--                  still plants its base, still parts under a foot. What
+--                  goes is everything that is texture rather than motion.
+--   1  (1/2)       per-tuft stiffness and the squall front -- the two that
+--                  make a meadow read as many plants in moving air. Still
+--                  no flutter harmonic, no cross-axis drift, no tip bob.
+--   2  (FULL)      all of it.
+--
+-- Tier 1 is the default rung and it is the one that had to be genuinely
+-- cheap, not merely cheaper.
+function Quality.grassDetail()
+  local s = Quality.scale()
+  if s >= 3 then return 0 end
+  if s == 2 then return 1 end
+  return 2
+end
+
+-- How many crush slots the grass shader loops over. The loop is per VERTEX,
+-- so every slot is paid by the whole meadow whether or not anybody is
+-- standing in it -- eight is worth it on a desktop and is most of the
+-- regression on a phone. Three still holds the player plus two, and the
+-- trail simply keeps fewer crumbs (see Grass3D.crushFrame).
+function Quality.crushSlots()
+  local d = Quality.grassDetail()
+  if d <= 0 then return 3 end
+  if d == 1 then return 5 end
+  return 8
+end
+
+-- Streaks in the air (lib/WindFX). A draw-call budget like starCount: each
+-- one is two projections and a line, and at 1/4 the frame is 23 thousand
+-- pixels and a streak is a smear. Zero there.
+function Quality.windStreaks()
+  local s = Quality.scale()
+  if s >= 4 then return 0 end
+  if s == 3 then return 8 end
+  if s == 2 then return 14 end
+  return 30
+end
+
 -- Whether the neighbouring maps cast into the shadow map. They are drawn
 -- in the scene either way; this is only about whether their geometry is
 -- also rasterised into the sun's own pass, which doubles or triples the

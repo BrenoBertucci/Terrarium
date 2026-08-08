@@ -342,6 +342,34 @@ DayNight.OVERCAST_SKY = { { 168, 168, 176 }, { 144, 144, 152 },
 -- of a day with the sun switched off
 DayNight.OVERCAST_TINT = { 152, 160, 184 }
 
+-- ------- and the storm register
+--
+-- The stratus above is deliberately NEUTRAL, and that argument is still right
+-- for an ordinary shower: what says "it is raining" is the loss of blue, not
+-- the loss of light. It is wrong for the shower that throws lightning. A
+-- storm cell is not a darker grey -- it is BRUISED, and the colour it bruises
+-- toward is violet, because what is left under it is skylight that has come
+-- through a mile of water.
+--
+-- So this is a SECOND register rather than a replacement. `storm` only leaves
+-- zero above Weather.STRIKE_ABOVE -- the same gate that arms the lightning --
+-- so a drizzle stays exactly the grey it has always been, and the sky that
+-- goes purple is the sky that can flash. That pairing is learnable in two
+-- storms and it costs nothing to teach.
+--
+-- Blended AFTER the stratus and on the same hour weight, so clear -> overcast
+-- -> storm is one continuous move rather than a switch thrown at 0.78.
+DayNight.STORM_SKY = { { 152, 136, 168 }, { 128, 112, 152 },
+                       { 104, 88, 128 }, { 80, 68, 104 },
+                       { 56, 48, 80 }, { 36, 32, 56 } }
+
+-- and the world under it: darker than overcast and off the grey axis, so the
+-- ground reads as lit by the same bruised sky rather than by a dimmer one
+DayNight.STORM_TINT = { 128, 120, 168 }
+
+-- 0..1, written by Weather every tick, exactly like `overcast` above.
+DayNight.storm = 0
+
 -- Overcast is fully in charge at NOON and barely speaks at MIDNIGHT: there is
 -- no sun for a cloud to take away from a night sky, and dropping the light
 -- further would make a rainy night unreadable rather than atmospheric.
@@ -355,6 +383,17 @@ end
 -- 0..1 as the palettes and the tint below actually apply it
 local function cloudAt(mix)
   local amount = DayNight.overcast or 0
+  if amount <= 0 then return 0 end
+  if amount > 1 then amount = 1 end
+  return amount * cloudWeight(mix)
+end
+
+-- The storm register on the SAME hour weight as the cloud, for the same
+-- reason: a violet sky at midnight is a violet sky nobody can see past, and
+-- the point of the colour is that it is a colour, which needs light in the
+-- frame to be one.
+local function stormAt(mix)
+  local amount = DayNight.storm or 0
   if amount <= 0 then return 0 end
   if amount > 1 then amount = 1 end
   return amount * cloudWeight(mix)
@@ -472,12 +511,20 @@ local palCache = { key = nil, pal = nil }
 
 -- cloud in 32 rungs, so a building shower re-blends the sky about as often as
 -- the clock does rather than once per frame
+-- Bit layout, low to high: overcast in 32 rungs (0..31), DEEP/SOFT as one bit
+-- (32), storm in 8 rungs (64..448), then the second. The DEEP bit is not
+-- cosmetic -- flipping N-DARK has to rebuild the memo rather than serve a soft
+-- sky under a deep tint (or the reverse) for a second.
+--
+-- Storm gets three bits and not five because it only ever moves across the
+-- narrow band above STRIKE_ABOVE: eight rungs there is a step every ~0.03 of
+-- power, which at the twenty-second build is a re-blend about twice a second.
+-- Finer than that is memo churn for a difference nothing can see.
 local function cacheKey(t)
-  -- +1 bit for DEEP/SOFT so flipping N-DARK rebuilds the memo rather than
-  -- serving a soft sky under a deep tint (or the reverse) for a second
-  return math.floor(t % DayNight.CYCLE) * 64
+  return math.floor(t % DayNight.CYCLE) * 512
          + math.floor(math.max(0, math.min(1, DayNight.overcast or 0)) * 31)
          + (DayNight.deepNight() and 32 or 0)
+         + math.floor(math.max(0, math.min(1, DayNight.storm or 0)) * 7) * 64
 end
 
 function DayNight.palette(t)
@@ -486,6 +533,7 @@ function DayNight.palette(t)
   if palCache.key == key then return palCache.pal end
   local mix = DayNight.mix(t)
   local cloud = cloudAt(mix)
+  local storm = stormAt(mix)
   local deep = DayNight.deepNight()
   local pal = {}
   for i = 1, #DayNight.PALETTES.day do
@@ -507,6 +555,16 @@ function DayNight.palette(t)
       r = r + (o[1] - r) * cloud
       g = g + (o[2] - g) * cloud
       b = b + (o[3] - b) * cloud
+    end
+    -- and then, only for the shower heavy enough to strike, off the grey axis
+    -- toward the bruise. Second because it has to win: a storm sky that got
+    -- averaged with the stratus would come out mauve, which is a colour that
+    -- says nothing.
+    if storm > 0 then
+      local s = DayNight.STORM_SKY[i] or DayNight.STORM_SKY[1]
+      r = r + (s[1] - r) * storm
+      g = g + (s[2] - g) * storm
+      b = b + (s[3] - b) * storm
     end
     pal[i] = { q8(r), q8(g), q8(b) }
   end
@@ -547,6 +605,15 @@ function DayNight.tint(outdoor, t)
       r = r + (o[1] - r) * cloud
       g = g + (o[2] - g) * cloud
       b = b + (o[3] - b) * cloud
+    end
+    -- the storm takes the ground with it, on the same second blend the sky
+    -- gets above: a purple sky over a grey world is two weathers in one frame
+    local storm = stormAt(mix)
+    if storm > 0 then
+      local s = DayNight.STORM_TINT
+      r = r + (s[1] - r) * storm
+      g = g + (s[2] - g) * storm
+      b = b + (s[3] - b) * storm
     end
     tintCache.key = key
     tintCache.tint = { r / 255, g / 255, b / 255 }

@@ -19,9 +19,103 @@ MAJOR.MINOR.PATCH[-CHANNEL]
 
 Tags and packages:
 
-- Git tag: `v1.18.0-mobile`
-- Zip asset: `TERRARIUM-1.18.0-mobile.zip`
-- `manifest.json` / catalog `version` field: `1.18.0-mobile`
+- Git tag: `v1.19.0-mobile`
+- Zip asset: `TERRARIUM-1.19.0-mobile.zip`
+- `manifest.json` / catalog `version` field: `1.19.0-mobile`
+
+## 1.19.0-mobile
+
+### Added
+
+- **Rain you can see coming.** A far curtain: the shower standing on the
+  horizon as vertical shafts, drawn in the sky pass under the cloud deck and
+  over the haze band. It is not a forecast -- nothing in this mod knows the
+  future -- it is the same shower that is about to be on top of you, drawn
+  where a shower is the only place it is ever visible *as* a shower, from a
+  distance. It reads as *coming* because it LEADS the near field: the curtain
+  is full at a power where the streaks are still a drop here and there. That
+  ordering is the whole effect.
+- **God rays after the rain.** Sunlight through a deck that is breaking up,
+  for the length of the post-rain spell. They are drawn where the deck is
+  THIN, because that is what rays are -- light through a gap -- and the cloud
+  raymarch has already computed how thick the deck is at each pixel, so the
+  entire effect costs one `atan` and one `sin` on top of work already done.
+  Hard rungs and the same checker dither as the bands, never a soft ramp: a
+  smooth falloff here would be bloom. A moon throws none.
+- **A storm sky.** `DayNight.STORM_SKY` is a second register above the
+  stratus, not a replacement for it. The neutral grey was right for an
+  ordinary shower and it still is -- what says "raining" is the loss of blue,
+  not the loss of light -- but it is wrong for the shower that throws
+  lightning, which is *bruised*. The violet only leaves zero above the same
+  power threshold that arms the strike, so a drizzle stays exactly the grey
+  it was and a sky that has gone purple is by definition a sky that can
+  flash. Blended after the stratus, on the same hour weight, so clear ->
+  overcast -> storm is one continuous move and not a switch. The world tint
+  goes with it.
+- **Stars go out one at a time.** Each star now has its own point of
+  disappearing, so the field EMPTIES as cloud comes over instead of dimming
+  as one sheet -- which is what it did, and a sheet fade reads as a layer
+  because it is one. The threshold is mostly the star's own magnitude, so the
+  faint ones go first the way they actually do, with a scatter off its twinkle
+  phase so the order is not a clean sweep down the tiers. A clear deep night
+  is unchanged: at full darkness every star still resolves to full brightness.
+- **ANIME row** (OFF / CEL / FULL): cel-banded light, rim light and an ink
+  line. No new pass at any rung -- CEL is arithmetic inside the scene shader
+  between the light being summed and the material being multiplied by it, so
+  it works even with RTX switched off entirely.
+- **IMPACT row** (OFF / ON): hand-drawn sprite-sheet effects in the overlay
+  pass, beside the butterflies and the rain. The sheets are CC0 packs from
+  OpenGameArt, not generated art -- see `assets/vfx/LICENSE.md`.
+- **V-HAZE row** (OFF / 1 / 2 / 3), hotkey `h`: aerial perspective. Far ground
+  goes paler, flatter and bluer, mixed toward the sky's own palest band rather
+  than toward a colour of its own choosing. Equal contrast reads as equal
+  distance, which is most of why a small map read small.
+- **HORIZON row** (OFF / NEAR / FAR / ALL), hotkey `k`: the rest of Kanto
+  standing on the skyline. The probe found the drawn world ending about 145
+  pixels short of its own vanishing line with a fifth of the frame empty above
+  it, while the connection graph from the same spot already places eight to
+  twenty-one further maps spanning some thirty view-heights. None of it was
+  missing; all of it was unplaced. `lib/WorldAtlas.lua` answers where each map
+  stands relative to the one under your feet, reusing the engine's own BFS
+  over `def.connections` rather than walking it again.
+
+### Changed
+
+- **Clouds travel over Kanto instead of over the monitor**, and they change
+  shape while they do. The deck was already drifting -- what it was not doing
+  was reading the CAMERA (every sample was a function of the pixel alone, so
+  the sky slid along as you walked) or changing while it drifted (a rigid
+  noise pattern towed past, which the eye reads as a painted backdrop however
+  fast you tow it). Parallax is deliberately small: cloud is the farthest
+  thing in the frame and must therefore shift LEAST, and that difference *is*
+  the distance cue. The shape change comes from giving the erosion noise its
+  own drift rate against the wind that carries the mass -- two constants and
+  no extra work.
+- **`Weather.BUILD` 7s -> 20s.** Seven seconds was fine while the only thing
+  it governed was how fast the streaks thickened. It is far too fast for a
+  front you are meant to WATCH ARRIVE, and the length of this number is
+  literally how long you get to stand there and see grey close in. Still lands
+  well inside the sixty-second floor on a wet spell.
+- **Grass physics comes in tiers now** (`Quality.grassDetail`), riding the
+  same RES rung everything else does. The grass pass is the heaviest vertex
+  work in the mod and, unlike every other cost, it does not shrink with RES:
+  the canvas gets smaller, the tuft count does not. The cheap rungs keep the
+  travelling wave, the planted base and the parting underfoot, and drop
+  everything that is texture rather than motion.
+
+### Measured
+
+- The five sky changes were each isolated and measured rather than eyeballed
+  (`tests/sky_weather_probe.lua`), since they all landed in one fragment
+  shader where a screenshot cannot say which of them moved. Parallax: 59.7% of
+  sky pixels change between two cameras at the same instant, against 0.0% with
+  the constant zeroed. Shape change: 22.4% with the wind zeroed so drift is
+  zero by construction, against 0.0% with the constant zeroed. Curtain: 38.9%
+  in the lower sky and 0.0% in the upper. Rays: 30.3% near the disc, 8.2%
+  away from it, 0.0% with a moon. Cost, as an off/on/on/off palindrome, is
+  +4.6% per sky paint with the curtain and the rays both forced on at once --
+  a state the game never reaches, since a curtain means it is raining and rays
+  mean it stopped.
 
 ## 1.18.0-mobile
 

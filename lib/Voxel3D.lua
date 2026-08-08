@@ -30,10 +30,15 @@ local Voxel = V.require("VoxelState")
 local ShadowMap = V.require("ShadowMap")
 local VoxelGrid = V.require("VoxelGrid")
 local WorldCurve = V.require("WorldCurve")
+local Aerial = V.require("Aerial")
 local Sky = V.require("Sky")
 local DayNight = V.require("DayNight")
 local GlassMask = V.require("GlassMask")
 local Quality = V.require("Quality")
+-- Safe anywhere in this list: Anime requires ModSetting and nothing else,
+-- precisely so that this file and RayFX can both hold it without either
+-- one reaching back through it.
+local Anime = V.require("Anime")
 local Wind = V.require("Wind")
 local Water = V.require("Water")
 local Light = V.require("Light")
@@ -139,7 +144,8 @@ local SHADER = [[
   uniform mat4 sunVP;         // world -> the shadow map's unit cube
   uniform vec3 eye;
   uniform float pull;
-  uniform vec3 curve;         // xy = the focus in world XZ, z = k; 0 = off
+  uniform vec4 curve;         // xy = the focus in world XZ, z = k; 0 = off
+                              // w = the deepest the bend may go (see below)
   uniform float sway;         // wind reach at the tip, world px; 0 = planted
   // Foot-crush on grass (packed vec4: xz pos, radius, strength). crushN is
   // how many are live this draw. Zero when not the grass pass so terrain
@@ -158,6 +164,12 @@ local SHADER = [[
   uniform vec2 windFreq;      // phase gained per world pixel, per axis
   uniform float windPhase;    // advanced by the clock
   uniform float grassH;       // tuft height in world px -- the bend normaliser
+  // How much of the physics this device is paying for (Quality.grassDetail):
+  // 0 = the travelling wave alone, 1 = + per-tuft stiffness and the squall
+  // front, 2 = + flutter, cross-axis drift, tip bob and the rain's tick.
+  // A uniform, so every branch on it is coherent across the whole draw --
+  // this costs a compare per vertex and saves six sines at the bottom rung.
+  uniform float grassDetail;
   // What the blades are CARRYING and what is passing over them:
   //   x  rain on them now       weight + damping + the tick of drops landing
   //   y  settled snow on them   weight that stays, and stiffens what is left
@@ -236,50 +248,64 @@ local SHADER = [[
       // Taken off vWorld, which is the position BEFORE any of this moves
       // it: a name that changed as the blade bent would make the blade's
       // own stiffness flicker.
-      float id = tuftHash(floor(vWorld.xz * 0.125));
-      // Stiffness scatter. A real meadow is not one plant: some tufts are
-      // young and whippy, some are woody and barely give, and it is the
-      // DISAGREEMENT that reads as many plants rather than one animated
-      // surface. Divided into the amplitude, so a stiff tuft leans less.
-      float stiff = 0.78 + id * 0.55;
-      float ph = id * 6.2831;
+      // Per-tuft identity and the squall front are TIER 1 and up. At tier 0
+      // every tuft shares one stiffness and one phase: the meadow still
+      // bends and the gust still travels (the phase comes from world
+      // position either way), it just does not scatter. That is two sines
+      // and a hash saved on every vertex of the mesh.
+      float id = 0.5;
+      float stiff = 1.0;
+      float ph = 0.0;
+      float front = 1.0;
+      if (grassDetail >= 1.0) {
+        id = tuftHash(floor(vWorld.xz * 0.125));
+        // Stiffness scatter. A real meadow is not one plant: some tufts are
+        // young and whippy, some are woody and barely give, and it is the
+        // DISAGREEMENT that reads as many plants rather than one animated
+        // surface. Divided into the amplitude, so a stiff tuft leans less.
+        stiff = 0.78 + id * 0.55;
+        ph = id * 6.2831;
+        // ------- the squall front
+        //
+        // A second wave on the same bearing at a fifth of the frequency
+        // and a third of the clock -- so the amplitude ITSELF travels. The
+        // wave below says which way a blade is leaning this instant; this
+        // says whether the air is on it at all. Without it a meadow is
+        // uniformly windy forever, which is the tell that separates an
+        // animation from weather no matter how good the wave is.
+        front = 0.72 + 0.28 * sin(dot(w.xz, windFreq * 0.21)
+                                  - windPhase * 0.37);
+      }
 
       float wet  = clamp(grassLoad.x, 0.0, 1.0);
       float snow = clamp(grassLoad.y, 0.0, 1.0);
       float gust = clamp(grassLoad.z, 0.0, 1.0);
 
       float p = dot(w.xz, windFreq) - windPhase + ph * 0.35;
-      // ------- the squall front
-      //
-      // A second wave on the same bearing at a fifth of the frequency and
-      // a third of the clock -- so the amplitude ITSELF travels. The wave
-      // below says which way a blade is leaning this instant; this says
-      // whether the air is on it at all. Without it a meadow is uniformly
-      // windy forever, which is the tell that separates an animation from
-      // weather no matter how good the wave is.
-      float front = 0.72 + 0.28 * sin(dot(w.xz, windFreq * 0.21)
-                                      - windPhase * 0.37);
       float amp = sway * (0.55 + 0.45 * front) * (1.0 + 0.55 * gust) / stiff;
       // Rain is water on a blade: heavier, so it damps -- a wet meadow
       // moves less, not more. Settled snow is worse, and it also freezes
       // the stems it is sitting on, so it takes most of the give away.
       amp *= (1.0 - 0.28 * wet) * (1.0 - 0.62 * snow);
 
-      // Three harmonics: travelling gust + shove + tip flutter. Flutter
-      // is small and high-frequency so a meadow shimmers rather than
-      // waving like a flag.
-      float wave = sin(p)
-                 + 0.38 * sin(p * 2.25 + 1.7)
-                 + 0.14 * sin(p * 5.3 + hN * 2.1 + 0.4);
-      // and the rain's own note on top: drops landing are fast and small
-      // and land on each tuft on its own phase, so a meadow under a shower
-      // twitches under the sway instead of only leaning harder.
-      wave += wet * 0.22 * sin(p * 9.1 + ph * 3.0);
+      // The travelling gust and the shove in it. Two sines, every tier:
+      // this is the motion itself and there is no cheaper version of it.
+      float wave = sin(p) + 0.38 * sin(p * 2.25 + 1.7);
+      vec2 lean = windDir * (amp * bend * wave);
 
-      // mild cross-axis drift so blades do not all lean on one line
-      vec2 crossDir = vec2(-windDir.y, windDir.x);
-      float cross = 0.18 * sin(p * 1.6 + 0.9) * bend;
-      vec2 lean = windDir * (amp * bend * wave) + crossDir * (amp * cross);
+      // TIER 2 -- the texture on top of the motion. Flutter so a meadow
+      // shimmers rather than waving like a flag, a cross-axis drift so
+      // blades do not all lean on one line, and the rain's own fast note
+      // as drops land. Three more sines, and on a device that chose FULL
+      // they are what the choice was for.
+      if (grassDetail >= 2.0) {
+        wave += 0.14 * sin(p * 5.3 + hN * 2.1 + 0.4)
+              + wet * 0.22 * sin(p * 9.1 + ph * 3.0);
+        vec2 crossDir = vec2(-windDir.y, windDir.x);
+        float cross = 0.18 * sin(p * 1.6 + 0.9) * bend;
+        // recomputed rather than added to, because `wave` moved under it
+        lean = windDir * (amp * bend * wave) + crossDir * (amp * cross);
+      }
       w.xz += lean;
       // ------- and the tip comes DOWN as it goes over
       //
@@ -290,10 +316,15 @@ local SHADER = [[
       // -- the second-order term of the circular arc, which at these
       // amplitudes is the whole of it. Capped at half the vertex's own
       // height so a gale folds a tuft over rather than through the floor.
-      float L = length(lean);
-      w.y -= min(L * L / (2.0 * H), vertex_position.y * 0.5);
-      // tip bob: a little vertical give under the same gust
-      w.y += amp * bend * 0.07 * sin(p * 1.85 + 0.6);
+      //
+      // dot(lean, lean) IS L squared, so the square root this used to take
+      // was computed only to be squared again on the next line. Same
+      // number, one fewer sqrt per vertex of every grass mesh in the world.
+      w.y -= min(dot(lean, lean) / (2.0 * H), vertex_position.y * 0.5);
+      // tip bob: a little vertical give under the same gust (tier 2)
+      if (grassDetail >= 2.0) {
+        w.y += amp * bend * 0.07 * sin(p * 1.85 + 0.6);
+      }
 
       // ------- WEIGHT: what is lying on the blade, which is not the wind
       //
@@ -335,9 +366,16 @@ local SHADER = [[
           if (float(ci) >= crushN) break;
           vec4 cr = crush[ci];
           vec2 d = w.xz - cr.xy;
-          float dist = length(d);
           float rad = max(cr.z, 0.5);
-          if (dist < rad) {
+          // Reject on the SQUARED distance. Almost every vertex of a
+          // route's meadow is outside almost every crush disc, so this
+          // loop is a rejection loop that happened to be paying for a
+          // square root on each miss -- eight per vertex while walking.
+          // The sqrt now runs only on the handful of vertices that are
+          // actually inside a disc.
+          float d2 = dot(d, d);
+          if (d2 < rad * rad) {
+            float dist = sqrt(d2);
             float t = 1.0 - dist / rad;
             t = t * t * cr.w;
             vec2 dir = (dist > 0.05) ? (d / dist) : windDir;
@@ -363,7 +401,12 @@ local SHADER = [[
       // that fell out of the sky ends up: a crown catches it, the stem
       // under the crown does not. smoothstep rather than a linear ramp so
       // there is a green base rather than a gradient from root to tip.
-      vGrassCap = snow * smoothstep(0.30, 0.95, hN);
+      // Gated on `snow` because the whole of winter is a uniform: on every
+      // frame that is not a snowfall this is one compare, not a smoothstep
+      // per vertex of every meadow in the world.
+      if (snow > 0.0) {
+        vGrassCap = snow * smoothstep(0.30, 0.95, hN);
+      }
     }
     // THE WATER SURFACE, which is the only geometry in this world that
     // stands below zero -- it is recessed to -2 so the shoreline shows a
@@ -432,9 +475,19 @@ local SHADER = [[
     // along -- which is why neither has to know this exists. Along Y only,
     // so a column moves as one piece: the world tips away and the
     // buildings standing on it stay upright.
+    // CLAMPED, which matters to exactly one thing: the far skyline. The
+    // drop goes as the SQUARE of the distance, so land ten view-heights
+    // out falls a hundred times what land one view-height out does -- with
+    // the bend on, every silhouette lib/Skyline.lua stands up would be
+    // kilometres under the map before it was ever drawn. Past the cap the
+    // world stops rolling and simply lies flat, which is also what a real
+    // horizon does: curvature near, plateau far. Nothing that existed
+    // before this line can reach the cap -- the drawn world ends around
+    // half a view-height out and the bend there is a rounding error -- so
+    // the near roll is exactly the roll it always was.
     if (curve.z > 0.0) {
       vec2 cd = w.xz - curve.xy;
-      w.y -= dot(cd, cd) * curve.z;
+      w.y -= min(dot(cd, cd) * curve.z, curve.w);
     }
     // camera-ward pull: move the vertex along ITS OWN ray to the eye.
     // This is a pure depth bias -- the projection of a point moved along
@@ -642,6 +695,11 @@ local SHADER = [[
 
   uniform vec3 ghostColor;    // the flat silhouette colour
   uniform float ghost;        // 0 = shade normally, 1 = flatten to it
+  // Aerial perspective (see lib/Aerial.lua). Packed rather than four
+  // uniforms because every one of them is a property of the same ramp.
+  uniform vec4 fog;           // x = near, y = 1/span, z = top strength, w = rungs
+  uniform vec3 fogColor;      // the hour's haze -- the sky's own palest band
+  uniform vec3 fogEye;        // the camera itself: haze is path length to IT
   // The hour's light, split in two (see Light.lua). A surface always gets
   // `skyTint`; `sunTint` is what the sun adds on top where it reaches. In
   // FLAT the whole hour goes in skyTint and sunTint is zero, which is the
@@ -693,6 +751,15 @@ local SHADER = [[
   uniform vec4 lamp6;
   uniform vec4 lamp7;
   uniform float lampGlow;
+
+#ifdef ANIME_CEL
+  // The cel rung's three numbers (see lib/Anime.lua). Declared inside the
+  // define so a build without the rung carries no unused uniform and the
+  // send below is free to fail silently against it.
+  uniform float animeBands;   // flat steps per unit of luminance
+  uniform float animeCell;    // the render-buffer cell the step snaps to
+  uniform float animeDither;  // checkerboard jitter, in band units
+#endif
   uniform float lampHeight;   // world y of the flame (from the post's bake)
   uniform float lampFlicker;  // the gas clock; 0 holds every lamp perfectly still
   uniform vec3 lampCore;      // the hot near-white at the centre of a pool
@@ -813,6 +880,61 @@ local SHADER = [[
     // attenuation peaks near a half, and the core should still reach white.
     vec3 warm = mix(lampColor, lampCore, clamp(lamps.y * 1.6, 0.0, 1.0));
     light += warm * energy * lampGlow;
+#ifdef ANIME_CEL
+    // THE CEL STEP. Everything above has finished summing light and nothing
+    // below has spent it yet, which is the one instant where a single
+    // quantisation catches the sky, the sun AND the lamps -- the whole
+    // light, which is what this rung was asked for.
+    //
+    // Banded by LUMINANCE and rescaled, not per channel. Per channel is the
+    // obvious spelling and it is wrong here: R, G and B cross their own
+    // thresholds at different values, so every boundary becomes a coloured
+    // fringe -- and this shader deliberately carries two differently
+    // COLOURED lights (a cool sky, a warm sun, see the note over `lit`) plus
+    // an amber lamp on top, so those fringes would land on every shadow edge
+    // and every pool of lamplight in the mod. One luminance step keeps the
+    // hue the two-light split built and moves only how bright it is.
+    float lum = dot(light, vec3(0.2126, 0.7152, 0.0722));
+    if (lum > 0.0001) {
+      // The dither grid, on a CELL of the render buffer -- the cel water's
+      // floor(sc / cell) idiom, and here for the same failure: the sun moves
+      // all day, so every boundary sweeps, and an undithered hard step
+      // sweeping at a fraction of a pixel per frame crawls. Snapping the
+      // checker to whole cells is what stops the dither itself from
+      // swimming underneath the boundary it is meant to soften.
+      vec2 gc = floor(sc / max(animeCell, 1.0));
+      float check = mod(gc.x + gc.y, 2.0);
+      float steps = max(animeBands, 1.0);
+      // Threshold jittered rather than the value: the checker has to move
+      // WHERE the step happens, so that two neighbouring cells fall on
+      // opposite sides of it and the boundary reads as a two-tone weave.
+      float t = lum * steps + (check - 0.5) * animeDither;
+      // Rounded to the NEAREST step, not floored to the band below it.
+      // Floor alone hands every fragment the dimmest light in its band and
+      // the world goes dark by half a step everywhere; rounding is unbiased,
+      // so the diorama keeps the average brightness it had and only the
+      // distribution changes -- which is the whole intent.
+      //
+      // Not band CENTRES either, which is the other obvious spelling and is
+      // a trap: a centre can never return less than half a band, so every
+      // fragment darker than that gets LIFTED to it. Luminance 0.01 in an
+      // unlit cave would come back as 0.125 -- twelve times brighter -- and
+      // the darkest rooms in the game would glow. Rounding sends them to
+      // zero instead, which is what the darkest cel shade is.
+      //
+      // No clamp at the top: a lamp core sits above 1.0 (see the x/(1+kx)
+      // ceiling above) and goes on climbing in steps of the same size
+      // rather than flattening into a brightest band.
+      float q = max(floor(t + 0.5), 0.0) / steps;
+      // And the ratio is bounded on the way UP. Rounding moves luminance by
+      // at most half a step in absolute terms, but as a RATIO that is
+      // unbounded as the fragment gets darker -- near black, half a step is
+      // a multiplication. Capping at one step's worth keeps a dim corner
+      // dim while leaving every fragment bright enough to have a band land
+      // exactly where the quantisation put it.
+      light *= clamp(q / lum, 0.0, 1.0 + 1.0 / steps);
+    }
+#endif
     vec3 rgb = p.rgb * vShade * light;
     // Optional water surface art: replace the tileset water tile's albedo
     // on every recessed water face (lakes / rivers). Cel paint below still
@@ -1204,6 +1326,35 @@ local SHADER = [[
         rgb = mix(rgb, snow, lay);
       }
     }
+    // ------- AERIAL PERSPECTIVE: the far ground goes to haze
+    //
+    // Last of the shading, so everything above -- the hour's light, the
+    // shadow, the water's own paint, the snow -- has already happened and
+    // the haze covers all of it, exactly as air does. (Fog folded in
+    // earlier would have been re-lit by whatever came after and gone dark
+    // in the shade of a building, which is the one thing distance haze
+    // never does.)
+    //
+    // SQUARED, and that is the shape of the whole effect rather than a
+    // taste. A physical haze is exponential -- it climbs fastest right in
+    // front of you -- and that is the wrong curve here, because the near
+    // ground is where the game is played and it has to stay legible. The
+    // square is nearly nothing across the playable screen and then piles
+    // up over the last half of the range, so the cost of the cue is paid
+    // entirely by ground that exists to be looked at.
+    if (fog.z > 0.0) {
+      float fd = length(vWorld - fogEye);
+      float ft = clamp((fd - fog.x) * fog.y, 0.0, 1.0);
+      ft *= ft;
+      // Hard rungs, dithered one rung wide with the same per-world-pixel
+      // grain the snow uses: anchored in world space, so the boundary
+      // between two rungs is a stipple that sits still while the camera
+      // pans rather than a band sliding over the ground.
+      float fg = voxelHash(floor(vWorld));
+      ft = clamp(ft + (fg - 0.5) / fog.w, 0.0, 1.0);
+      ft = floor(ft * fog.w + 0.5) / fog.w;
+      rgb = mix(rgb, fogColor, ft * fog.z);
+    }
     // The hidden player is a SHAPE, not a dimmed picture of itself. Tinting
     // through `color` could only multiply the sprite's own pixels, which
     // darkens each one by its own amount and keeps the character's internal
@@ -1354,7 +1505,17 @@ local function sendCrush(sh, c)
   local n = 0
   if c and c.n then
     n = c.n
-    if n > 8 then n = 8 end
+    -- The loop is per VERTEX, so a slot nobody is standing in is still
+    -- paid for by the whole meadow. The rung decides how many the device
+    -- can carry (Quality.crushSlots); the extras are simply not sent, and
+    -- because Grass3D emits live feet before trail crumbs, what gets cut
+    -- is always the far end of the trail rather than the foot in front of
+    -- the player.
+    local cap = 8
+    local okq, q = pcall(Quality.crushSlots)
+    if okq and tonumber(q) then cap = math.floor(q) end
+    if cap < 0 then cap = 0 elseif cap > 8 then cap = 8 end
+    if n > cap then n = cap end
     if n < 0 then n = 0 end
   end
   for i = 1, 8 do
@@ -1398,8 +1559,13 @@ function Voxel3D.shader(grid)
   grid = grid and true or false
   local oneTap = not Quality.softShadows()
   local soft = Quality.pcss()
+  -- The cel rung is a compile-time branch like the shadow ladder above it,
+  -- not a uniform: an `if` around the quantisation would be paid by every
+  -- fragment on the OFF rung too, which is the rung most people are on.
+  local cel = Anime.cel()
   local key = (grid and "g" or "-")
               .. (oneTap and "1" or (soft and "p" or "4"))
+              .. (cel and "c" or "-")
   if shaders[key] == nil then
     if grid and not derivativesOK() then
       shaders[key] = false
@@ -1407,6 +1573,7 @@ function Voxel3D.shader(grid)
       local src = (grid and "#define VOXEL_GRID 1\n" or "")
                   .. (oneTap and "#define SUN_ONE_TAP 1\n" or "")
                   .. ((soft and not oneTap) and "#define SUN_SOFT 1\n" or "")
+                  .. (cel and "#define ANIME_CEL 1\n" or "")
                   .. SHADER
       local ok, sh = pcall(love.graphics.newShader, src)
       shaders[key] = ok and sh or false
@@ -1741,8 +1908,11 @@ function Voxel3D.beginScene(w, h, cx, cy, vw, vh, sky, slot)
     -- panel's size here would put the horizon off the bottom of a
     -- half-resolution frame and size the dither grid to squares the canvas
     -- cannot hold.
+    -- cx/cy ride along so the cloud deck can park itself over the MAP rather
+    -- than over the monitor: without them every sample the raymarch takes is
+    -- a function of the pixel alone, and the sky slides with the camera.
     Sky.paint(rw, rh, sky, Voxel3D.horizonY(rh), rw / math.max(1, vw or rw),
-              sky.bands and Voxel3D.skyBody(rw, rh) or nil)
+              sky.bands and Voxel3D.skyBody(rw, rh) or nil, cx, cy)
   else
     love.graphics.clear(0, 0, 0, 0, true, true)
   end
@@ -1789,6 +1959,13 @@ function Voxel3D.beginScene(w, h, cx, cy, vw, vh, sky, slot)
                                Voxel3D.skyAmount or 0)
   pcall(sh.send, sh, "skyTint", sky)
   pcall(sh.send, sh, "sunTint", sun)
+  -- The cel rung's numbers. Sent unconditionally and through pcall like
+  -- everything else on this page: on a shader built without ANIME_CEL the
+  -- uniforms do not exist, the send fails, and the pcall is what makes that
+  -- the intended outcome rather than a lost frame.
+  pcall(sh.send, sh, "animeBands", Anime.BANDS)
+  pcall(sh.send, sh, "animeCell", Anime.CELL)
+  pcall(sh.send, sh, "animeDither", Anime.DITHER)
   -- Local night lights. Every uniform is sent every scene so a day frame (or
   -- a map change) cannot retain a lamp from the previous city.
   local lamps = Voxel3D.lampLights or {}
@@ -1894,6 +2071,14 @@ function Voxel3D.beginScene(w, h, cx, cy, vw, vh, sky, slot)
   Voxel3D.grassLoad = nil
   pcall(sh.send, sh, "grassH", Voxel3D.GRASS_H)
   pcall(sh.send, sh, "grassLoad", { 0, 0, 0 })
+  -- Sent once per frame rather than per draw: it is a device capability,
+  -- not a property of the mesh in front of the shader.
+  do
+    local d = 1
+    local okd, v = pcall(Quality.grassDetail)
+    if okd and tonumber(v) then d = v end
+    pcall(sh.send, sh, "grassDetail", d)
+  end
   -- crush off until the grass pass fills Voxel3D.crush
   Voxel3D.crush = nil
   pcall(sh.send, sh, "crushN", 0)
@@ -1904,7 +2089,46 @@ function Voxel3D.beginScene(w, h, cx, cy, vw, vh, sky, slot)
   local placed = Voxel3D.camera
   Voxel3D.curveK = (placed and placed.curve) or WorldCurve.k(vh)
   Voxel3D.curveX, Voxel3D.curveZ = cx, cy
-  pcall(sh.send, sh, "curve", { cx, cy, Voxel3D.curveK })
+  Voxel3D.curveCap = WorldCurve.cap(vh)
+  pcall(sh.send, sh, "curve", { cx, cy, Voxel3D.curveK, Voxel3D.curveCap })
+  -- The haze (see lib/Aerial.lua). Sent every scene, and sent as a zero when
+  -- there is nothing to draw, because a uniform left over from the last frame
+  -- is a frame of fog on a map that has none -- walk into a house and the sky
+  -- descriptor goes nil, which is exactly the case that has to clear.
+  --
+  -- MEASURED FROM THE EYE, and the near plane is pushed out by the eye's own
+  -- distance to the player so that Aerial.NEAR / FAR keep meaning "this far
+  -- PAST the player". Both halves of that were learned from the probe rather
+  -- than reasoned out. The first cut measured from the FOCUS, on the argument
+  -- that it holds still while the camera orbits -- and at the 75-degree rung
+  -- it hazed the bottom of the frame HARDER than the tree line, because the
+  -- ground at the bottom of the screen is a long way SOUTH of the player even
+  -- though it is the nearest thing in the picture. Distance to the camera is
+  -- the only measure that agrees with what the frame looks like, and it is
+  -- what air actually does. The subtraction is then forced: every visible
+  -- point is already at least eye-to-focus away, so a range that did not
+  -- start there would spend its whole first view-height underground.
+  --
+  -- A PLACED camera declines it, the way it may decline the curve. The range
+  -- is in view-heights, and a staged shot's framing comes from its arena
+  -- rather than from `vh` -- so the numbers that put the haze on the horizon
+  -- out here would put it across the middle of a battle.
+  local haze = (not placed) and Aerial.color(Voxel3D.skyFill) or nil
+  local fogNear, fogInv = nil, nil
+  if haze then fogNear, fogInv = Aerial.range(vh) end
+  if haze and fogNear then
+    local eye, focus = Voxel3D.eye, Voxel3D.focus
+    local ex = eye[1] - focus[1]
+    local ey = eye[2] - focus[2]
+    local ez = eye[3] - focus[3]
+    local eyeDist = math.sqrt(ex * ex + ey * ey + ez * ez)
+    pcall(sh.send, sh, "fog",
+          { eyeDist + fogNear, fogInv, Aerial.amount(), Aerial.RUNGS })
+    pcall(sh.send, sh, "fogColor", haze)
+    pcall(sh.send, sh, "fogEye", eye)
+  else
+    pcall(sh.send, sh, "fog", { 0, 0, 0, Aerial.RUNGS })
+  end
   -- clip w at the focus point, the reference depth project() reports scale
   -- against (so scale == 1 for anything standing at the view centre)
   local m = Voxel3D.vp
@@ -2378,7 +2602,7 @@ function Voxel3D.project(wx, wy, wz)
   -- the same drop the vertex shader applies, or every FX anchored to a
   -- ground point floats off its own feet the moment that ground bends
   wy = wy - WorldCurve.drop(Voxel3D.curveK or 0, Voxel3D.curveX or 0,
-                            Voxel3D.curveZ or 0, wx, wz)
+                            Voxel3D.curveZ or 0, wx, wz, Voxel3D.curveCap)
   local cx = m[1] * wx + m[2] * wy + m[3] * wz + m[4]
   local cy = m[5] * wx + m[6] * wy + m[7] * wz + m[8]
   local cw = m[13] * wx + m[14] * wy + m[15] * wz + m[16]

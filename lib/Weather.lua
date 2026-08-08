@@ -131,7 +131,15 @@ end
 -- rain still feels like something happened.
 Weather.CLEAR_MIN, Weather.CLEAR_MAX = 300, 720     -- seconds between showers
 Weather.WET_MIN, Weather.WET_MAX = 60, 170          -- seconds one lasts
-Weather.BUILD = 7                                   -- seconds to reach peak
+-- BUILD was seven, which was fine while the only thing it governed was how
+-- fast the streaks thickened -- seven seconds of that is a shower starting.
+-- It is far too fast for a front you are supposed to WATCH ARRIVE. The far
+-- curtain (below) is legible from about a fifth of the way up this ramp, so
+-- the length of this number is literally how long you get to stand there and
+-- see grey close in before it is on you. Twenty seconds is most of a minute
+-- of approach with the curtain leading, and still lands well inside the
+-- sixty-second floor on a wet spell (WET_MIN).
+Weather.BUILD = 20                                  -- seconds to reach peak
 Weather.CLEAR_FADE = 14                             -- seconds to fall away
 
 -- How hard it can come down. The low end is a drizzle worth noticing, the
@@ -319,6 +327,40 @@ function Weather.visible()
   local ow = Game and Game.overworld
   if not openSky(ow and ow.map) then return nil, 0 end
   return kind, power
+end
+
+-- ------- the far curtain
+--
+-- The wall of rain you can see standing on the horizon before you are in it,
+-- painted by lib/Sky.lua up in the sky rectangle.
+--
+-- It is NOT a forecast. Nothing in this file knows the future, and building a
+-- lookahead would have meant leaking the next spell's roll to every reader
+-- for one picture's sake. It is the SAME shower, drawn where a shower is the
+-- only place it is ever visible AS a shower -- from far enough away to see
+-- the shape of it -- and it reads as *coming* because it LEADS the near
+-- field: a curtain is legible at a power where the streaks are still a drop
+-- here and there, so it fills in over the first fifth of the ramp and the
+-- streaks arrive after it. That ordering is the whole effect. With BUILD at
+-- twenty seconds it buys the better part of a minute of watching.
+--
+-- Rides `visible` rather than `falling`, because a curtain is a picture and a
+-- picture needs a sky to be in (see the header on Weather.visible).
+Weather.CURTAIN_IN = 0.02       -- power at which the far wall first shows
+Weather.CURTAIN_FULL = 0.34     -- and where it is drawn in full
+
+function Weather.curtain()
+  local kind, power = Weather.visible()
+  if not kind then return 0 end
+  local a = ((power or 0) - Weather.CURTAIN_IN)
+            / (Weather.CURTAIN_FULL - Weather.CURTAIN_IN)
+  if a <= 0 then return 0 end
+  if a > 1 then a = 1 end
+  -- snow gets a thinner one: a squall coming in reads as the horizon going
+  -- soft, not as shafts -- shafts are what falling water does and snow does
+  -- not fall in lines
+  if kind == "snow" then a = a * 0.55 end
+  return a
 end
 
 -- ------- particles
@@ -573,6 +615,17 @@ local function tick(dt)
   local out = openSky(ow and ow.map) and state.power or 0
   local visible = out > 0 and state.kind or nil
   DayNight.overcast = state.kind == "snow" and out * 0.75 or out
+  -- The storm register, pushed the same way and on the same tick, so the
+  -- purple sky and the flash are one fact rather than two that happen to
+  -- coincide: this ramps over exactly the band STRIKE_ABOVE gates the
+  -- lightning with, so a sky that has gone violet is by definition a sky that
+  -- can strike. Snow never storms -- a blizzard is white, not bruised.
+  local bruise = 0
+  if state.kind == "rain" and out > Weather.STRIKE_ABOVE then
+    bruise = (out - Weather.STRIKE_ABOVE) / (1 - Weather.STRIKE_ABOVE)
+    if bruise > 1 then bruise = 1 end
+  end
+  DayNight.storm = bruise
   Water.wet = state.kind == "rain" and out or 0
   -- snow on the water is its own channel (veil + freeze target). Pushed the
   -- same way wet is, so Water never requires this file back.

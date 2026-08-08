@@ -69,6 +69,29 @@ Sky.cloudSetting = ModSetting.new("clouds", "CLOUDS",
                                   { 1, 2, 0 },
                                   { "ON", "THICK", "OFF" })
 
+-- ------- what makes a deck read as WEATHER rather than as wallpaper
+--
+-- Two numbers, and between them they are the whole of the "clouds actually
+-- move" fix -- because the deck was already travelling. `cloudWind * cloudTime`
+-- has been pushing the sample point downwind since this shader was written,
+-- fast enough to cross the frame in about half a minute. Motion was never
+-- what was missing. What was missing is that the thing being moved was RIGID
+-- and NAILED TO THE SCREEN, and the eye reads either of those as a painted
+-- backdrop no matter how fast you tow it past.
+--
+-- PARALLAX fixes the second: the deck's sample origin picks up the camera, so
+-- cloud sits over Kanto instead of over the monitor. The number is small on
+-- purpose -- cloud is the farthest thing in the frame and therefore the thing
+-- that must shift LEAST as you walk. That difference IS the distance cue;
+-- make it large and the sky turns into a low ceiling sliding overhead.
+--
+-- EVOLVE fixes the first: it drives the erosion noise inside cloudDensity at
+-- its own rate, against the wind that carries the mass. Puffs open, thin and
+-- close as the deck crosses, so it is never the same shape twice. Slower than
+-- the drift by design -- cloud that boils reads as steam.
+Sky.CLOUD_PARALLAX = 0.0016   -- noise units per world pixel of camera
+Sky.CLOUD_EVOLVE = 0.035      -- shape change per second, independent of wind
+
 -- Coastal outdoor maps: denser low fog at dawn/dusk (cheap id table, not
 -- a tile scan). Extends the same idea as DayNight.CANOPY for forests.
 Sky.COAST = {
@@ -333,6 +356,17 @@ uniform vec3  cloudLit;    // sunlit face
 uniform vec3  cloudShade;  // self-shadow face
 uniform float cloudNight;  // 0 day .. 1 deep night dim
 uniform float frameW;      // canvas width for aspect-correct UVs
+uniform float cloudEvolve; // seconds * a slower rate: shape change, not drift
+uniform vec2  camOff;      // the camera in noise units -- the deck's parallax
+// Distant rain: a wall of shafts standing on the horizon, under the deck and
+// over the haze band. Leads the near streaks (Weather.curtain).
+uniform float curtainAmt;  // 0..1; 0.01 and under is the whole block off
+uniform vec3  curtainCol;
+// God rays: sunlight through a deck that is breaking up after a shower.
+uniform float rayAmt;      // 0..1 (Weather.afterRain, sun only -- not a moon)
+uniform vec2  rayPos;      // the disc, in canvas pixels
+uniform float rayInvR;     // 1 / the fan's reach
+uniform vec3  rayColor;
 
 // Band `i`, read from its own texel centre. The index is clamped rather than
 // trusted: `pos` below can land exactly on `count` when the arithmetic is
@@ -372,13 +406,18 @@ float cloudFbm(vec2 p) {
 // Density at a sample point inside the cloud slab. `h` is altitude in the
 // slab 0..1 (low = cloud base, high = tops), `xz` is world-ish UV advected
 // by wind so the deck TRAVELS rather than crawling in screen space.
-float cloudDensity(vec2 xz, float h, float thr) {
+float cloudDensity(vec2 xz, float h, float thr, float ev) {
   // slightly lower frequency with height so tops are softer than the base
   float n = cloudFbm(xz * mix(1.35, 0.85, h) + vec2(0.0, h * 1.7));
   // vertical envelope: flat base, puffy mid, thin tops (the "volume" read)
   float envelope = smoothstep(0.02, 0.18, h) * (1.0 - smoothstep(0.62, 0.98, h));
-  // erode by a second noise so the mass is not one blob
-  float carve = cloudNoise(xz * 2.4 + vec2(h * 3.1, 11.0));
+  // Erode by a second noise -- and SLIDE THAT NOISE AGAINST THE FIRST. `ev`
+  // is the only new thing here and it is the difference between cloud that
+  // travels and cloud that lives: the mass drifts downwind, the erosion
+  // drifts at its own rate and its own angle, and what survives between them
+  // is never the same shape twice. Two constants, zero extra work -- it is
+  // the same texture-free noise call, sampled somewhere else.
+  float carve = cloudNoise(xz * 2.4 + vec2(h * 3.1 + ev * 2.3, 11.0 - ev * 1.7));
   n = n - carve * 0.18;
   return max(n - thr, 0.0) * envelope;
 }
@@ -413,6 +452,12 @@ vec4 effect(vec4 color, Image tex, vec2 tc, vec2 sc) {
   // (fair weather + overcast + CLOUDS row). Not true 3D lighting -- the
   // shade gradient is height in the slab, which is enough for a cel
   // volume and costs no secondary ray.
+  //
+  // Kept OUTSIDE the block because the god rays below read it: how thick the
+  // deck came out at this pixel is exactly the question "can light get
+  // through here", and the march has already paid for the answer. At a rung
+  // with no march this stays zero, which the rays correctly read as open sky.
+  float cloudDens = 0.0;
   if (cloudSteps > 0.5 && cloudAmt > 0.01) {
     vec2 cc = (floor(sc / cell) + 0.5) * cell;
     float y01 = clamp(cc.y / max(edge, 1.0), 0.0, 1.0);
@@ -425,7 +470,10 @@ vec4 effect(vec4 color, Image tex, vec2 tc, vec2 sc) {
       float thr = mix(0.58, 0.22, clamp(cloudAmt, 0.0, 1.0));
       // view ray into the slab: y01 is "looking down the sky", so deeper
       // steps also slide in X with perspective-ish foreshortening
-      vec2 origin = vec2((x01 - 0.5) * 4.2, y01 * 2.6);
+      // camOff is what nails the deck to the WORLD instead of to the screen:
+      // without it every sample point is a function of the pixel alone, so
+      // walking across a route slid the whole sky along with the camera
+      vec2 origin = vec2((x01 - 0.5) * 4.2, y01 * 2.6) + camOff;
       vec2 adv = cloudWind * cloudTime;
       float accum = 0.0;
       float lightAcc = 0.0;
@@ -438,7 +486,7 @@ vec4 effect(vec4 color, Image tex, vec2 tc, vec2 sc) {
         // parallax: farther samples shift with view angle
         vec2 xz = origin * mix(1.0, 1.55, t) + adv * mix(0.55, 1.15, t)
                 + vec2(0.0, t * 0.85);
-        float d = cloudDensity(xz, h, thr);
+        float d = cloudDensity(xz, h, thr, cloudEvolve);
         // front-to-back over: later samples only fill remaining air
         float contribute = d * (1.0 - accum) * 0.72;
         accum += contribute;
@@ -451,6 +499,7 @@ vec4 effect(vec4 color, Image tex, vec2 tc, vec2 sc) {
       float lvl = floor(accum * 3.0 + 0.001);
       if (accum * 3.0 - lvl > 0.45 && parity < 0.5) lvl += 1.0;
       float dens = min(lvl / 3.0, 1.0);
+      cloudDens = dens;
       float shade = 0.0;
       if (accum > 1e-4) shade = clamp(lightAcc / accum, 0.0, 1.0);
       vec3 cld = mix(cloudShade, cloudLit, shade);
@@ -462,6 +511,82 @@ vec4 effect(vec4 color, Image tex, vec2 tc, vec2 sc) {
       vec3 nightCld = cld * 0.28 + vec3(0.04, 0.05, 0.10);
       cld = mix(cld, nightCld, cloudNight);
       c = mix(c, cld, dens);
+    }
+  }
+  // ------- the far curtain
+  //
+  // Rain seen from outside it: a wall of shafts standing where the ground
+  // runs out. This is the same shower that is about to be on top of you --
+  // Weather.curtain leads the streaks on the power ramp, so this fills in
+  // while the near field is still a drop here and there, and you get to watch
+  // it come.
+  //
+  // Two noise calls rather than an fbm, and that is a shape decision before
+  // it is a cost one: the thing wanted here is TALL AND THIN, and four
+  // octaves of isotropic noise gives clouds again. One octave stretched hard
+  // in Y, plus a finer one across it, gives columns. It being cheap is why it
+  // can also run at the rung where the raymarch is switched off entirely --
+  // the bottom rung loses its cloud deck but it does not lose the weather.
+  if (curtainAmt > 0.01) {
+    vec2 cc = (floor(sc / cell) + 0.5) * cell;
+    float y01 = clamp(cc.y / max(edge, 1.0), 0.0, 1.0);
+    // Starts mid-sky and thickens all the way down. Deliberately NOT thinned
+    // at the horizon the way the deck is: distant rain reaches the ground,
+    // and a curtain that faded out just before it got there would read as a
+    // smudge hanging in the air.
+    float wall = smoothstep(0.34, 0.78, y01);
+    if (wall > 0.01) {
+      float x01 = cc.x / max(frameW, 1.0);
+      // The frequency here is the whole difference between a curtain and a
+      // SLAB, and the first pass got it wrong: at 3.4 there are three noise
+      // features across a 320-wide frame, which is a hundred pixels per
+      // feature -- far too wide to read as anything but a grey band lying on
+      // the horizon. Thirteen puts a shaft every twenty-odd pixels, which at
+      // this diorama's cell size is a column you can count.
+      //
+      // The Y coefficients stay small on purpose. That asymmetry IS the
+      // shape: sampling fast across X and slowly down Y stretches every
+      // noise feature into a vertical streak, which is what falling water
+      // looks like from a distance and what no isotropic noise will give you
+      // however you threshold it.
+      float sx = x01 * 13.0 + camOff.x * 0.5 + cloudEvolve * 0.9;
+      float shaft = cloudNoise(vec2(sx, y01 * 0.30 + cloudEvolve * 0.5)) * 0.66
+                  + cloudNoise(vec2(sx * 2.7 + 5.0, y01 * 0.55)) * 0.34;
+      shaft = smoothstep(0.38, 0.74, shaft);
+      float a = shaft * wall * curtainAmt;
+      float lvl = floor(a * 3.0);
+      if (a * 3.0 - lvl > 0.5 && parity < 0.5) lvl += 1.0;
+      c = mix(c, curtainCol, min(lvl / 3.0, 1.0) * 0.82);
+    }
+  }
+  // ------- god rays
+  //
+  // The light that comes back after the rain, and the reason it comes back in
+  // SHAFTS rather than as a wash: rays are what a BROKEN deck does to
+  // sunlight. So they are drawn where the deck is thin -- `cloudDens` is
+  // already that answer at this pixel, the march paid for it, this reads it.
+  // Which is why the whole effect is one atan and one sin, and only during
+  // the three minutes after a shower (rayAmt is Weather.afterRain).
+  //
+  // Where there is no march, cloudDens is zero, the gap term is one, and this
+  // degrades to a plain fan off the disc. That is the floor and it is the
+  // right floor: fewer rays, still rays.
+  //
+  // Hard rungs and the same checker as everything else in this file. A smooth
+  // ramp here is bloom, and bloom is the one thing this sky may not become.
+  if (rayAmt > 0.01 && rayInvR > 0.0) {
+    vec2 cc = (floor(sc / cell) + 0.5) * cell;
+    vec2 d = cc - rayPos;
+    float reach = clamp(1.0 - length(d) * rayInvR, 0.0, 1.0);
+    if (reach > 0.01) {
+      // wedges around the disc, turning very slowly on the same clock the
+      // cloud shape uses -- a fan welded to the sky reads as a decal
+      float fan = 0.5 + 0.5 * sin(atan(d.y, d.x) * 9.0 + cloudEvolve * 0.7);
+      fan = smoothstep(0.30, 0.92, fan);
+      float a = rayAmt * reach * reach * fan * (1.0 - cloudDens);
+      float lvl = floor(a * 3.0);
+      if (a * 3.0 - lvl > 0.5 && parity < 0.5) lvl += 1.0;
+      c = mix(c, rayColor, min(lvl / 3.0, 1.0) * 0.5);
     }
   }
   return vec4(c, alpha);
@@ -673,7 +798,32 @@ Sky.STAR_HORIZON = 2.2    -- how hard the field fades into the haze at the botto
 -- to reset on a map change, and nothing to get out of step.
 Sky.METEOR_EVERY = 17     -- seconds from one crossing to the next
 Sky.METEOR_LEN = 0.055    -- the fraction of that gap a crossing lasts (~0.9s)
-Sky.METEOR_TAIL = 6       -- cells of trail behind the head
+
+-- ------- why the first one did not look like a meteor
+--
+-- Seven cells, all the same size, all the brightest star colour, stepped
+-- 0.035 of the flight apart. That spacing is about six screen pixels and a
+-- cell is two to four, so what actually drew was a DOTTED LINE of identical
+-- white squares -- and a dotted line of identical squares is the one thing
+-- a meteor is not. It reads as a row of stars that happen to be moving.
+--
+-- Three things separate a streak from a row of dots, and none of them costs
+-- anything worth counting (this is at most twenty-odd rectangles, under a
+-- second, once every seventeen -- the star field beside it draws ninety-six
+-- every frame of the night):
+--
+--   CONTINUOUS  the samples have to overlap, not sit beside each other. So
+--               the step is a third of what it was and there are three
+--               times as many.
+--   TAPERED     the head is the object and the tail is what it left. A
+--               constant width down the whole length is a stick. The cell
+--               shrinks along the trail and the head draws a size up.
+--   COOLING     a meteor is white at the front and dies out reddish-grey.
+--               The palette already carries four star shades ordered
+--               brightest-first; walking them down the tail is the whole
+--               effect, and it stays inside the mod's own colour dialect.
+Sky.METEOR_TAIL = 18      -- samples of trail behind the head
+Sky.METEOR_STEP = 0.012   -- flight fraction between samples (they overlap)
 
 -- base brightness per tier, brightest first
 local STAR_MAG = { 1.0, 0.85, 0.62, 0.42 }
@@ -736,19 +886,41 @@ local function paintMeteor(w, edge, cell, amount, now)
   local y0 = 0.05 + r2 * 0.25
   local g = love.graphics
   local shades = PaletteFX.effectiveColors(Sky.STAR_COLORS) or Sky.STAR_COLORS
-  local c = shades[1]
   local fade = math.sin(u * math.pi)       -- in and out, never a hard start
-  for k = 0, Sky.METEOR_TAIL do
-    local uu = u - k * 0.035
+  local tail = Sky.METEOR_TAIL
+  -- Back to front, so the head is drawn LAST and sits on top of its own
+  -- trail rather than under it.
+  for k = tail, 0, -1 do
+    local uu = u - k * Sky.METEOR_STEP
     if uu > 0 then
-      local a = math.floor(fade * (1 - k / (Sky.METEOR_TAIL + 1)) * amount
-                           * 4 + 0.5) / 4
+      local f = k / tail                    -- 0 at the head, 1 at the end
+      -- Brightness falls off fast rather than evenly: a meteor is mostly
+      -- head. Squared keeps the front hot and lets the last third of the
+      -- trail be the faint smudge it should be.
+      local drop = (1 - f) * (1 - f)
+      local a = math.floor(fade * drop * amount * 4 + 0.5) / 4
       if a > 0 then
+        -- COOLING: brightest shade at the head, walking down the ladder
+        -- toward the dim blue-grey at the end.
+        local ci = 1 + math.floor(f * 3.99)
+        if ci > #shades then ci = #shades end
+        local c = shades[ci] or shades[1]
+        -- TAPER: the head is a cell and a half, the far end is half of
+        -- one. Rounded to whole cells so it stays on the sky's own grid --
+        -- a smooth taper here would be the one soft edge in a hard-edged
+        -- sky.
+        local sizeCells = 1
+        if k == 0 then
+          sizeCells = 2                     -- the head is the object
+        elseif f > 0.62 then
+          sizeCells = 1                     -- still a cell; alpha carries it
+        end
+        local sz = sizeCells * cell
         local sx = math.floor((x0 + dir * uu * 0.5) * w / cell) * cell
         local sy = math.floor((y0 + uu * 0.45) * edge / cell) * cell
-        if sx >= 0 and sx < w and sy >= 0 and sy < edge then
+        if sx >= 0 and sx + sz <= w and sy >= 0 and sy + sz <= edge then
           g.setColor(c[1] / 255, c[2] / 255, c[3] / 255, a)
-          g.rectangle("fill", sx, sy, cell, cell)
+          g.rectangle("fill", sx, sy, sz, sz)
         end
       end
     end
@@ -771,21 +943,42 @@ local function paintStars(w, h, edge, cell, amount)
   local tw = Sky.STAR_TWINKLE
   for i = 1, n do
     local st = field[i]
-    -- the twinkle rides its own phase and speed, so the field shimmers
-    -- rather than pulsing as one thing
-    local a = amount * st.mag
-                * (1 - tw + tw * (0.5 + 0.5 * math.sin(now * st.speed
-                                                       + st.phase)))
-    -- four rungs, like the glow: this is also what skips most of the field
-    -- at the ends of the night instead of drawing it invisible
-    a = math.floor(a * 4 + 0.5) / 4
-    if a > 0 then
-      local sy = math.floor(st.y * edge / cell) * cell
-      if sy < edge then
-        local c = shades[st.tier] or shades[#shades]
-        g.setColor(c[1] / 255, c[2] / 255, c[3] / 255, a)
-        g.rectangle("fill", math.floor(st.x * w / cell) * cell, sy,
-                    cell, cell)
+    -- Each star has its OWN point of going out, so the field EMPTIES instead
+    -- of dimming as one sheet. `amount` used to be a flat multiplier, which
+    -- meant a deck coming over took ninety-six stars down together at exactly
+    -- the same rate -- readable as a fade on a layer, which is what it was.
+    --
+    -- The threshold is mostly the star's own brightness, so the faint ones go
+    -- first the way they actually do, with a scatter off its twinkle phase so
+    -- the order is not a clean sweep down the tiers. Phase and not a fresh
+    -- draw on purpose: it is already uniform on 0..1 and uncorrelated with
+    -- magnitude, and taking another number out of starField's generator would
+    -- have moved every star in the sky.
+    --
+    -- At amount = 1 the largest threshold any star can reach is 0.85 and it
+    -- still resolves to full brightness, so a clear deep night is the same
+    -- sky it has always been. Everything below that is where the drama went.
+    local gate = 0.55 * (1 - st.mag) + 0.30 * (st.phase / 6.2832)
+    local live = amount - gate
+    if live > 0 then
+      live = live / math.max(0.05, 1 - gate)
+      if live > 1 then live = 1 end
+      -- the twinkle rides its own phase and speed, so the field shimmers
+      -- rather than pulsing as one thing
+      local a = live * st.mag
+                  * (1 - tw + tw * (0.5 + 0.5 * math.sin(now * st.speed
+                                                         + st.phase)))
+      -- four rungs, like the glow: this is also what skips most of the field
+      -- at the ends of the night instead of drawing it invisible
+      a = math.floor(a * 4 + 0.5) / 4
+      if a > 0 then
+        local sy = math.floor(st.y * edge / cell) * cell
+        if sy < edge then
+          local c = shades[st.tier] or shades[#shades]
+          g.setColor(c[1] / 255, c[2] / 255, c[3] / 255, a)
+          g.rectangle("fill", math.floor(st.x * w / cell) * cell, sy,
+                      cell, cell)
+        end
       end
     end
   end
@@ -937,7 +1130,10 @@ Sky._paintCloudsCPU = paintCloudsCPU
 -- Returns false when there is nothing to paint, in which case the caller's flat
 -- fill is the whole sky. That fill is the palest band, so a frame that declines
 -- this looks like a hazy day rather than like a bug.
-function Sky.paint(w, h, sky, horizonY, cell, body)
+-- `camX`/`camY` are the camera in world pixels, and they are optional: the
+-- cloud deck uses them for parallax (Sky.CLOUD_PARALLAX), and nil is the old
+-- behaviour of a deck pinned to the screen rather than to the map.
+function Sky.paint(w, h, sky, horizonY, cell, body, camX, camY)
   local bands = sky and sky.bands
   if not (bands and bands[1]) then return false end
   if not (w and h and w > 0 and h > 0) then return false end
@@ -1025,6 +1221,48 @@ function Sky.paint(w, h, sky, horizonY, cell, body)
       }
       sh:send("cloudLit", lit)
       sh:send("cloudShade", shade)
+      -- the deck's own two clocks: one carries it, one changes it
+      sh:send("cloudEvolve", t * Sky.CLOUD_EVOLVE)
+      local px = Sky.CLOUD_PARALLAX
+      -- y at a fraction of x: in this camera the vertical axis is depth, and
+      -- walking INTO the scene should shift the sky less than walking across
+      sh:send("camOff", { (tonumber(camX) or 0) * px,
+                          (tonumber(camY) or 0) * px * 0.6 })
+
+      -- the far curtain, and its colour: the haze band pulled down toward the
+      -- deck's shade rather than a new colour introduced to the frame -- a
+      -- wall of rain is the same air, thicker
+      local curtain = 0
+      local okc, ca = pcall(Weather.curtain)
+      if okc then curtain = tonumber(ca) or 0 end
+      if curtain < 0 then curtain = 0 elseif curtain > 1 then curtain = 1 end
+      sh:send("curtainAmt", curtain)
+      local hz = bands[#bands]
+      sh:send("curtainCol", { hz[1] * 0.45 + 0.16,
+                              hz[2] * 0.45 + 0.17,
+                              hz[3] * 0.45 + 0.21 })
+
+      -- god rays: the post-rain spell, gated on there being a SUN up to throw
+      -- them. A moon does not, and afterRain alone would have lit a fan off
+      -- the moon disc at two in the morning -- which is the exact mistake the
+      -- glow already made once (see DayNight.glow).
+      local rayAmt = 0
+      if body and not body.moon and body.x and body.y then
+        rayAmt = afterRainAmt()
+      end
+      sh:send("rayAmt", rayAmt)
+      if rayAmt > 0 then
+        local rc = body.glowColor or { 248, 232, 176 }
+        sh:send("rayPos", { body.x, body.y })
+        sh:send("rayInvR", 1 / math.max(1, w * 0.85))
+        sh:send("rayColor", { rc[1] / 255, rc[2] / 255, rc[3] / 255 })
+      else
+        -- bind anyway: a stale rayPos from the frame the sun set on would
+        -- hang a fan in the dark
+        sh:send("rayPos", { 0, 0 })
+        sh:send("rayInvR", 0)
+        sh:send("rayColor", { 1, 1, 1 })
+      end
     end)
     if sent then
       g.setShader(sh)

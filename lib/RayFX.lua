@@ -88,6 +88,10 @@
 local V = ...
 
 local ModSetting = V.require("ModSetting")
+-- Held for its numbers and its rung, never the other way round: Anime
+-- requires ModSetting and nothing else, so this and Voxel3D can both hold
+-- it without either reaching back.
+local Anime = V.require("Anime")
 local Mat4 = V.require("Mat4")
 local Water = V.require("Water")
 local Sky = V.require("Sky")
@@ -517,6 +521,78 @@ local SHADER = [[
               + aoTap(uv, P, N, aoDir( 0.30, -0.90, ca, sa));
     return clamp(1.0 - occ * aoPower * 0.125, 0.0, 1.0);
   }
+
+#ifdef RT_ANIME
+  uniform float animeRim;       // how much light the rim adds
+  uniform float animeRimEdge;   // where the silhouette starts, 1 - N.V
+  uniform vec3  animeRimColor;
+  uniform float animeInk;       // how far the line mixes toward the ink
+  uniform vec3  animeInkColor;
+  uniform float animeEdgeBias;  // out-of-plane distance that counts as edge
+
+  // THE LINE. One question asked four times: does the neighbouring pixel
+  // stand OUT OF this pixel's own tangent plane?
+  //
+  // Not "is its depth different", which is the usual spelling and is
+  // unusable here. This camera looks down a tilted world of large flat
+  // faces, so on any ground plane two adjacent pixels are already far apart
+  // in depth AND in world space -- a naive depth or distance threshold
+  // draws the entire floor as one black field, and tightening it until the
+  // floor survives leaves nothing that still finds a real silhouette.
+  //
+  // Distance to the plane is the test that does not care: across any
+  // continuous face, at any grazing angle, the neighbour lies IN the plane
+  // and the dot is ~0; only a genuine step out of the surface registers.
+  // Which is the same insight aoTap is built on -- dot(N, v) is exactly the
+  // quantity that file already uses to decide whether a neighbour is "in
+  // the way" rather than "on the same flat face".
+  //
+  // Four fetches, and they are the only new ones this rung adds anywhere.
+  float animeEdge(vec2 uv, float d, vec3 P, vec3 N) {
+    // The threshold rides camera distance so a silhouette stays about one
+    // screen pixel wide wherever it stands. Fixed in world units, the far
+    // half of a route inks every tile seam and the near half inks nothing.
+    float t = animeEdgeBias * max(length(eye - P), 1.0);
+    float e = 0.0;
+    vec2 su;
+    float sd;
+
+    su = uv + vec2(texel.x, 0.0);
+    sd = depthAt(su);
+    // A neighbour that is SKY is the strongest edge there is -- it is the
+    // outer silhouette, the one a cel frame always draws.
+    e = max(e, sd >= SKY_DEPTH ? 1.0
+                               : step(t, abs(dot(N, worldAt(su, sd) - P))));
+
+    su = uv - vec2(texel.x, 0.0);
+    sd = depthAt(su);
+    e = max(e, sd >= SKY_DEPTH ? 1.0
+                               : step(t, abs(dot(N, worldAt(su, sd) - P))));
+
+    su = uv + vec2(0.0, texel.y);
+    sd = depthAt(su);
+    e = max(e, sd >= SKY_DEPTH ? 1.0
+                               : step(t, abs(dot(N, worldAt(su, sd) - P))));
+
+    su = uv - vec2(0.0, texel.y);
+    sd = depthAt(su);
+    e = max(e, sd >= SKY_DEPTH ? 1.0
+                               : step(t, abs(dot(N, worldAt(su, sd) - P))));
+    return e;
+  }
+
+  // THE RIM. One dot against the normal AO already recovered -- no fetch,
+  // no second pass, nothing this pixel had not already paid for.
+  //
+  // Stepped rather than ramped, because a smooth falloff here is the
+  // airbrush the cel water's note warns about: a rim light in a painted
+  // frame is a shape with an edge, drawn at one brightness, not a gradient
+  // fading into the surface.
+  float animeRimAt(vec3 P, vec3 N) {
+    float f = 1.0 - max(0.0, dot(N, normalize(eye - P)));
+    return step(animeRimEdge, f) * animeRim;
+  }
+#endif
 #endif
 
 #ifdef RT_SSR
@@ -817,6 +893,13 @@ local SHADER = [[
 #ifdef RT_AO
       vec3 N = normalAt(tc, d, P);
       rgb *= ambient(tc, P, N);
+#ifdef RT_ANIME
+      // ADDED, not multiplied, and before the water: a rim is a light drawn
+      // ON the surface at one brightness, so it must not take the material's
+      // colour -- and a rim on the bank beside a pond should still be there
+      // in the pond's reflection of it.
+      rgb += animeRimAt(P, N) * animeRimColor;
+#endif
 #endif
 #ifdef RT_SSR
       // Water, identified geometrically and not by a flag: it is the only
@@ -887,6 +970,17 @@ local SHADER = [[
         rgb = mix(rgb, refl, clamp(f * amt, 0.0, 1.0));
       }
 #endif
+#if defined(RT_ANIME) && defined(RT_AO)
+      // LAST inside the surface block, so the line closes the shape over the
+      // reflection as well: a pond's edge is drawn in a cel frame, and an
+      // ink line that the water paints over is not a line, it is a hint.
+      //
+      // Still INSIDE the block, so it is never asked of a sky pixel -- the
+      // sky has no plane to stand out of, and the silhouette against it is
+      // already found from the solid side by the SKY_DEPTH test in
+      // animeEdge.
+      rgb = mix(rgb, animeInkColor, animeEdge(tc, d, P, N) * animeInk);
+#endif
     }
 #ifdef RT_SHAFTS
     // times the source alpha, so a rung whose void is transparent does not
@@ -931,15 +1025,31 @@ function RayFX.row()
   return RayFX.setting:row()
 end
 
+-- Keyed by the RTX rung AND the anime rung, because the two pick different
+-- source. One key per rung was enough while this pass had one axis; with
+-- two, reusing the rung's entry would hand back whichever variant happened
+-- to be compiled first and the ANIME row would appear to do nothing until a
+-- reload.
+local function shaderKey(level)
+  return level .. (Anime.screen() and "+a" or "")
+end
+
 local function getShader(level)
-  if shaders[level] == nil then
+  local key = shaderKey(level)
+  if shaders[key] == nil then
     local src = "#define RT_AO 1\n"
     if level == "rt" or level == "max" then
       src = src .. "#define RT_SSR 1\n"
     end
     if level == "max" then src = src .. "#define RT_SHAFTS 1\n" end
+    -- The rim and the line are compiled in only here, which is what makes
+    -- "FULL needs RTX" true by construction rather than by a check: this
+    -- function is only ever reached from apply(), and apply() has already
+    -- returned on OFF. There is no rung where the block exists and the
+    -- depth buffer does not.
+    if Anime.screen() then src = src .. "#define RT_ANIME 1\n" end
     local ok, sh = pcall(love.graphics.newShader, src .. SHADER)
-    shaders[level] = (ok and sh) or false
+    shaders[key] = (ok and sh) or false
     -- kept for the same reason Voxel3D keeps its own: a rung that will not
     -- build is meant to fall back quietly, and quietly is also how a typo
     -- in a define-gated branch survives a release. The driver's log is the
@@ -1037,6 +1147,20 @@ function RayFX.apply(o)
   send("aoRadius", radius)
   send("aoRange", RayFX.AO_RANGE)
   send("aoPower", RayFX.AO_POWER)
+
+  -- The anime rung rides on AO's own normal, so it is sent here beside it
+  -- rather than in a block of its own. Guarded on the rung to keep a frame
+  -- on CEL or OFF from paying six sends it has no uniforms for -- the pcall
+  -- inside `send` would absorb them, but absorbing six failures per frame
+  -- is a cost, not a design.
+  if Anime.screen() then
+    send("animeRim", Anime.RIM)
+    send("animeRimEdge", Anime.RIM_EDGE)
+    send("animeRimColor", Anime.RIM_COLOR)
+    send("animeInk", Anime.INK)
+    send("animeInkColor", Anime.INK_COLOR)
+    send("animeEdgeBias", Anime.EDGE_BIAS)
+  end
 
   if level == "rt" or level == "max" then
     send("vp", "row", o.vp)

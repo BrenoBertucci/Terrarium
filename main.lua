@@ -53,6 +53,13 @@ local KEY_CURVE  = "c"   -- V-CURVE horizon
 local KEY_BATTLE = "b"   -- 3D-BTL
 local KEY_WILD   = "n"   -- WILD roam ladder
 local KEY_MAP    = "p"   -- minimap ON/FULL/OFF
+local KEY_HAZE   = "h"   -- V-HAZE aerial perspective
+local KEY_SKYLINE = "k"  -- HORIZON far silhouettes
+-- Free of engine 2-5, of upstream DRAMATIC_SHAPE's 3/5/6/7/8/9, and of every
+-- letter above. Fires one impact sheet at the player's feet and steps to the
+-- next on each press -- the only way to SEE the pack without a fight, and
+-- the way to tell "the row is off" apart from "the sheet did not decode".
+local KEY_FX = "j"
 V.KEYS = {
   voxel = KEY_VOXEL, grid = KEY_GRID, tilt = KEY_TILT,
   curve = KEY_CURVE, battle = KEY_BATTLE, wild = KEY_WILD, map = KEY_MAP,
@@ -97,6 +104,8 @@ local TiltShift = V.require("TiltShift")
 local ChunkMesher = V.require("ChunkMesher")
 local VoxelGrid = V.require("VoxelGrid")
 local WorldCurve = V.require("WorldCurve")
+local Aerial = V.require("Aerial")
+local Skyline = V.require("Skyline")
 local OverworldBattle = V.require("OverworldBattle")
 local WildRoamers = V.require("WildRoamers")
 local BattleExit = V.require("BattleExit")
@@ -107,6 +116,8 @@ local Wind = V.require("Wind")
 local Water = V.require("Water")
 local Light = V.require("Light")
 local RayFX = V.require("RayFX")
+local Anime = V.require("Anime")
+local Vfx = V.require("Vfx")
 local AmbientLife = V.require("AmbientLife")
 local WindFX = V.require("WindFX")
 local Weather = V.require("Weather")
@@ -232,6 +243,9 @@ mod.content.render_pipelines:register(PIPE_VOXEL, {
     -- -- keeps its clocks on the same tick, and gates itself down to the
     -- frames where there is a diorama on screen to be alive on.
     AmbientLife.update(dt, Voxel.active())
+    -- Advanced on real seconds, so a sheet drawn at 30fps lasts the wall
+    -- time it was drawn for whatever the game's frame rate is doing.
+    Vfx.update(dt)
     -- The weather, on the same tick and AHEAD of everything that reads it.
     -- It is not a drawing with a clock, it is a clock several other things
     -- read: this call is what writes DayNight.overcast and Water.wet for the
@@ -341,6 +355,11 @@ mod.content.render_pipelines:register(PIPE_VOXEL, {
       -- the same camera -- but with its height honest, so a bird crossing
       -- at 40 world pixels is projected AT 40 world pixels
       AmbientLife.draw(Voxel3D.project, ctx.scale)
+      -- The impact sheets, immediately after the ambient life and through
+      -- the same projection. Ahead of the wind and the weather for the
+      -- reason everything in this list is ahead of what follows it: a flash
+      -- is a thing standing in the world, and rain falls in front of it.
+      Vfx.draw(Voxel3D.project, ctx.scale)
       -- the air, through the same projection and immediately behind the
       -- ambient life: a blown leaf and a streak of dust are the same wind
       -- carrying two different things, and they have to be composited
@@ -557,6 +576,31 @@ local SETTINGS = {
     .. "reflection travels with the crest carrying it. MAX adds light "
     .. "shafts through the gaps, marched toward the sun's own disc.",
     full = true },
+  -- `full = true` for the reason WATER and LIGHT have it: this is a row
+  -- about the LOOK, and FULL is the preset the look is watched from.
+  { Anime.setting,
+    "Cel animation. CEL crushes the whole of the light -- sky, sun and "
+    .. "every lamp -- into four flat steps, dithered on the pixel grid the "
+    .. "way the water already bands its swell, so a shadow arrives as a "
+    .. "painted shape with an edge instead of a gradient. FULL adds the "
+    .. "other two halves of a drawn frame: a cool rim light along every "
+    .. "silhouette, and an ink line closing every shape, both read off the "
+    .. "surface normal the RTX pass already recovers. Because they are read "
+    .. "off that pass, FULL needs RTX above OFF -- with it off, FULL draws "
+    .. "as CEL. Both rungs reach the overworld and the battle arena "
+    .. "together: they share one scene shader.",
+    full = true },
+  -- `full = true` for the reason ANIME has it: it is a row about the look.
+  { Vfx.setting,
+    "Hand-drawn impact frames -- the half of the anime look a shader cannot "
+    .. "do. Eight CC0 sprite sheets (hits, an explosion, a charge-up, an "
+    .. "electric burst, the cartoon puff of stars) composited into the world "
+    .. "through the same camera the butterflies and the rain use, added as "
+    .. "LIGHT so the black around each flash disappears and the core blows "
+    .. "out. Sheets load on first use, so OFF costs nothing and a session "
+    .. "that never fires one loads nothing. Press J in free roam to fire the "
+    .. "next sheet at your feet.",
+    full = true },
   -- `full = true` for the same reason WIND has it: this is a row that
   -- decides whether the world looks alive, and FULL is the preset most
   -- people watch it from.
@@ -755,6 +799,13 @@ local SETTINGS = {
   { VoxelGrid.setting, "One-pixel wireframe along every voxel edge." },
   { WorldCurve.setting,
     "Bend the world down over the horizon, Animal Crossing style." },
+  { Aerial.setting,
+    "Distance haze: far ground fades into the hour's own sky colour, so "
+    .. "the map edge reads as far away instead of as a wall." },
+  { Skyline.setting,
+    "The rest of Kanto on the horizon: every connected map out to the "
+    .. "chosen distance, drawn as a bare silhouette in the hour's haze. "
+    .. "Scenery only -- nothing out there can be walked on." },
   -- `full` marks a row FULL does not take away. FULL owns the diorama's own
   -- knobs; what a battle is drawn over, and how it is framed, are not that.
   { OverworldBattle.setting,
@@ -881,10 +932,18 @@ local HOTKEYS = {
   [KEY_TILT]   = "pipeline",
   [KEY_GRID]   = VoxelGrid.setting,
   [KEY_CURVE]  = WorldCurve.setting,
+  [KEY_HAZE]   = Aerial.setting,
+  [KEY_SKYLINE] = Skyline.setting,
   [KEY_BATTLE] = OverworldBattle.setting,
   [KEY_WILD]   = WildRoamers.setting,
   [KEY_MAP]    = MiniMap.setting,
+  [KEY_FX]     = "vfxdemo",
 }
+
+-- Which sheet the demo key fires next. Kept here rather than in Vfx because
+-- it is a property of the KEY, not of the effect player -- nothing else in
+-- the mod should care that a human is walking the list one press at a time.
+local vfxDemoIndex = 0
 
 
 do
@@ -933,6 +992,24 @@ do
           self:writeOptions()
           return
         end
+      elseif claim == "vfxdemo" then
+        -- Behind the voxel pass's own free-roam gate like every key below:
+        -- these draw through Voxel3D.project, so firing one with no camera
+        -- would be a press that quietly did nothing.
+        if Pipelines.canToggle(PIPE_VOXEL, top, self.overworld) then
+          local ow = self.overworld
+          local p = ow and ow.player
+          local keys = Vfx.keys()
+          if p and #keys > 0 then
+            vfxDemoIndex = (vfxDemoIndex % #keys) + 1
+            -- Cell centres, in the world pixels the projection takes:
+            -- sixteen to a cell, and half of one to land on the middle of
+            -- the tile the player is standing on rather than its corner.
+            Vfx.play(keys[vfxDemoIndex],
+                     p.cellX * 16 + 8, 0, p.cellY * 16 + 8)
+          end
+        end
+        return
       elseif Pipelines.canToggle(PIPE_VOXEL, top, self.overworld) then
         -- All four answer to the voxel pass's own free-roam gate --
         -- borrowed from the registry rather than restated, so a press
