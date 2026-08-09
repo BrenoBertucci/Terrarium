@@ -330,6 +330,14 @@ people to read, run and learn from â€” but I cannot grant you rights over c
 that is not mine to license. If you plan to build on this, **please talk to
 Dramatic Shape first.** If a licence lands upstream, this fork will adopt it.
 
+## Roadmap & issues
+
+- Backlog: [`ROADMAP.md`](ROADMAP.md)
+- Open issues: https://github.com/BrenoBertucci/Terrarium/issues
+- Drafts ready to file (UI + roamers + ambient):
+  [`.github/issues-draft/`](.github/issues-draft/) —
+  `powershell -File .github/issues-draft/create.ps1` after `gh auth login`
+
 ## Credits
 
 - **[Dramatic Shape](https://github.com/DramaticShape/DramaticShapeVoxelMod)**
@@ -354,7 +362,19 @@ Dramatic Shape first.** If a licence lands upstream, this fork will adopt it.
   the *measurements* — glyph grids, HP trough boxes, button bounds — because
   the pack's files are named by content hash and none of that was written
   down anywhere.
-- **Ambient audio** â€” CC0, every recordist named in
-  [`assets/audio/CREDITS.md`](assets/audio/CREDITS.md).
+- **Ambient audio** — CC0 recordings by Wolfgang_, isaiah658, Ylmir,
+  rubberduck, Luke.RUSTLTD, TinyWorlds, JaggedStone, RandomMind, craigsmith
+  and Littleboot, from OpenGameArt and Freesound. Per-file sources, authors
+  and licences are in
+  [`assets/audio/CREDITS.md`](assets/audio/CREDITS.md). Everything is CC0 1.0;
+  nothing here is CC-BY or CC-BY-SA, deliberately.
+- **Overworld wild / town Pokémon sprites** — optional Gen 2-style walker
+  sheets under `assets/roamers/`. **Not redistributed here** (same rule as
+  the X/Y GUI pack). Install with
+  [`tools/install_roamer_sprites.py`](tools/install_roamer_sprites.py)
+  from [PokéPC Followers](https://github.com/gamecorner-033/PokePCFollowers)
+  (ShockSlayer / Crystal Clear lineage). See
+  [`assets/roamers/CREDITS.md`](assets/roamers/CREDITS.md). Without them the
+  mod bakes greyscale sheets from each battle front pic.
 - **Nintendo, Creatures Inc. and GAME FREAK Inc.** â€” for the game. It is
   theirs. This is only a coat of paint on a program that loads it.

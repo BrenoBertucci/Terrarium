@@ -125,27 +125,31 @@ between replacing the encounter and deleting it.
 
 Gen 1 draws no Pokémon on the map. Eleven species have an overworld sheet
 because a script stands one somewhere; the other hundred and forty have
-exactly one drawing each, and it is the battle front pic. So that is what a
-roamer wears — resampled down to the 16×16 cell every other character
-occupies, folded onto the three shades a Game Boy sprite can actually show,
-and baked once into the engine's own derived-asset folder
-(`save/mod-derived/TERRARIUM/roamers/`) the first time that species
-turns up. A species' own pic size decides how big it stands, so a Caterpie
-is smaller than a Snorlax on the map for the same reason it is in a battle.
+exactly one drawing each, and it is the battle front pic. Resampling that
+portrait into a 16×16 cell is how Sandshrew used to look like Charmander —
+battle art is not walk-cycle art.
+
+**Optional Gen 2-style walk sheets** make each species legible at map scale.
+They do **not** ship with the mod (same licence rule as the X/Y GUI pack).
+Install them with:
+
+```text
+python tools/install_roamer_sprites.py
+```
+
+That fetches [PokéPC Followers](https://github.com/gamecorner-033/PokePCFollowers)
+(ShockSlayer / Crystal Clear lineage) and drops 16×96 sheets into
+`assets/roamers/<SPECIES>.png`. Details:
+[`assets/roamers/CREDITS.md`](assets/roamers/CREDITS.md). Installed sheets
+are `trueColor` so the palette pipeline leaves their colours alone.
+
+Without them, a greyscale front-pic bake still runs into
+`save/mod-derived/TERRARIUM/roamers/` — the feature stays, the art is worse.
 
 Because the sheet is a real file at a real path, it is a sprite the
-**engine** understands: the palette bake recolours it, the SGB zone shader
-colours it out of the map's own palette, tall grass overdraws its feet, the
-diorama cuts its card from it and the sun throws its silhouette. Under the
-RED++ colour pack — which assigns object palettes by a sprite's own ROM
-table index, an index no baked sheet can honestly claim — the species
-answers instead: every Pokémon has a mon palette of its own in that pack
-(it is what colours its battle pic), and a roamer in the grass wears it. A
-Pikachu is YELLOWMON on the map for exactly the reason it is in a battle.
-
-Drop a 16×96 sheet at `assets/roamers/<SPECIES>.png` inside the mod and it
-is used as-is, nothing is generated, and a pixel artist can replace one
-species or all of them without touching a line of code.
+**engine** understands: tall grass overdraws its feet, the diorama cuts its
+card from it and the sun throws its silhouette. Drop a replacement 16×96
+sheet at `assets/roamers/<SPECIES>.png` and it is used as-is.
 
 ## Pokemon in the streets — the TOWN row
 

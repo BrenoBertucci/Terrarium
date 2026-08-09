@@ -17,7 +17,7 @@
 -- because a field at dusk is a hundred overlapping sources and the hardware
 -- has four.
 --
--- So the beds are real recordings now, in `assets/audio/`, all five CC0 --
+-- So the beds are real recordings now, in `assets/audio/`, all CC0 --
 -- see that folder's CREDITS.md for who recorded each and for why nothing here
 -- is CC-BY or CC-BY-SA.
 --
@@ -35,21 +35,22 @@
 -- The other half of what was wrong, and the deeper half. Crickets were
 -- scheduled as discrete chirps on a countdown -- which is what the synth
 -- could manage -- but a real cricket field is one continuous thing whose
--- LEVEL moves. So four of the five LOOP, and what the world does is crossfade
--- them: nightfall brings the crickets up rather than switching them on,
--- walking away from a river takes the river down, a shower brings the rain up
--- over ten seconds beside the sky going grey. Only thunder is a one-shot,
--- because a thunderclap is one.
+-- LEVEL moves. So the beds LOOP, and what the world does is crossfade them:
+-- nightfall brings the crickets up rather than switching them on, walking
+-- away from a river takes the river down, a shower brings the rain up over
+-- ten seconds beside the sky going grey. Only thunder is a one-shot, because
+-- a thunderclap is one.
 --
 -- ------- what decides each level
 --
 -- The same clocks the rest of the mod runs on. DayNight says what hour it is
 -- (crickets at night, the dawn chorus in the morning), Weather says what is
--- coming down, and the map itself says whether there is water within earshot
+-- coming down, Wind how hard the air is moving, WaterBody how big the water
+-- nearby is, and the map itself says whether there is water within earshot
 -- -- counted by LOOKING, in cells, rather than by a list of maps with ponds
--- on them. Indoors everything stops but one: RAIN KEEPS PLAYING INDOORS,
--- quieter and pitched down, because standing in a house listening to it come
--- down outside is the best thing weather does.
+-- on them. Indoors the outdoor beds stop but two stay: RAIN KEEPS PLAYING
+-- INDOORS, quieter and pitched down, and a soft room-tone so a house is not
+-- a hard silence; caves and underpasses get their own bed instead.
 --
 -- Deliberately NOT gated on voxel mode. Every other ambient thing in this mod
 -- is a drawing and needs a diorama to be drawn on; a sound needs no camera,
@@ -61,6 +62,9 @@ local V = ...
 local ModSetting = V.require("ModSetting")
 local DayNight = V.require("DayNight")
 local Weather = V.require("Weather")
+local Wind = V.require("Wind")
+local WaterBody = V.require("WaterBody")
+local Underpass = V.require("Underpass")
 
 local Map = require("src.world.Map")
 
@@ -274,24 +278,48 @@ end
 --
 -- The other half of what was wrong. Crickets were scheduled as discrete
 -- chirps on a countdown, which is what the synth could manage; a recording of
--- crickets is a continuous field whose LEVEL moves. So four of the five loop
--- and are crossfaded by how much of them the world wants right now -- night
--- brings the crickets up, walking away from the water takes the water down,
--- a shower brings the rain up over ten seconds. Only thunder is a one-shot,
--- because a thunderclap is one.
+-- crickets is a continuous field whose LEVEL moves. So the beds loop and are
+-- crossfaded by how much of them the world wants right now -- night brings
+-- the crickets up, walking away from the water takes the water down, a shower
+-- brings the rain up over ten seconds. Only thunder is a one-shot, because a
+-- thunderclap is one.
 local AUDIO = "assets/audio/"
 
 -- key -> { file, fallback program id, gain }
 --
--- `gain` is per bed and they are NOT equal: these are five different
--- recordings at five different levels, and the mix is the point. Crickets and
--- rain carry a scene, birdsong sits behind one, water is a detail you notice
--- when you are near it.
+-- `gain` is per bed and they are NOT equal: these are different recordings
+-- at different levels, and the mix is the point. Crickets and rain carry a
+-- scene, birdsong sits behind one, water is a detail you notice when you are
+-- near it. Town walla and room tone sit under everything else so a street of
+-- civilians is not a cafeteria and a house is not a studio booth.
+--
+-- Beds with `chip = nil` have no Game Boy program behind them. If the file
+-- is missing or will not decode they simply stay silent -- degrade quiet,
+-- which is the house default for anything added after the original five.
 AmbientSound.BEDS = {
   crickets = { file = "crickets.mp3", chip = "TR_AMB_CRICKET", gain = 0.85 },
   birds    = { file = "birds.ogg",    chip = "TR_AMB_BIRD",    gain = 0.55 },
   water    = { file = "water.ogg",    chip = "TR_AMB_LAP",     gain = 0.70 },
   rain     = { file = "rain.ogg",     chip = "TR_AMB_RAIN",    gain = 1.00 },
+  -- village / market murmur. Driven by outdoor town maps (no grass table);
+  -- falls at night; gone indoors. chip=nil: silent if the file is missing.
+  town     = { file = "town.ogg",     chip = nil,              gain = 0.42 },
+  -- wind in grass and leaves. Driven by Wind.amount. Outdoor only.
+  -- chip=nil: silent if the file is missing.
+  wind     = { file = "wind.ogg",     chip = nil,              gain = 0.50 },
+  -- dense canopy: insects and muffled birds. Viridian Forest and friends;
+  -- replaces / muffles the open-field birds bed there. chip=nil.
+  forest   = { file = "forest.ogg",   chip = nil,              gain = 0.62 },
+  -- ocean / large-body surf. Driven by WaterBody.sizeAt when water is near;
+  -- crosses with the lake-lapping `water` bed so Route 21 is not a pond.
+  -- chip=nil.
+  waves    = { file = "waves.ogg",    chip = nil,              gain = 0.68 },
+  -- drips, reverb, distant air. Caves, underpasses, indoor wild floors.
+  -- chip=nil.
+  cave     = { file = "cave.ogg",     chip = nil,              gain = 0.55 },
+  -- room tone. Indoors that are not dungeons; quiet so rain still wins.
+  -- chip=nil.
+  indoor   = { file = "indoor.ogg",   chip = nil,              gain = 0.28 },
 }
 
 AmbientSound.THUNDER = { file = "thunder.ogg", chip = "TR_AMB_THUNDER",
@@ -399,6 +427,7 @@ end
 
 -- the synth, for when the recording is not there
 local function fromChip(name)
+  if not name then return nil, "no program" end
   local Game = game()
   local d = def(name)
   if not (Game and Game.data and d) then return nil, "no program" end
@@ -417,11 +446,19 @@ local function sourceFor(key, spec)
   end
   local src, err = fromFile(spec)
   if not src then
-    -- the recording is not usable: say so ONCE, then fall back to the synth,
-    -- so the ambience is worse rather than absent
+    -- the recording is not usable: say so ONCE, then fall back to the synth
+    -- when there is one. Beds with chip = nil degrade quiet -- no blip, no
+    -- spam: the ambient just is not there for that layer.
     if V.mod and V.mod.log then
-      V.mod.log:warn("ambient sound: %s unusable (%s) -- falling back to the "
-                     .. "synthesized program", spec.file, tostring(err))
+      if spec.chip then
+        V.mod.log:warn("ambient sound: %s unusable (%s) -- falling back to "
+                       .. "the synthesized program",
+                       spec.file, tostring(err))
+      else
+        V.mod.log:warn("ambient sound: %s unusable (%s) -- no chip fallback, "
+                       .. "this bed is silent",
+                       spec.file, tostring(err))
+      end
     end
     src = fromChip(spec.chip)
   end
@@ -530,7 +567,7 @@ end
 local WATER_REACH = 7             -- cells
 local WATER_EVERY = 0.6           -- seconds between counts
 
-local water = { at = 0, near = 0 }
+local water = { at = 0, near = 0, size = 0 }
 
 local function countWater(ow)
   local map, p = ow.map, ow.player
@@ -548,14 +585,46 @@ local function countWater(ow)
   return best
 end
 
+-- ------- place, without a list of maps
+--
+-- A town is outdoors with no grass encounter table -- the same test CityLife
+-- uses, restated here so this module does not have to require that one and
+-- inherit its spawner. A dungeon is indoors with a wild table (caves, the
+-- Mansion) or an underpass tileset. Everything else indoors is a room.
+local function isTownMap(ow)
+  local map = ow.map
+  if not Map.isOutdoor(map.def) then return false end
+  local Game = game()
+  local encDef = Game.data.encounters and Game.data.encounters[map.id]
+  if encDef and encDef.grass and (encDef.grass.rate or 0) > 0 then
+    return false
+  end
+  return true
+end
+
+local function isDungeonMap(ow)
+  local map = ow.map
+  if Map.isOutdoor(map.def) then return false end
+  if DayNight.isCanopy(map) then return false end
+  local okU, under = pcall(Underpass.matches, map)
+  if okU and under then return true end
+  local Game = game()
+  local encDef = Game.data.encounters and Game.data.encounters[map.id]
+  if encDef and encDef.grass and (encDef.grass.rate or 0) > 0 then
+    return true
+  end
+  return false
+end
+
 -- ------- what the world wants to hear
 --
 -- Every bed is a number between nothing and all of it, worked out fresh each
 -- frame from the same clocks the rest of the mod runs on: DayNight says what
--- hour it is, Weather says what is coming down, and the map itself says
--- whether there is water within earshot. Nothing here SCHEDULES anything --
--- the crossfades in driveBed are the whole of the behaviour, which is why
--- nightfall does not switch the crickets on, it brings them up.
+-- hour it is, Weather what is coming down, Wind how hard the air is moving,
+-- WaterBody how big the water nearby is, and the map itself whether there is
+-- water within earshot. Nothing here SCHEDULES anything -- the crossfades in
+-- driveBed are the whole of the behaviour, which is why nightfall does not
+-- switch the crickets on, it brings them up.
 local failed = false
 
 local function tick(dt)
@@ -585,12 +654,22 @@ local function tick(dt)
   local raining = kind == "rain"
   local snowing = kind == "snow"
 
+  local town = false
+  local dungeon = false
+  do
+    local okt, t = pcall(isTownMap, ow)
+    town = okt and t or false
+    local okd, d = pcall(isDungeonMap, ow)
+    dungeon = okd and d or false
+  end
+  local room = (not outdoor) and (not canopy) and (not dungeon)
+
   -- ------- rain
   --
-  -- The one bed that plays INDOORS, at a third and pitched down: that is a
-  -- roof over your head, and it is the best thing weather does. Snow gets the
-  -- same bed far quieter and an octave down, which is not snow falling (snow
-  -- falling is silent) but the wind that is bringing it.
+  -- Still plays INDOORS, at a third and pitched down: that is a roof over
+  -- your head, and it is the best thing weather does. Snow gets the same bed
+  -- far quieter and an octave down, which is not snow falling (snow falling
+  -- is silent) but the wind that is bringing it.
   local rainWant, rainPitch = 0, 1
   if raining then
     rainWant = power * (outdoor and 1 or 0.34)
@@ -617,6 +696,8 @@ local function tick(dt)
   -- Both fade WITH the hour rather than switching on it, so dusk is one bed
   -- coming up as the other goes down instead of a handover. And both stop in
   -- the rain, which anyone who has been outside knows without being told.
+  -- Under a canopy the open-field birds bed is muffled -- the forest bed
+  -- carries that place instead.
   local wet = (raining and power > 0.3) and power or 0
   local dry = 1 - math.min(1, wet)
 
@@ -629,29 +710,120 @@ local function tick(dt)
   driveBed("crickets", cricketWant * dry, dt)
 
   local birdWant = 0
-  if open then
+  if open and not canopy then
     -- the dawn chorus is a real thing and worth having: a morning wood is
     -- louder than a noon one
     if morning then birdWant = 1
     elseif day then birdWant = 0.62
     elseif evening then birdWant = 0.22 end
+  elseif canopy then
+    -- a little leaks through the leaves; the forest bed does the rest
+    if morning then birdWant = 0.18
+    elseif day then birdWant = 0.10 end
   end
   driveBed("birds", birdWant * dry, dt)
 
-  -- ------- the water
+  -- ------- forest canopy
   --
-  -- Outdoors only, and only where there IS water: a cave's underground lake
-  -- would want its own drip rather than a shoreline, and a shoreline heard in
-  -- a room is a bug. The level follows how close the nearest water cell is,
-  -- so walking up to a pond brings it in and walking away takes it out --
-  -- which is the whole reason this is a bed and not a splash on a timer.
+  -- Viridian Forest is not a field with trees painted on it. The canopy map
+  -- already shuts the sky and the rain; this bed is the muffled insects and
+  -- birds that belong under that roof of leaves. Same hour curve as birds,
+  -- same wet mute.
+  local forestWant = 0
+  if canopy then
+    if morning then forestWant = 1
+    elseif day then forestWant = 0.78
+    elseif evening then forestWant = 0.40
+    elseif night then forestWant = 0.22 end
+  end
+  driveBed("forest", forestWant * dry, dt)
+
+  -- ------- town walla
+  --
+  -- CityLife already puts civilians and chatting pairs on the streets in
+  -- total silence. This is the bed under them: unintelligible murmur, not
+  -- speech (speech carries voice rights CC0 does not clear). Day is busiest,
+  -- night almost empty, rain sends people in.
+  local townWant = 0
+  if town then
+    if morning then townWant = 0.70
+    elseif day then townWant = 1
+    elseif evening then townWant = 0.55
+    elseif night then townWant = 0.12 end
+  end
+  driveBed("town", townWant * dry, dt)
+
+  -- ------- wind
+  --
+  -- Wind already bends the grass; this is the sound of that. Amount is the
+  -- continuous level the rest of the mod reads (0..~4 in auto), scaled so a
+  -- moderate breeze is a full bed and OFF is silence. Outdoor only -- a room
+  -- has no air moving past the microphone.
+  local windWant = 0
+  if outdoor then
+    local okA, amt = pcall(Wind.amount)
+    amt = (okA and tonumber(amt)) or 0
+    -- 3.2 is a "steady outdoor breeze" on the amount scale used by the grass
+    windWant = math.max(0, math.min(1, amt / 3.2))
+    if snowing then
+      -- snow already reuses the rain bed low; let the wind speak more then
+      windWant = math.min(1, windWant * 1.15 + 0.08 * power)
+    end
+  end
+  driveBed("wind", windWant, dt)
+
+  -- ------- water and waves
+  --
+  -- Outdoors only. Closeness still comes from looking at cells; SIZE comes
+  -- from WaterBody, which already measured fetch and area for the swell.
+  -- A pond (size low) is almost pure lapping. Open sea (size high) trades
+  -- lapping for surf so Route 21 is not Cerulean's fountain.
   water.at = water.at - dt
   if water.at <= 0 then
     water.at = WATER_EVERY
     local okw, near = pcall(countWater, ow)
     water.near = okw and near or 0
+    local size = 0
+    if outdoor and water.near > 0 and WaterBody.on and WaterBody.on() then
+      local p = ow.player
+      local wx = (p.cellX or 0) * 16 + 8
+      local wz = (p.cellY or 0) * 16 + 8
+      local oks, s = pcall(WaterBody.sizeAt, wx, wz)
+      size = (oks and tonumber(s)) or 0
+    end
+    water.size = size
   end
-  driveBed("water", outdoor and water.near or 0, dt)
+  local near = outdoor and water.near or 0
+  local body = water.size or 0
+  -- size 0..1 from WaterBody; start handing to waves above a small pond
+  local waveShare = 0
+  if body > 0.35 then
+    waveShare = math.min(1, (body - 0.35) / 0.45)
+  end
+  driveBed("water", near * (1 - 0.85 * waveShare), dt)
+  driveBed("waves", near * waveShare, dt)
+
+  -- ------- cave / underpass
+  --
+  -- Dungeons and the underground passages. No hour curve -- a cave does not
+  -- know what time it is -- and rain does not reach it. Underpass tilesets
+  -- count even without a wild table, because the corridor is the place.
+  local caveWant = dungeon and 1 or 0
+  driveBed("cave", caveWant, dt)
+
+  -- ------- indoor room tone
+  --
+  -- A house with nothing is broken silence under the map music. A soft room
+  -- tone fills it. When rain is loud indoors the tone steps down so the roof
+  -- still wins; dungeons use the cave bed instead.
+  local indoorWant = 0
+  if room then
+    indoorWant = 1
+    if raining then
+      indoorWant = math.max(0.25, 1 - power * 0.7)
+    end
+  end
+  driveBed("indoor", indoorWant, dt)
 end
 
 -- Rides the voxel pipeline's update hook with everything else that has a

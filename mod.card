@@ -7,15 +7,9 @@ return {
   -- who maintains THIS tree; `upstream` names whose mod it is a fork of, and
   -- the two are not the same person.
   --
-  -- TODO(breno): `contact` still points at the ORIGINAL repository, because
-  -- this fork has not been published yet. Replace it with your own URL the
-  -- moment you create the GitHub repo -- leaving it as-is sends anyone who
-  -- clicks it in the mod manager to somebody else's project to report your
-  -- bugs. (The old value here, .../DRAMATIC_SHAPE, was a dead link: the real
-  -- upstream repository is .../DramaticShapeVoxelMod.)
   author = "breno -- a fork of DramaticShape's Dramatic Shape Voxel Mod",
   upstream = "https://github.com/DramaticShape/DramaticShapeVoxelMod",
-  contact = "https://github.com/BrenoBertucci/Terrarium",
+  contact = "https://github.com/BrenoBertucci/Terrarium/issues",
   tags = { "graphics", "3d", "voxel", "render-pipeline", "presentation",
            "battle", "lighting", "post-processing", "encounters",
            "gameplay" },
@@ -52,7 +46,8 @@ return {
       "wind you can see off the grass: flat comet-tail streaks of what the air is carrying -- dust on a clear day, the rain's own pale blue as spray, blown white under a fall -- plus a gust FRONT thrown abreast off the same squall envelope the grass is bending to, so a rank crosses the frame as a line while the meadow bows under it. Outdoors only, above a wind floor, and nothing at all under WIND OFF",
       "WILD options row and hotkey n (ROAM / MIX / OFF, ROAM by default): wild Pokemon standing in the grass as ordinary map objects, picked out of the map's own encounter table, wandering their own terrain -- grass on a route, the whole floor of a cave, the water while surfing -- and battled by walking into one or pressing A at it",
       "W-COUNT options row (SOME / FEW / MANY, SOME by default), how many stand within reach at once; only offered while WILD is on",
-      "one 16x16 overworld sheet per species, baked from the battle front pic into save/mod-derived/TERRARIUM/roamers/ the first time that species turns up, and overridable by shipping assets/roamers/<SPECIES>.png",
+      "one 16x96 overworld walker sheet per species: prefers optional assets/roamers/<SPECIES>.png (Gen-2-style, trueColor; install via tools/install_roamer_sprites.py -- not redistributed), else bakes a greyscale sheet from the battle front pic into save/mod-derived/TERRARIUM/roamers/",
+      "ambient sound beds under the map music (crickets, birds, water, rain, thunder, plus town / wind / forest / waves / cave / indoor when the CC0 files are present) driven by hour, weather, wind, water size and map kind -- see assets/audio/CREDITS.md",
       "ECOLOGY options row (ON / TIME / OFF, ON by default): Gen 2's time-of-day encounters built out of Gen 1's one table -- the ten-slot buckets are weighted by what the hour and the sky think of each species before the draw, so the nocturnal half of the dex comes up after dark and the birds and caterpillars by day. Never to zero, never off the table, and never indoors",
       "at ECOLOGY ON, rain also brings water Pokemon ashore: a land spawn within three cells of real water may be drawn from the map's own water roster (encounters[map].water, else field.superRod[map]) at the map's OWN grass level band",
       "GROUND options row (ON / OFF, ON by default): puddles that gather through a shower and drain over four minutes, snow settling in two ranks of drift and melting over seven, and footprints behind every walker in the snow. Drawn as depth-tested decals between the terrain and the characters, so they take the hour's light and never paint over anybody's feet. Only offered while WEATHER is on",
@@ -86,7 +81,8 @@ return {
       "terrain is chunked and culled against the camera, so a route submits only the cells it can still see ground on and a connected map you are not facing costs nothing. The battle arena is drawn whole -- its camera is placed rather than orbited, and the free-roam culling box does not describe it",
       "the POKEMON TOWER keeps the blind roll until the Silph Scope is in hand: a ghost battle is a wild battle the game refuses to NAME, and a visible Gastly would answer the question that floor exists to ask",
       "a map with no encounter table, no room to stand anything on, or art that would not bake keeps its dice too -- the suppression is answered per terrain and only ever for ground something has actually been stood on",
-      "under the RED++ colour pack a roamer stays in DMG shades: that mode assigns object palettes by a sprite's own ROM table index, and a sheet the ROM never had has none to claim. Every other palette mode colours it like any NPC",
+      "without optional Gen-2 walk sheets, roamers fall back to a greyscale front-pic bake; with assets/roamers/<SPECIES>.png installed they are trueColor and keep their own colours under RED++ and zone palettes",
+      "optional third-party art (X/Y GUI pack, roamer walk sheets) is never in the zip -- install scripts live under tools/; missing art degrades, it does not remove the feature",
       "each visible Pokemon is one more sprite card in the frame, and one more shadow caster; W-COUNT at FEW is the setting for a slow device",
       "the GROUND row's decals are geometry in the 3D pass, so they need the VOXEL camera on -- the flat 2D path has no depth buffer to test them against and no pass to sit between. The accumulation itself keeps running either way",
       "ECOLOGY moves the odds inside a map's own table and never the table itself, so a species is never removed by an hour and never added by one -- the single exception is the rain's come-ashore roll, which is drawn from the same map's own water roster and clamped to that map's own grass levels",

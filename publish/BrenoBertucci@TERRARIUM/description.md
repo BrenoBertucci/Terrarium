@@ -37,6 +37,61 @@ Upstream Dramatic Shape still uses `3` / `5` / `6` / `7` / `8` / `9`.
 - Wild Pokemon visible in the grass; ecology / shelter / city life systems
 - Tuned defaults for lower-end / mobile hardware
 
+## Coming next (unreleased work)
+
+Already in the source tree; will ride the next package when it ships.
+
+### Ambient sound beds
+
+More place-sound under the map music (still CC0 only): town murmur, wind,
+forest canopy, sea vs pond, cave, indoor room tone — driven by the same
+clocks the diorama already has (hour, weather, wind, water size, indoor /
+canopy / dungeon). Credits per file in `assets/audio/CREDITS.md`.
+
+### Readable wild Pokémon (optional art)
+
+WILD roamers can wear **Gen 2-style walk sheets** (16×96) instead of a
+shrunk battle portrait. **Those sheets are not in the zip** — same rule as
+the X/Y GUI pack: crediting an artist is not a licence, and the art is still
+Nintendo / Game Freak's wherever it travels.
+
+```text
+python tools/install_roamer_sprites.py
+```
+
+That pulls [PokéPC Followers](https://github.com/gamecorner-033/PokePCFollowers)
+(ShockSlayer / Crystal Clear lineage) into `assets/roamers/`. Without it the
+mod still draws wild mons from a greyscale front-pic bake (improved, but not
+as clear as real walk cycles). Details: `assets/roamers/CREDITS.md`.
+
+### Open issues / roadmap
+
+Tracked on GitHub:
+https://github.com/BrenoBertucci/Terrarium/issues
+
+Drafts ready to file (UI leftovers + roamer/ambient follow-ups):
+`.github/issues-draft/` — run `powershell -File .github/issues-draft/create.ps1`
+after `gh auth login`.
+
+## New in 1.20.0-mobile
+
+The water.
+
+- **Small water finally moves like small water.** A pond used to carry the
+  open sea's swell at a tenth of the height and at half the speed, which reads
+  as an ocean filmed in slow motion. It now carries a short chop of its own,
+  travelling at the speed a wave that length actually travels.
+- **Shorelines stopped fraying.** Along every bank far from the middle of the
+  world the wave was quietly coming apart into noise -- for a while now, and
+  invisibly to every test the mod had. It is a wave everywhere again.
+- **The sun glints off the water.** It always meant to. The window a crest had
+  to reach to catch the light was fixed, while how far a crest can tilt depends
+  on how big the swell is, so outside of dawn and dusk nothing ever reached it.
+  Now the window follows the water, and a still pond sparkles as well as a sea.
+
+The open sea is deliberately untouched: same waves, same directions, same
+lengths as the previous build.
+
 ## New in 1.19.0-mobile
 
 The sky, and how far away everything is.
@@ -97,8 +152,18 @@ The tall grass is geometry out here, and that release made it behave like it.
   shower, blown white under a fall -- plus a gust front that crosses the frame
   as a line while the meadow bows under it.
 
-## Source
+## Optional setup (not in the zip)
 
-https://github.com/BrenoBertucci/Terrarium
+| what | why missing | install |
+| --- | --- | --- |
+| X/Y HUD / menu / battle box art | third-party pack; no redistributable licence | `python tools/extract_xy_assets.py <pack folder>` |
+| Gen-2-style wild / town walk sprites | fan overworld art; same licence rule | `python tools/install_roamer_sprites.py` |
 
-Upstream: https://github.com/DramaticShape/DramaticShapeVoxelMod
+Without them the mod still runs: HUD falls back to Game Boy panels, roamers
+fall back to a greyscale bake.
+
+## Source & issues
+
+- Source: https://github.com/BrenoBertucci/Terrarium
+- Issues / roadmap: https://github.com/BrenoBertucci/Terrarium/issues
+- Upstream: https://github.com/DramaticShape/DramaticShapeVoxelMod

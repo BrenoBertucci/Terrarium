@@ -19,9 +19,122 @@ MAJOR.MINOR.PATCH[-CHANNEL]
 
 Tags and packages:
 
-- Git tag: `v1.19.0-mobile`
-- Zip asset: `TERRARIUM-1.19.0-mobile.zip`
-- `manifest.json` / catalog `version` field: `1.19.0-mobile`
+- Git tag: `v1.20.0-mobile`
+- Zip asset: `TERRARIUM-1.20.0-mobile.zip`
+- `manifest.json` / catalog `version` field: `1.20.0-mobile`
+
+## Unreleased
+
+### Roamer overworld art
+
+- **Gen-2-style walk sheets are optional and not redistributed.** Same policy
+  as the X/Y GUI pack: crediting ShockSlayer / Crystal Clear / PokePC
+  Followers is not holding a licence from them. Install with
+  `python tools/install_roamer_sprites.py` into `assets/roamers/` (see
+  `assets/roamers/CREDITS.md`). Without them the greyscale front-pic bake
+  still runs.
+- **Fallback bake is less of a silhouette soup.** Outline bias (30% dark →
+  whole cell black) only applies on blocks that touch background; interior
+  takes a majority. Cell-size floor raised from 8 to 12. Tall content boxes
+  crop to the upper ~62% so faces keep pixels (serpentine proportions skip
+  the crop). `RoamerArt.REV` → `"3"`.
+
+### Docs / catalog / backlog
+
+- Mod page blurb (`publish/.../description.md`): optional setup, coming-next
+  ambient + roamers, links to GitHub issues.
+- `mod.card`: roamer path describes installer + trueColor; ambient beds
+  noted; contact points at the issues URL.
+- `ROADMAP.md` + issue drafts `04`–`10` under `.github/issues-draft/` (file
+  with `create.ps1` after `gh auth login`).
+
+## 1.20.0-mobile
+
+The water, and a wave that was not a wave.
+
+### Fixed
+
+- **The swell came apart along every shoreline far from the world origin, and
+  had done since the size field shipped.** The height field scaled the wave
+  VECTOR by how big the body of water was -- `a = (k . x) * bf(x) - phase` --
+  and the gradient of that argument carries a second term, `(k . x) * grad bf`:
+  the product of WORLD POSITION, which runs to thousands of pixels across a
+  route, with the shoreline ramp, which is nonzero at every bank in the game.
+  Measured at the bank of a test lake, the local wavenumber was 1.14x the one
+  the wave was supposed to have at the world origin, **7.80x a thousand pixels
+  out and 28.03x at four thousand**. Past about a thousand pixels the
+  perturbation was larger than the wave it perturbed: not a shorter wave, but
+  noise with a period, drawn along the last two cells of every bank.
+
+  Nothing caught it because watertightness cannot: `Y = f(XZ)` stays perfectly
+  continuous while the pattern underneath it comes apart, and continuity is
+  what the existing test asserts.
+
+  The fix is that no wave vector is a function of position any more. See the
+  spectrum below.
+
+- **The specular glint had never once been visible at the default rung.**
+  `GLINT_LO/HI` were absolute deviations from the flat plane's alignment with
+  the sun, but the deviation a swell can produce scales with its amplitude.
+  At CALM the largest deviation anywhere on the water was 0.0269 against a
+  floor of 0.020, so `s` reached 0.029 of 1.0 and every fragment of every lake
+  quantised to ring 0. The rings were not rare, they were unreachable, and the
+  effect existed only at dawn and dusk where a low sun stretches the sun's
+  ground track far enough to limp into the first ring.
+
+  They are now FRACTIONS of the slope this particular water can reach, sized
+  per fragment against the spectrum and the amplitude there. Measured after:
+  5.4% of an open lake lit, and 7.0% of a pond -- the pond because the short
+  train it carries is three times the wavenumber, which buys back most of what
+  its smaller amplitude costs.
+
+### Changed
+
+- **THE SPECTRUM.** Three wave trains of FIXED length -- long, mid and short --
+  and what the size of a body of water moves is how LOUD each one is, never how
+  long any of them is. A weight multiplies a sine and contributes only
+  `h * grad w` to the gradient, which the ramp itself bounds; a vector scale
+  contributed a term bounded by nothing at all. Measured: the local wavenumber
+  is now exactly 1.000x the wave's own in every combination of clock and world
+  offset tested.
+
+  Open water is unchanged. At size 1 the weights are 0.55 long / 0.45 mid / 0
+  short, which is the pair the previous build drew, in the same directions at
+  the same lengths. The end of the ramp that changed is the end nobody could
+  see: a puddle now carries a genuinely short chop instead of an ocean's swell
+  played back slowly.
+
+  The floors are deliberately asymmetric. The smallest puddle keeps a tenth of
+  the long swell -- a second crossing direction, without which a single
+  surviving train is corduroy rather than water. The open sea keeps NONE of
+  the short chop: at that wavenumber it is a fraction of a display pixel per
+  cycle at this camera, which under a nearest upscale is not detail, it is the
+  frame-to-frame churn the shimmer probe exists to hunt.
+
+### Added
+
+- **Dispersion.** Each train now clocks at its own tempo, `omega ~ sqrt(k)`, so
+  a short wave oscillates faster while its crest travels slower -- which is the
+  whole of why a pond does not look like an ocean filmed in slow motion. The
+  crest-speed ratio between the short and long trains is 0.559 against an ideal
+  of 0.559; the single clock it replaced gave 0.313, because one omega for
+  every length makes speed fall as `1/k` instead of `1/sqrt(k)`.
+
+  This is only expressible because the vectors are constants. The first attempt
+  scaled the phase by `sqrt(bf(x))` with `bf` still a field, which put
+  `phase * grad sqrt(bf)` into the gradient -- the same disease as the term
+  above with the CLOCK in place of the world position, and worse, because the
+  clock does not stop growing: 1.01x the wave's own wavenumber at twelve
+  seconds and **42.9x at one hour of play**. `Water.DISPERSE` survives as the
+  ablation knob; the tempo ratios are taken from the REST vectors and never
+  from the live ones, so a change of weather cannot make `time * rate` jump.
+
+- `tests/water_spectrum_offline.lua` -- coherence, the weight partition,
+  dispersion and the glint histogram, with no game and no GPU, in about a
+  second. The coherence table sweeps CLOCK and world offset together, which is
+  the only arrangement in which either failure is visible at all: sampling once
+  near the origin a few seconds after boot measures the small factor of each
+  product while the large one happens to be small too.
 
 ## 1.19.0-mobile
 

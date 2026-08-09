@@ -1,31 +1,33 @@
--- Overworld art for a wild Pokemon, out of the art the game already has.
+-- Overworld art for a wild Pokemon.
 --
 -- Gen 1 draws no Pokemon on the map.  Eleven species have an overworld
 -- sheet because a script stands one somewhere (the Vermilion Machop, the
 -- Snorlax, Bill's Pikachu); the other hundred and forty have exactly one
--- drawing each and it is the battle FRONT pic.  So that is what a roamer
--- wears, resampled down to the 16x16 cell every other character on the map
--- occupies.
+-- drawing each and it is the battle FRONT pic.
 --
--- Baked to a real 16x96 sheet on disk rather than kept as a canvas in
--- memory, and that is the whole reason this file exists.  A sheet at a PATH
--- is a sprite the ENGINE understands: SpriteRenderer loads it, the OBP bake
--- recolors it, the SGB zone shader colors it out of the map's own palette,
--- the voxel pass cuts its card from it, the sun pass throws its silhouette.
--- Every one of those is keyed on the image path.  An Image conjured at
--- runtime would have needed each of them taught about it; a file needs none
--- of them touched.
+-- Resampling a 40x40 front pic into a 16x16 cell is what this file first
+-- did, and it is what made Sandshrew look like Charmander and Growlithe
+-- into an unreadable blob: a battle portrait is drawn to read at battle
+-- size, not as a walk-cycle tile.  So the preferred path is a Gen-2-style
+-- 16x96 walker sheet at:
 --
--- Baked once and kept: the sheet lands under the engine's own derived-asset
--- root (save/mod-derived/<id>/), where a hot reload and an uninstall already
--- know to look, and the revision in each filename means a change to this
--- generator supersedes what an older cut left there rather than being
--- mistaken for it.
+--   assets/roamers/<SPECIES>.png
 --
--- Better art wins outright.  A sheet shipped in the mod's own
--- assets/roamers/<SPECIES>.png is used as-is and nothing is generated, so a
--- pixel artist can replace one species, or all of them, without touching a
--- line of this.
+-- Those sheets are NOT in the repository. Same rule as the X/Y GUI pack:
+-- crediting ShockSlayer / Crystal Clear / PokePC Followers is not holding a
+-- licence from them. tools/install_roamer_sprites.py fetches the pack and
+-- renames it into place; assets/roamers/CREDITS.md is the install note.
+-- Shipped sheets are marked `trueColor` so the OBP bake and the zone shader
+-- leave the species colours alone (VoxelScene already respects that flag).
+--
+-- When a sheet is missing, the front-pic bake is the FALLBACK: a greyscale
+-- 16x96 under save/mod-derived/<id>/roamers/, revisioned so an old cut is
+-- never mistaken for a new one. The bake is what players without the pack
+-- see -- so its outline bias and size floor matter, and they are tuned for
+-- recognition rather than for a perfect miniature of the battle portrait.
+--
+-- Drop a replacement at assets/roamers/<SPECIES>.png and nothing is generated
+-- for that species.
 
 -- the mod namespace (see main.lua): V.require loads a sibling module
 local V = ...
@@ -40,8 +42,9 @@ RoamerArt.FRAMES = 6          -- stand down/up/left then walk down/up/left
 -- Bumped when anything below changes what a sheet looks like.  It rides in
 -- the filename, so an old bake is never picked up as a current one -- and
 -- the old file is left alone rather than deleted, because a player who
--- pinned one on purpose should keep it.
-RoamerArt.REV = "1"
+-- pinned one on purpose should keep it.  (Shipped Gen-2 sheets do not use
+-- this revision; only the front-pic fallback bake does.)
+RoamerArt.REV = "3"
 
 local function derivedRoot()
   local id = (V.mod and V.mod.id) or "TERRARIUM"
@@ -103,20 +106,28 @@ end
 
 -- Resample the box down to dw x dh, one vote per destination pixel.
 --
--- Not an average.  Averaging four shades produces shades that are not any
--- of the four, and the whole point of staying on the DMG ramp is that the
--- OBP bake and the zone shader can then colour this sheet exactly like the
--- sheets beside it.  So each destination pixel takes the shade its source
--- block is MOST made of -- with the outline given a low bar, because at
--- this size the outline is most of what makes a mon recognisable and a
--- plain majority erases it (a one-pixel line inside a 3x3 block is never
--- the majority of anything).
+-- Not an average. Averaging four shades produces shades that are not any of
+-- the four, and the whole point of staying on the DMG ramp is that the OBP
+-- bake and the zone shader can then colour this sheet exactly like the
+-- sheets beside it. So each destination pixel takes the shade its source
+-- block is MOST made of.
+--
+-- Outline bias used to fire on EVERY block with 30% dark ink. That was meant
+-- to protect a one-pixel line inside a 3x3 (which is never the majority of
+-- anything), and it did -- but Gen 1 front pics are full of INTERNAL hatch
+-- too, so the interior collapsed to black and every mon became a silhouette.
+-- Similar silhouettes are identical: Sandshrew and Charmander. The low bar
+-- now applies only to blocks that TOUCH background -- real outline -- and
+-- the interior takes a plain majority among the three shades.
 local function resample(src, box, keyWhite, dw, dh)
   local bx, by = box[1], box[2]
   local bw, bh = box[3] - box[1] + 1, box[4] - box[2] + 1
-  local out = {}
+  local solid = {}
+  local darkC, midC, lightC = {}, {}, {}
+
   for dy = 0, dh - 1 do
     for dx = 0, dw - 1 do
+      local i = dy * dw + dx
       local sx0 = bx + math.floor(dx * bw / dw)
       local sx1 = bx + math.ceil((dx + 1) * bw / dw) - 1
       local sy0 = by + math.floor(dy * bh / dh)
@@ -133,16 +144,49 @@ local function resample(src, box, keyWhite, dw, dh)
           elseif s == LIGHT then light = light + 1 end
         end
       end
-      local solid = dark + mid + light
-      local shade = nil
+      local ink = dark + mid + light
       -- a block the drawing barely reaches into stays background: a mon
       -- fringed with stray pixels reads as noise rather than as fur
-      if total > 0 and solid * 5 >= total * 2 then
-        if dark * 10 >= solid * 3 then shade = DARK
-        elseif mid >= light then shade = MID
-        else shade = LIGHT end
+      solid[i] = total > 0 and ink * 5 >= total * 2
+      darkC[i], midC[i], lightC[i] = dark, mid, light
+    end
+  end
+
+  local out = {}
+  for dy = 0, dh - 1 do
+    for dx = 0, dw - 1 do
+      local i = dy * dw + dx
+      if not solid[i] then
+        out[i] = nil
+      else
+        -- edge of the silhouette: any neighbour off the ink, or off the cell
+        local edge = false
+        for _, o in ipairs({
+          { 0, -1 }, { 0, 1 }, { -1, 0 }, { 1, 0 },
+        }) do
+          local nx, ny = dx + o[1], dy + o[2]
+          if nx < 0 or nx >= dw or ny < 0 or ny >= dh
+             or not solid[ny * dw + nx] then
+            edge = true
+            break
+          end
+        end
+        local dark, mid, light = darkC[i], midC[i], lightC[i]
+        local shade
+        if edge then
+          -- low bar for dark: keep the outline that actually separates the
+          -- mon from the grass
+          if dark * 10 >= (dark + mid + light) * 3 then shade = DARK
+          elseif mid >= light then shade = MID
+          else shade = LIGHT end
+        else
+          -- interior: simple majority -- hatch stays hatch, not a black fill
+          if dark >= mid and dark >= light then shade = DARK
+          elseif mid >= light then shade = MID
+          else shade = LIGHT end
+        end
+        out[i] = shade
       end
-      out[dy * dw + dx] = shade
     end
   end
   return out
@@ -185,20 +229,43 @@ end
 --
 -- Straight off the pic's own buffer size, which is the only statement Gen 1
 -- makes about how big a Pokemon is: a 7x7 mon fills the cell, and every
--- rung down from there loses a pixel.  So a Caterpie is smaller than a
+-- rung down from there loses a pixel. So a Caterpie is smaller than a
 -- Snorlax on the map for the same reason it is smaller in a battle.
+--
+-- Floor is 12, not 8: at sixteen pixels total, readability beats scale
+-- fidelity. A frontSize-4 mon used to bake at 13 and throw away three
+-- precious pixels; 12 keeps the hierarchy without starving the small ones.
 local function cellSize(mon)
   local n = tonumber(mon.frontSize) or 7
   local size = RoamerArt.FRAME - (7 - n)
-  if size < 8 then size = 8 end
+  if size < 12 then size = 12 end
   if size > RoamerArt.FRAME then size = RoamerArt.FRAME end
   return size
+end
+
+-- Gen-2 walk sheets read because they are almost all head. A full-body
+-- front pic squeezed into 16px leaves every distinctive mark under three
+-- pixels. For tall, upright content boxes, crop to the upper ~60% so ear,
+-- snout and mane get the budget. Long thin mons (Onix, Ekans, Gyarados)
+-- keep the full box -- their identity IS the length.
+local HEAD_CROP_MIN_RATIO = 1.15   -- bh/bw above this: upright enough to crop
+local HEAD_CROP_FRAC = 0.62        -- keep this fraction of height from the top
+
+local function bakeBox(box)
+  local bw = box[3] - box[1] + 1
+  local bh = box[4] - box[2] + 1
+  if bw <= 0 or bh <= 0 then return box end
+  if bh / bw < HEAD_CROP_MIN_RATIO then return box end
+  local keep = math.max(1, math.floor(bh * HEAD_CROP_FRAC + 0.5))
+  if keep >= bh then return box end
+  return { box[1], box[2], box[3], box[2] + keep - 1 }
 end
 
 local function bake(mon)
   local src = Assets.imageData(mon.spriteFront)
   local box, keyWhite = contentBox(src)
   if not box then return nil end
+  box = bakeBox(box)
   local bw, bh = box[3] - box[1] + 1, box[4] - box[2] + 1
   local size = cellSize(mon)
   local scale = size / math.max(bw, bh)
@@ -260,13 +327,20 @@ local function build(species, mayBake)
   local mon = Game.data and Game.data.pokemon and Game.data.pokemon[species]
   if not (mon and mon.spriteFront) then return nil end
 
-  local path = V.path .. "/" .. SHIPPED .. species .. ".png"
+  -- Shipped Gen-2 style walk sheet wins: true colour, already 16x96, no bake.
+  local shipped = V.path .. "/" .. SHIPPED .. species .. ".png"
+  if Assets.exists(shipped) then
+    return { id = "TR_ROAM_" .. species, image = shipped,
+             frames = RoamerArt.FRAMES, walker = true,
+             trueColor = true, dsSpecies = species }
+  end
+
+  -- Fallback: greyscale bake from the battle front pic (REV in the path so
+  -- older unreadable cuts are never reused after a generator change).
+  local path = DERIVED .. species .. "-" .. RoamerArt.REV .. ".png"
   if not Assets.exists(path) then
-    path = DERIVED .. species .. "-" .. RoamerArt.REV .. ".png"
-    if not Assets.exists(path) then
-      if not mayBake then return nil, true end
-      if not writeSheet(mon, path) then return nil end
-    end
+    if not mayBake then return nil, true end
+    if not writeSheet(mon, path) then return nil end
   end
   return { id = "TR_ROAM_" .. species, image = path,
            frames = RoamerArt.FRAMES, walker = true,
@@ -329,6 +403,10 @@ do
   if not PaletteFX.dramaticShapeMonObp then
     local inner = PaletteFX.spriteObp
     function PaletteFX.spriteObp(spriteDef, seed)
+      -- True-colour walker sheets (the shipped Gen-2 roamers) already carry
+      -- their own species colours. Remapping them through monPal would wash
+      -- a sandshrew into the zone's ground brown and undo the whole point.
+      if spriteDef and spriteDef.trueColor then return nil end
       local colors, group = inner(spriteDef, seed)
       if colors ~= nil then return colors, group end
       local species = spriteDef and spriteDef.dsSpecies
