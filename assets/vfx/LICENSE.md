@@ -57,3 +57,28 @@ counted by hand.
 `Weapon Slash - Effect` (<https://opengameart.org/content/weapon-slash-effect>,
 also CC0) was downloaded and set aside: it ships loose frames with no
 spritesheet, so it would need a sheet built for it first.
+
+---
+
+## Wind & leaf particles (added 2026-08-09)
+
+| file | role | source |
+| --- | --- | --- |
+| `wind_dust.png` | dry-air dust mote | Kenney Particle Pack — `dirt_02.png`, resized to 12×12 white-alpha |
+| `wind_mote.png` | soft spray / snow mote | Kenney Particle Pack — `circle_05.png`, 10×10 white-alpha |
+| `wind_puff.png` | spare soft puff | Kenney Particle Pack — `smoke_03.png`, 16×16 white-alpha |
+| `wind_streak.png` | elongated gust streak | authored here as a soft white-alpha strip for tinting |
+| `leaves.png` | 10× 16×16 leaf frames | pixel leaf silhouettes authored here + stages from [Kudzu leaves pixel art](https://opengameart.org/content/kudzu-leaves-pixel-art) (hatmix, **CC0 1.0**) |
+
+### Kenney Particle Pack
+
+- Author: [Kenney](https://kenney.nl) / [OpenGameArt entry](https://opengameart.org/content/particle-pack-80-sprites)
+- Licence: **CC0 1.0**
+- Downloaded 2026-08-09 as `kenney_particlePack.zip` from OpenGameArt
+- White-alpha conversion is so `WindFX` can tint dust warm, spray blue, snow white
+
+### Kudzu leaves
+
+- Author: hatmix — <https://opengameart.org/content/kudzu-leaves-pixel-art>
+- Licence: **CC0 1.0**
+- Four 32×32 growth stages on `kudzu_leaves_32x32.png`, nearest-neighbour resized into the leaf strip
