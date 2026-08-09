@@ -45,9 +45,9 @@
 -- birds: there is no sky to cross under a roof of leaves.
 --
 -- One OPTIONS row, AMBIENT ON/OFF, because every moving thing is one more
--- reason a slow device drops a frame -- though the whole population is a
--- few dozen rectangles with no texture, so OFF is about taste as much as
--- speed.
+-- reason a slow device drops a frame. Leaves use a small CC0 sprite strip
+-- (`assets/vfx/leaves.png`); everything else is still a few tinted
+-- rectangles -- OFF is about taste as much as speed.
 
 -- the mod namespace (see main.lua): V.require loads a sibling module
 local V = ...
@@ -87,7 +87,7 @@ local state = { mapId = nil, birdTimer = 12, spawnTick = 0 }
 -- out of the corner of your eye, and twenty butterflies over one patch is
 -- not a meadow, it is a lure.
 local MAX_BUTTERFLY = 6
-local MAX_LEAF = 6
+local MAX_LEAF = 12
 local MAX_SPARROW = 3
 local MAX_DRAGONFLY = 3
 local SPAWN_EVERY = 0.5           -- seconds between spawn attempts
@@ -209,7 +209,36 @@ local function spawnLeaf(ow)
   critters[#critters + 1] = {
     kind = "leaf", x = x, z = z, y = 22 + rand() * 10,
     seed = rand() * 6.2831, t = 0, ttl = 30,
+    -- which frame of assets/vfx/leaves.png, and spin rate
+    frame = love.math.random(0, 9),
+    spin = (rand() * 2 - 1) * 3.5,
   }
+end
+
+-- ------- leaf sprite strip
+--
+-- 10 frames at 16x16 in assets/vfx/leaves.png (see LICENSE.md). Loaded once
+-- on first leaf draw; missing art falls back to the old green rectangle.
+local leafImg, leafQuads = nil, nil
+
+local function leafArt()
+  if leafImg == false then return nil end
+  if leafImg then return leafImg, leafQuads end
+  local path = V.path .. "/assets/vfx/leaves.png"
+  local ok, img = pcall(love.graphics.newImage, path)
+  if not (ok and img) then
+    leafImg = false
+    return nil
+  end
+  pcall(img.setFilter, img, "nearest", "nearest")
+  local fw, fh = 16, 16
+  local n = math.max(1, math.floor(img:getWidth() / fw))
+  local quads = {}
+  for i = 0, n - 1 do
+    quads[i] = love.graphics.newQuad(i * fw, 0, fw, fh, img:getDimensions())
+  end
+  leafImg, leafQuads = img, quads
+  return leafImg, leafQuads
 end
 
 -- A flock: three to five birds abreast with a little scatter, entering off
@@ -491,9 +520,19 @@ function AmbientLife.draw(project, scale)
         end
       elseif c.kind == "leaf" then
         g.setBlendMode("alpha")
-        g.setColor(0.45, 0.62, 0.25, 0.85 * fade)
-        local tilt = math.sin(c.t * 4 + c.seed) * 0.5
-        g.rectangle("fill", sx - s * 0.5, sy - s * 0.5 + tilt * s, s, s * 0.7)
+        local img, quads = leafArt()
+        local ang = c.t * (c.spin or 2) + c.seed
+        local bob = math.sin(c.t * 4 + c.seed) * s * 0.35
+        if img and quads then
+          local n = math.max(1, math.floor(img:getWidth() / 16))
+          local q = quads[(c.frame or 0) % n]
+          g.setColor(1, 1, 1, 0.92 * fade)
+          local sc = math.max(0.6, s * 0.85)
+          g.draw(img, q, sx, sy + bob, ang, sc / 16, sc / 16, 8, 8)
+        else
+          g.setColor(0.45, 0.62, 0.25, 0.85 * fade)
+          g.rectangle("fill", sx - s * 0.5, sy - s * 0.5 + bob, s, s * 0.7)
+        end
       elseif c.kind == "bird" then
         g.setBlendMode("alpha")
         g.setColor(0.20, 0.22, 0.28, 0.9 * fade)

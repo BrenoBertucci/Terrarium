@@ -6,16 +6,14 @@
 -- frame, and a gale is invisible: the one thing in the world that could
 -- have shown it is not on screen. That is the gap this file fills.
 --
--- ------- what it draws, and why it is not a particle system
+-- ------- what it draws
 --
--- Streaks. Short comet-tails of whatever the air is carrying -- dust off a
--- path, pollen and seed off a meadow, spray under a shower, snow off the
--- ground under a fall -- each one a two-pixel line drawn along the bearing
--- it is travelling, fading in and out at its ends. Nothing here is round,
--- soft-edged, additive or gradient-filled: a soft particle over a
--- cel-shaded diorama is the one thing that reads as a filter laid on the
--- world rather than as something in it, which is the same rule the rain's
--- own streaks are drawn under (see Weather.lua's palette note).
+-- Dust and spray sprites from the Kenney Particle Pack (CC0 -- see
+-- assets/vfx/LICENSE.md), tinted per weather and stretched along the wind.
+-- The first cut of this file was pure two-pixel lines; on a 320-wide frame
+-- they disappeared into the grass. A short white-alpha sprite, rotated to
+-- the travel direction and tinted warm/cold, is still flat and cheap (one
+-- Image draw each) and actually reads as air carrying something.
 --
 -- ------- the gust front, which is the whole point
 --
@@ -31,10 +29,9 @@
 -- ------- what it costs
 --
 -- One table of at most WindFX.MAX records, one update loop, one draw loop
--- of two `line` calls each, and it is skipped outright whenever the wind is
--- below WindFX.FLOOR, the sky is closed, or the diorama is not on screen.
--- No mesh, no canvas, no shader: the world's air should not cost what the
--- world's water does.
+-- of one `draw` each, and it is skipped outright whenever the wind is below
+-- WindFX.FLOOR, the sky is closed, or the diorama is not on screen. Two
+-- small PNGs loaded on first draw.
 
 -- the mod namespace (see main.lua): V.require loads a sibling module
 local V = ...
@@ -107,6 +104,32 @@ WindFX.BLOWN = { 0.97, 0.98, 1.00 }
 
 local motes = {}
 local frontCool = 0
+
+-- White-alpha particle images, tinted at draw time. Lazy so a session that
+-- never sees outdoor wind never pays for the decode.
+local imgs = nil     -- { dust, mote, streak } | false
+
+local function loadImgs()
+  if imgs ~= nil then return imgs or nil end
+  local function one(name)
+    local path = V.path .. "/assets/vfx/" .. name
+    local ok, img = pcall(love.graphics.newImage, path)
+    if ok and img then
+      pcall(img.setFilter, img, "nearest", "nearest")
+      return img
+    end
+    return nil
+  end
+  local dust = one("wind_dust.png")
+  local mote = one("wind_mote.png")
+  local streak = one("wind_streak.png")
+  if not (dust or mote or streak) then
+    imgs = false
+    return nil
+  end
+  imgs = { dust = dust, mote = mote, streak = streak }
+  return imgs
+end
 
 local function openSky(map)
   if not (map and map.def) then return false end
@@ -275,46 +298,62 @@ function WindFX.draw(project, scale)
   local prevWidth = g.getLineWidth and g.getLineWidth() or 1
   g.setBlendMode("alpha")
 
-  -- ------- two passes, and the reason is state changes
-  --
-  -- Drawn in one loop, a streak sets the line width, sets the colour, and
-  -- draws one two-point line: three calls each and a width change between
-  -- every pair of them, thirty times a frame. Line width is the expensive
-  -- one -- it is pipeline state, not a uniform. So the field is walked
-  -- twice, once for the trailing streaks and once for the front's, with
-  -- the width set ONCE per group. Alpha still varies per streak, so the
-  -- colour call stays; there is no batching a per-streak fade without a
-  -- mesh, and a mesh for thirty lines costs more than it saves.
+  local pack = loadImgs()
+  local kind = Weather.visible()
+  local img
+  if pack then
+    -- rain/snow: soft mote; dry wind: dusty flake; front: stretched streak
+    if kind == "rain" or kind == "snow" then
+      img = pack.mote or pack.dust or pack.streak
+    else
+      img = pack.dust or pack.mote or pack.streak
+    end
+  end
+  local streakImg = pack and (pack.streak or img) or nil
+
   local scl = scale or 1
+  -- Front first (brighter), then standing scatter -- no line-width thrash.
   for pass = 0, 1 do
-    local wantFront = (pass == 1)
-    local widthSet = false
+    local wantFront = (pass == 0)
     for i = 1, #motes do
       local m = motes[i]
       if (m.front and true or false) == wantFront then
-        -- the tail is where this mote WAS: projected as a second world
-        -- point rather than smeared in screen space, so a streak lies down
-        -- along the ground the way the camera sees the ground and not
-        -- along the screen
         local sx, sy, ps = project(m.x, m.y, m.z)
         if sx then
-          -- in over the first fifth, out over the last third
           local fade = math.min(1, m.t * 5, (m.ttl - m.t) * 3)
-          local a = bright * fade * (wantFront and 1.25 or 0.9)
+          local a = bright * fade * (wantFront and 1.35 or 0.95)
           if a > 0.01 then
             local s = math.max(1, scl * (ps or 1))
-            if not widthSet then
-              g.setLineWidth(math.max(1, s * (wantFront and 1.1 or 0.8)))
-              widthSet = true
-            end
-            local tx = m.x - (m.vx or 0) * WindFX.TAIL
-            local tz = m.z - (m.vz or 0) * WindFX.TAIL
-            local ex, ey = project(tx, m.y, tz)
             g.setColor(colour[1], colour[2], colour[3], math.min(1, a))
-            if ex then
-              g.line(sx, sy, ex, ey)
+            local use = wantFront and streakImg or img
+            if use then
+              local iw, ih = use:getWidth(), use:getHeight()
+              -- orient along travel in screen space
+              local ang = 0
+              local stretch = wantFront and 2.4 or 1.5
+              local tx = m.x - (m.vx or 0) * WindFX.TAIL
+              local tz = m.z - (m.vz or 0) * WindFX.TAIL
+              local ex, ey = project(tx, m.y, tz)
+              if ex then
+                ang = math.atan2(sy - ey, sx - ex)
+              end
+              local sc = s * (wantFront and 1.35 or 0.95)
+              g.draw(use, sx, sy, ang, (sc * stretch) / iw, sc / ih,
+                     iw * 0.5, ih * 0.5)
             else
-              g.rectangle("fill", sx - s * 0.5, sy - s * 0.5, s, s)
+              -- no art loaded: keep the old line so the feature never goes
+              -- silent on a stripped assets folder
+              if g.setLineWidth then
+                g.setLineWidth(math.max(1, s * (wantFront and 1.1 or 0.8)))
+              end
+              local tx = m.x - (m.vx or 0) * WindFX.TAIL
+              local tz = m.z - (m.vz or 0) * WindFX.TAIL
+              local ex, ey = project(tx, m.y, tz)
+              if ex then
+                g.line(sx, sy, ex, ey)
+              else
+                g.rectangle("fill", sx - s * 0.5, sy - s * 0.5, s, s)
+              end
             end
           end
         end
