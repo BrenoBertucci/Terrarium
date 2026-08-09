@@ -286,6 +286,54 @@ function Sky.cloudNight()
   return n
 end
 
+-- ------- what the deck looks like, for anything that is not the sky
+--
+-- The water wants the deck's COLOUR and its COVERAGE and explicitly not its
+-- shape. A pond that reflects individual puffs is a pond with clouds painted
+-- in it, which is the bug this pair exists to avoid repeating: sampling the
+-- raymarch again per water pixel would cost the march twice and would put a
+-- cloud-shaped white blob back on the lake, which is precisely what made the
+-- surface art read as sky in the first place.
+--
+-- So: one colour, one number. An overcast hour cools and greys the water
+-- because the whole hemisphere over it went grey. That IS the reflection the
+-- eye reads at this scale; the shapes were never doing the work.
+
+-- The lit face of the deck under this hour, in 0..1. Same expression the
+-- sky pass sends as `cloudLit`, and the night cooling the sky's own shader
+-- applies on top of it (see nightCld in SHADER_SRC) -- so a lake and the
+-- clouds over it can never disagree about what colour the weather is.
+function Sky.deckColor()
+  local over = tonumber(DayNight.overcast) or 0
+  if over < 0 then over = 0 elseif over > 1 then over = 1 end
+  local r = 0.96 - 0.18 * over
+  local g = 0.97 - 0.16 * over
+  local b = 0.99 - 0.10 * over
+  local n = Sky.cloudNight()
+  if n > 0 then
+    -- the shader's own night curve: cool and dim, never pure black
+    r = r + (r * 0.28 + 0.04 - r) * n
+    g = g + (g * 0.28 + 0.05 - g) * n
+    b = b + (b * 0.28 + 0.10 - b) * n
+  end
+  return { r, g, b }
+end
+
+-- How hard the water leans toward that colour at its most reflective.
+-- Small on purpose. A pond is mostly its own body looking back at you and
+-- the sky is the thin part; the number that made this look like a mirror is
+-- the number that made it look like a painting of a mirror.
+Sky.WATER_REFLECT = 0.17
+
+-- Coverage times that ceiling: 0 under a clear sky, and 0 when the CLOUDS
+-- row is off -- there is nothing up there to be reflected, and a lake that
+-- greys anyway is a lake reflecting a sky the player was told to turn off.
+function Sky.waterReflect()
+  local amt = Sky.cloudAmount()
+  if amt <= 0 then return 0 end
+  return amt * Sky.WATER_REFLECT
+end
+
 -- The hour's haze -- the palest band, in 0..1 -- which is both the sky's
 -- bottom edge and the right flat fill for any outdoor void that wants to
 -- match the clock without painting bands (the battle arena's backdrop).

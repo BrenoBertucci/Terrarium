@@ -588,9 +588,30 @@ local SHADER = [[
   // airbrush the cel water's note warns about: a rim light in a painted
   // frame is a shape with an edge, drawn at one brightness, not a gradient
   // fading into the surface.
+  // THE FLOOR IS NOT A SILHOUETTE, and this is what that costs.
+  //
+  // `1 - dot(N, toEye)` was doing the whole job, and on a camera that looks
+  // DOWN it answers a different question than the one it was written for. At
+  // the 75-degree rung the ground's own normal is already three quarters of
+  // a right angle off the view direction: dot lands near 0.26, f near 0.74,
+  // and a threshold picked for "the last few degrees of curvature" (0.62)
+  // fires on every flat pixel in the frame. The whole map then takes a flat
+  // +0.34 of cool white, which reads as haze -- and the V-CURVE widens it,
+  // because the bend tips distant ground even further off the eye.
+  //
+  // This was invisible until the shader cache key was fixed: RT_ANIME had
+  // never once run on a build where ANIME sat on FULL, so the number was
+  // tuned against a pass that was not executing.
+  //
+  // The gate is the same discipline the SSR block already uses to find water
+  // (`N.y > 0.6`): ask which way the face points. A rim in a cel frame is the
+  // inner highlight along a PROFILE -- the side of a tree, the flank of a
+  // building, the edge of a character card -- and a floor has no profile from
+  // above no matter how obliquely it is being viewed.
   float animeRimAt(vec3 P, vec3 N) {
     float f = 1.0 - max(0.0, dot(N, normalize(eye - P)));
-    return step(animeRimEdge, f) * animeRim;
+    float upright = 1.0 - step(0.50, N.y);
+    return step(animeRimEdge, f) * animeRim * upright;
   }
 #endif
 #endif
@@ -1056,7 +1077,14 @@ local function getShader(level)
     -- only thing that says why.
     if not ok then RayFX.shaderError = tostring(sh) end
   end
-  return shaders[level] or nil
+  -- `key`, not `level`. The cache grew a second axis when the ANIME row
+  -- landed (shaderKey appends "+a") and this line kept reading the old
+  -- one-axis name: with ANIME on FULL the entry was written to "ao+a" and
+  -- read back from "ao", which is nil, so apply() handed the scene back
+  -- untouched and the whole pass -- AO, rim, ink -- was off. Silently,
+  -- because a rung that will not build is MEANT to fall back quietly, and
+  -- a lookup miss is indistinguishable from a failed compile from here.
+  return shaders[key] or nil
 end
 
 -- Build one rung's shader and say whether it took. Named for the suite:

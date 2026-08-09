@@ -114,6 +114,8 @@ local DayTint = V.require("DayTint")
 local Quality = V.require("Quality")
 local Wind = V.require("Wind")
 local Water = V.require("Water")
+local WaterBody = V.require("WaterBody")
+local FloorArt = V.require("FloorArt")
 local Light = V.require("Light")
 local RayFX = V.require("RayFX")
 local Anime = V.require("Anime")
@@ -137,6 +139,7 @@ local HiddenItems = V.require("HiddenItems")
 local ExpShare = V.require("ExpShare")
 local Comforts = V.require("Comforts")
 local MiniMap = V.require("MiniMap")
+local StartMenuXY = V.require("StartMenuXY")
 
 -- Forward declaration: the voxel pipeline's update hook (registered below)
 -- calls this, and it is defined further down with the settings it drives.
@@ -388,6 +391,12 @@ mod.content.render_pipelines:register(PIPE_VOXEL, {
     -- T-SHIFT is on, worldPresent re-paints it AFTER the blur so the
     -- radar stays sharp (see tiltshift worldPresent below).
     MiniMap.present(canvas)
+    -- and the start menu, when one is open. On the FINISHED world canvas for
+    -- the same reason the radar is: the engine's menu draws into the 160x144
+    -- UI canvas, and 5x interface art put through that comes out at Game Boy
+    -- resolution (see lib/StartMenuXY.lua). Last, so it is over the radar --
+    -- a menu is modal and nothing belongs on top of it.
+    StartMenuXY.present(canvas)
     return canvas
   end,
 
@@ -399,6 +408,11 @@ mod.content.render_pipelines:register(PIPE_VOXEL, {
     -- generated strips, all rebuilt on demand
     GroundFX.dropGPU()
     Water.dropGPU()
+    FloorArt.dropGPU()
+    -- the size-of-the-water field is a baked texture over the CURRENT
+    -- neighbourhood, so a map registry that moved under us invalidates it
+    -- the same way it invalidates the meshes measured from those maps
+    WaterBody.invalidate()
     MiniMap.invalidate()
   end,
 })
@@ -423,6 +437,11 @@ mod.content.render_pipelines:register(PIPE_TILT, {
     canvas = TiltShift.apply(canvas)
     if (TiltShift.level or 0) > 0 then
       canvas = MiniMap.present(canvas)
+      -- the menu goes back on for the same reason the radar does: it is UI,
+      -- and the blur belongs on the diorama behind it. Without this it is
+      -- drawn once, blurred, and then smeared -- text through a tilt-shift
+      -- is unreadable in a way a landscape is not.
+      canvas = StartMenuXY.present(canvas)
     end
     return canvas
   end,
@@ -1324,6 +1343,26 @@ end
 -- where the reasoning for each one is written down. Installed once, here,
 -- so this file keeps naming every engine seam the mod touches.
 OverworldBattle.install()
+
+-- ------- the start menu's MAP row
+--
+-- One wrap, src.ui.StartMenu.new, in lib/StartMenuMap.lua. It puts a row
+-- under ITENS that opens the town map directly instead of by way of the bag
+-- and the key item -- see that file for why it sits there and not at the top.
+V.require("StartMenuMap").install()
+
+-- ------- the start menu, in X/Y art
+--
+-- One wrap (src.ui.StartMenu.new, to silence the engine's own draw on the
+-- INSTANCE) plus the present hooks above. Both halves are needed or the frame
+-- carries two menus; see lib/StartMenuXY.lua.
+StartMenuXY.install()
+
+-- ------- the battle text box and its command buttons
+--
+-- One wrap (BattleState.drawTextArea) plus a draw inside snapHUDs, which is
+-- already bound to the world canvas. Both in lib/BattleBoxXY.lua.
+V.require("BattleBoxXY").install()
 
 -- ------- wild Pokemon standing in the grass
 --

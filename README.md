@@ -3,6 +3,19 @@
 A little world under glass: it has its own weather, its own hours, and things
 living in it.
 
+> ### ⚠️ Experimental branch — the X/Y interface work is in progress
+>
+> `main` currently carries an **unfinished** rewrite of the interface in
+> Pokemon X/Y art: the battle HUD, the overworld menu, and the battle text
+> box and command buttons. It runs and it is measured, but it is not done,
+> and pieces of it are known to be rough — see the open issues.
+>
+> **The finished version should land on Friday 14 August 2026.** Until then,
+> expect the battle interface to change under you between commits.
+>
+> Every new piece degrades to the Game Boy original when its art is missing,
+> so a clone without the texture pack is playable rather than broken.
+
 > ### This is a fork, and the original is not mine
 >
 > **Terrarium is a fork of the [Dramatic Shape Voxel Mod](https://github.com/DramaticShape/DramaticShapeVoxelMod)
@@ -331,6 +344,16 @@ Dramatic Shape first.** If a licence lands upstream, this fork will adopt it.
   colour, binary surface-noise foam, and shoreline foam ideas adapted to the
   modâ€™s voxel/cel system (hard steps, checker dither, analytic swell, no
   depth/normals buffer RT). Not a port of the Unity shader.
+- **[Pokemon X/Y 5X GUI](https://gamebanana.com/mods/578206)** — the
+  interface art the HUD, the overworld menu and the battle buttons are cut
+  from. **The pack is not redistributed here**: crediting an author is not
+  the same as holding a licence from them, and the underlying art is
+  Nintendo's and Game Freak's whichever way it travels. Download it yourself
+  and run [`tools/extract_xy_assets.py`](tools/extract_xy_assets.py), which
+  cuts and names everything the mod expects. What this repository keeps is
+  the *measurements* — glyph grids, HP trough boxes, button bounds — because
+  the pack's files are named by content hash and none of that was written
+  down anywhere.
 - **Ambient audio** â€” CC0, every recordist named in
   [`assets/audio/CREDITS.md`](assets/audio/CREDITS.md).
 - **Nintendo, Creatures Inc. and GAME FREAK Inc.** â€” for the game. It is

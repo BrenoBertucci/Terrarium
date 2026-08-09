@@ -122,3 +122,80 @@ desktop.ini
 *.orig
 *.tmp
 *.swp
+
+
+# ------------------------------------------------------------------ SECRETS
+#
+# Nothing in this project needs a credential, which is exactly why a leaked
+# one would go unnoticed: there is no CI to fail and no reviewer expecting to
+# see it. These patterns are here so an accident cannot become a commit.
+#
+# If one does get committed, rotating the secret is the fix -- deleting the
+# file is not, because the history keeps it.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+!assets/**/*.key
+*.p12
+*.pfx
+*.keystore
+id_rsa
+id_ed25519
+*.ppk
+.netrc
+_netrc
+.npmrc
+.pypirc
+credentials
+credentials.json
+secrets.json
+*.secret
+*_token
+*.token
+gh_token*
+.gh_token
+
+
+# ------------------------------------------------- THIRD-PARTY INTERFACE ART
+#
+# The X/Y interface textures this mod draws its HUD, menu and battle buttons
+# from are somebody else's work, redistributed through GameBanana:
+#
+#   Pokemon X/Y 5X GUI -- https://gamebanana.com/mods/578206
+#
+# They are NOT in this repository, and the reason is the same one written at
+# the top of the GAME DATA block: crediting an author is not the same as
+# holding a licence from them, and the underlying art is Nintendo's and Game
+# Freak's either way. A clone gets the loader and the measurements; the
+# player downloads the pack themselves.
+#
+# tools/extract_xy_assets.py cuts and names everything from that download.
+# The measurements it uses -- glyph grids, trough boxes, button bounds -- are
+# in this repository, because those are ours: they were measured off the
+# pixels, and they are the part that took the work.
+assets/battlexy/
+assets/hudxy/
+assets/menuxy/
+
+
+# ----------------------------------------------- BULK SPRITE RIPS (never)
+#
+# Downloaded sprite archives -- overworld sheets, generation dumps. Five
+# megabytes of Nintendo's art with a tarball around it is still Nintendo's
+# art, and the GAME DATA rule above does not stop applying because the file
+# extension changed.
+assets/**/*.tar.gz
+assets/**/*.tgz
+assets/**/*.7z
+assets/**/*.rar
+assets/ground/piso vermelho/
+
+
+# ------------------------------------------------------- local player state
+#
+# options.lua carries the player's own settings and, through the trainer
+# name, their name. It belongs to whoever is playing, not to the project.
+options.lua
+LastPlayed.txt
