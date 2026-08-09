@@ -54,7 +54,10 @@ local rand = love.math.random
 -- Below this tip-reach the air shows nothing at all. A calm day is calm,
 -- and motes drifting through a still meadow would be the effect announcing
 -- itself -- which is exactly the failure the AUTO row exists to avoid.
-WindFX.FLOOR = 0.85
+-- Was 0.85: on AUTO the live amount often sits near 1.0 and a soft breeze
+-- never cleared the floor, so the field looked "off". 0.55 still kills
+-- true calm (row OFF / near-still night) without hiding ordinary wind.
+WindFX.FLOOR = 0.55
 
 -- ------- the numbers, and the screenshot that set them
 --
@@ -143,9 +146,9 @@ end
 -- carrying two unrelated palettes at once.
 local function carried()
   local kind = Weather.visible()
-  if kind == "rain" then return WindFX.SPRAY, 0.62 end
-  if kind == "snow" then return WindFX.BLOWN, 0.80 end
-  return WindFX.DUST, 0.58
+  if kind == "rain" then return WindFX.SPRAY, 0.78 end
+  if kind == "snow" then return WindFX.BLOWN, 0.90 end
+  return WindFX.DUST, 0.82
 end
 
 -- What this device will carry this frame, ceiling included.
@@ -298,61 +301,71 @@ function WindFX.draw(project, scale)
   local prevWidth = g.getLineWidth and g.getLineWidth() or 1
   g.setBlendMode("alpha")
 
+  -- Art is optional. The first sprite pass sized particles as
+  -- `s / imageWidth`, which at a typical overlay scale of ~1-2 made a
+  -- 12px dust flake draw as 1-2 screen pixels -- invisible, so the wind
+  -- looked "gone". Size is now a screen-pixel target, and the old line is
+  -- always drawn under the sprite so a missing or tiny texture never
+  -- silences the field.
   local pack = loadImgs()
   local kind = Weather.visible()
-  local img
+  local dustImg, streakImg
   if pack then
-    -- rain/snow: soft mote; dry wind: dusty flake; front: stretched streak
     if kind == "rain" or kind == "snow" then
-      img = pack.mote or pack.dust or pack.streak
+      dustImg = pack.mote or pack.dust or pack.streak
     else
-      img = pack.dust or pack.mote or pack.streak
+      dustImg = pack.dust or pack.mote or pack.streak
     end
+    streakImg = pack.streak or dustImg
   end
-  local streakImg = pack and (pack.streak or img) or nil
 
   local scl = scale or 1
-  -- Front first (brighter), then standing scatter -- no line-width thrash.
   for pass = 0, 1 do
-    local wantFront = (pass == 0)
+    local wantFront = (pass == 1)
+    local widthSet = false
     for i = 1, #motes do
       local m = motes[i]
       if (m.front and true or false) == wantFront then
         local sx, sy, ps = project(m.x, m.y, m.z)
         if sx then
           local fade = math.min(1, m.t * 5, (m.ttl - m.t) * 3)
-          local a = bright * fade * (wantFront and 1.35 or 0.95)
+          local a = bright * fade * (wantFront and 1.35 or 1.0)
           if a > 0.01 then
             local s = math.max(1, scl * (ps or 1))
+            local tx = m.x - (m.vx or 0) * WindFX.TAIL
+            local tz = m.z - (m.vz or 0) * WindFX.TAIL
+            local ex, ey = project(tx, m.y, tz)
             g.setColor(colour[1], colour[2], colour[3], math.min(1, a))
-            local use = wantFront and streakImg or img
-            if use then
-              local iw, ih = use:getWidth(), use:getHeight()
-              -- orient along travel in screen space
-              local ang = 0
-              local stretch = wantFront and 2.4 or 1.5
-              local tx = m.x - (m.vx or 0) * WindFX.TAIL
-              local tz = m.z - (m.vz or 0) * WindFX.TAIL
-              local ex, ey = project(tx, m.y, tz)
-              if ex then
-                ang = math.atan2(sy - ey, sx - ex)
-              end
-              local sc = s * (wantFront and 1.35 or 0.95)
-              g.draw(use, sx, sy, ang, (sc * stretch) / iw, sc / ih,
-                     iw * 0.5, ih * 0.5)
+
+            -- Line first: the field that was already proven to read. Sprite
+            -- sits on top when available.
+            if not widthSet then
+              g.setLineWidth(math.max(1.5, s * (wantFront and 1.4 or 1.0)))
+              widthSet = true
+            end
+            if ex then
+              g.line(sx, sy, ex, ey)
             else
-              -- no art loaded: keep the old line so the feature never goes
-              -- silent on a stripped assets folder
-              if g.setLineWidth then
-                g.setLineWidth(math.max(1, s * (wantFront and 1.1 or 0.8)))
-              end
-              local tx = m.x - (m.vx or 0) * WindFX.TAIL
-              local tz = m.z - (m.vz or 0) * WindFX.TAIL
-              local ex, ey = project(tx, m.y, tz)
-              if ex then
-                g.line(sx, sy, ex, ey)
-              else
-                g.rectangle("fill", sx - s * 0.5, sy - s * 0.5, s, s)
+              g.rectangle("fill", sx - s * 0.5, sy - s * 0.5, s, s)
+            end
+
+            local use = wantFront and streakImg or dustImg
+            if use then
+              local iw = use:getWidth()
+              local ih = use:getHeight()
+              if iw > 0 and ih > 0 then
+                local ang = 0
+                if ex then
+                  ang = math.atan2(sy - ey, sx - ex)
+                end
+                -- Target ~8-14 screen pixels (front a bit longer). Never
+                -- divide by image width alone -- that was the silent kill.
+                local px = math.max(6, s * (wantFront and 3.2 or 2.4))
+                local stretch = wantFront and 2.8 or 1.8
+                g.setColor(colour[1], colour[2], colour[3],
+                           math.min(1, a * 0.95))
+                pcall(g.draw, use, sx, sy, ang,
+                      (px * stretch) / iw, px / ih, iw * 0.5, ih * 0.5)
               end
             end
           end
