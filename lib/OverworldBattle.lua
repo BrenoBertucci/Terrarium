@@ -44,6 +44,8 @@ local BattleCam = V.require("BattleCam")
 local BattleScene = V.require("BattleScene")
 local BattleDOF = V.require("BattleDOF")
 local BattleHud = V.require("BattleHud")
+local BattleHudXY = V.require("BattleHudXY")
+local BattleBoxXY = V.require("BattleBoxXY")
 local BattlePics = V.require("BattlePics")
 local Voxel3D = V.require("Voxel3D")
 local ChunkMesher = V.require("ChunkMesher")
@@ -1085,6 +1087,76 @@ end
 -- faint, and the safari ball count, all draw in these rows and belong at the
 -- same edge as the block they share it with. The panels are the ones that
 -- follow hudLive -- frosted glass under nothing is a slab floating in the arena.
+-- ------- the X/Y block, where the Game Boy's used to sit
+--
+-- Not the old rect scaled. The engine's block is 2.5:1 and the X/Y frame is
+-- 4:1, so squeezing one into the other would letterbox the art or stretch it;
+-- what carries over from snapRects is the CORNER, which was the point of the
+-- snap in the first place -- the foe's block belongs at the top-left of the
+-- window and the player's at the bottom-right, out where the diorama has room
+-- for them, rather than huddled in the middle of a Game Boy screen.
+--
+-- The player's block is floated clear of the text box rather than of the
+-- window: the box is drawn at GB rows 96..144 wherever the window is, and a
+-- HUD overlapping it is unreadable at any size.
+OverworldBattle.XY_MARGIN = 0.018      -- of the window's width, on every edge
+
+function OverworldBattle.drawXYBlock(battle, shot, side)
+  local s = shot.scale
+  local m = math.floor(shot.pw * OverworldBattle.XY_MARGIN + 0.5)
+  local w = math.max(BattleHudXY.MIN_W,
+                     math.min(BattleHudXY.MAX_W,
+                              shot.pw * BattleHudXY.WIDTH_FRAC))
+  local h = w * BattleHudXY.FRAME_H / BattleHudXY.FRAME_W
+  local x, y
+  if side == "enemy" then
+    x, y = m, shot.ly + m
+  else
+    x = shot.pw - w - m
+    y = shot.ly + 96 * s - h - m       -- clear of the text box's top row
+    -- With the command menu up the box grows upward to hold the X/Y buttons
+    -- (BattleBoxXY.MENU_GROW) and the player's capsule ends up sitting on
+    -- FIGHT. X/Y does not have this problem because its HUD is on the other
+    -- screen; here the capsule steps up out of the way and steps back when
+    -- the menu closes.
+    if battle.phase == "menu" and BattleBoxXY.covers(battle) then
+      local grown = OverworldBattle.textRects(battle).box
+      if grown then
+        y = y - grown[4] * s * (BattleBoxXY.MENU_GROW - 1)
+      end
+    end
+  end
+  -- Debug seam for tests/hudxy_probe.lua, off in normal play. Paints the
+  -- side's whole band before the block goes down. What it settles is ORDER,
+  -- which nothing else here can: if the stray bar survives on top of this,
+  -- it is drawn after the block and the fix belongs downstream; if it is
+  -- covered, it was already on the canvas and clearing the band is the fix.
+  if OverworldBattle.XY_DEBUG_WIPE then
+    local band = OverworldBattle.HUD_BAND[side]
+    local bx = (side == "enemy") and 0 or (shot.pw - 160 * s)
+    love.graphics.setColor(1, 0, 1, 1)
+    love.graphics.rectangle("fill", bx, shot.ly + band[2] * s,
+                            band[3] * s, band[4] * s)
+    love.graphics.setColor(1, 1, 1, 1)
+  end
+
+  local info = BattleHudXY.read(battle[side])
+  if not info then return false end
+  local expFrac = info.isPlayer
+    and BattleHudXY.expFraction(battle[side], battle.data) or nil
+  -- Named for the suite. The block is placed in WORLD-CANVAS pixels and the
+  -- canvas is not the window -- checking a layout by measuring a screenshot
+  -- means converting between the two, and getting that conversion wrong is
+  -- indistinguishable from getting the layout wrong. So the numbers the draw
+  -- actually used are recorded rather than re-derived.
+  OverworldBattle._lastXY = OverworldBattle._lastXY or {}
+  OverworldBattle._lastXY[side] = {
+    x = x, y = y, w = w, h = h, s = w / BattleHudXY.FRAME_W,
+    pw = shot.pw, ph = shot.ph, ly = shot.ly, scale = s, exp = expFrac,
+  }
+  return BattleHudXY.block(info, x, y, w, expFrac)
+end
+
 function OverworldBattle.snapHUDs(battle, shot)
   if not (battle and shot and shot.canvas and (shot.scale or 0) > 0) then
     return false
@@ -1101,15 +1173,57 @@ function OverworldBattle.snapHUDs(battle, shot)
   for key, rect in pairs(OverworldBattle.textRects(battle)) do
     live[key] = toWorld(rect, shot)
   end
+  -- Which sides the X/Y block is taking over.
+  --
+  -- EVERY side, whenever the art is there -- not only the LIVE ones. The band
+  -- carries the Game Boy's HUD and this replaces it, so leaving the band on
+  -- for a side whose capsule is not up yet composites a block that is then
+  -- never cleaned off (see below).
+  --
+  -- THE COST, and it is a real one: the bands carry more than the HUD. The
+  -- intro's pokeball rows, an enemy faint's, and the Safari ball count all
+  -- draw in these rows, and suppressing the band suppresses them too. The
+  -- Safari counter is the one that is information rather than decoration;
+  -- losing it is a debt, not a decision that closes the subject.
+  local xy = {}
+  if BattleHudXY.available() then
+    xy.enemy, xy.player = true, true
+    -- Their rects join `live` whether or not the side is up, so the panel
+    -- runs over them every frame.
+    --
+    -- This was done to clear the stray Game Boy EXP bar described in
+    -- lib/BattleHudXY.lua, on the theory that the panel's redraw of the
+    -- blurred world was what used to wipe it. IT DID NOT WORK -- the bar
+    -- comes back at the same size in the same place with the panel restored.
+    -- The theory is therefore wrong and is recorded here as wrong rather than
+    -- quietly deleted, because the next person to look at this will have the
+    -- same idea.
+    --
+    -- Kept anyway: it is what the mode did before the X/Y block existed, the
+    -- capsule is opaque so nothing shows through, and a panel that runs on a
+    -- side whose capsule is not up is the difference between a clean empty
+    -- row and whatever the battle last composited there.
+    live.enemy = live.enemy or rects.enemy
+    live.player = live.player or rects.player
+  end
+  -- ...but a side that is not live still draws NOTHING, rather than a capsule
+  -- for a mon that has not been sent out. drawXYBlock is skipped; the panel
+  -- under it still runs, so the rows stay clean and empty.
+  local xyLive = { enemy = enemy and true or false,
+                   player = player and true or false }
+
   -- measured under the SNAPPED rects: the panels are over whatever the world
   -- shows at the window's edges now, which is not what was behind them in the
   -- middle of the frame. ONE verdict over all of them, HUDs and box together,
   -- for the reason BattleHud.verdict gives: a frame with white glyphs in the
   -- corner and black ones on the menu reads as a bug rather than as adaptation.
+  -- After the X/Y rects join `live`, so the brightness is sampled over the
+  -- same area that is about to be painted.
   local dark = BattleHud.verdict(live, shot, true)
   -- the box's own ink is flipped where the engine draws it, in the GB frame,
   -- so the answer has to outlive this function (see drawHudPanels)
   if session then session.dark = dark end
+
   local layer = OverworldBattle.hudTexture(battle, slide, dark)
   if not layer then return false end
 
@@ -1119,13 +1233,59 @@ function OverworldBattle.snapHUDs(battle, shot)
   local ok, err = pcall(function()
     g.setCanvas(shot.canvas)
     g.setBlendMode("alpha")
-    for _, rect in pairs(live) do BattleHud.panel(rect, shot, dark, true) end
+    -- Glass under everything, the sides the X/Y capsule covers included --
+    -- see the note where their rects join `live` for why that is kept even
+    -- though the capsule is opaque, and for the theory it failed to confirm.
+    --
+    -- The X/Y box claims this battle's own drawTextArea before anything is
+    -- drawn -- an instance field, which is the only thing that reliably beats
+    -- a method four wrappers deep (see BattleBoxXY.claim). Claimed, the
+    -- engine's box is gone and its rect needs no glass under it: the X/Y
+    -- panel is opaque.
+    -- Only the phases BattleBoxXY draws lose their glass. On a phase it does
+    -- not cover -- the move list above all -- the engine's own box is still
+    -- the one on screen and still needs the frost under it.
+    local xyBox = nil
+    if BattleBoxXY.covers(battle) and BattleBoxXY.claim(battle) then
+      xyBox = live.box
+    end
+    for key, rect in pairs(live) do
+      if not (xyBox and key == "box") then
+        BattleHud.panel(rect, shot, dark, true)
+      end
+    end
+    if BattleBoxXY._stats then
+      local k = "snap." .. (BattleBoxXY.available() and "avail" or "unavail")
+                .. (live.box and ".box" or ".nobox")
+      BattleBoxXY._stats[k] = (BattleBoxXY._stats[k] or 0) + 1
+    end
+    if xyBox then BattleBoxXY.draw(battle, xyBox) end
     g.setColor(1, 1, 1, 1)
     for side, band in pairs(OverworldBattle.HUD_BAND) do
-      local quad = g.newQuad(band[1], band[2], band[3], band[4],
-                             BattleScene.GB_W, BattleScene.GB_H)
-      g.draw(layer, quad, bandX[side] + band[1] * shot.scale,
-             shot.ly + band[2] * shot.scale, 0, shot.scale, shot.scale)
+      -- Named for the suite: which branch each side took, counted. A frame
+      -- showing BOTH an X/Y capsule and the Game Boy's own bar is the failure
+      -- this counts -- and it cannot be read off the picture, because the two
+      -- do not overlap and each looks correct on its own.
+      local st = OverworldBattle._xyStats
+      if st then
+        local k = side .. (xy[side] and (xyLive[side] and ".xy" or ".blank")
+                                    or ".band")
+        st[k] = (st[k] or 0) + 1
+      end
+      if xy[side] then
+        if xyLive[side] then OverworldBattle.drawXYBlock(battle, shot, side) end
+      else
+        -- The band still goes down whenever the XY block is NOT covering this
+        -- side, and that is not a fallback -- it is the rest of the band's
+        -- job. The intro's pokeball rows, an enemy faint's, and the safari
+        -- ball count all draw in these rows and none of them is a HUD; they
+        -- appear exactly when hudLive is false, which is when this branch
+        -- runs.
+        local quad = g.newQuad(band[1], band[2], band[3], band[4],
+                               BattleScene.GB_W, BattleScene.GB_H)
+        g.draw(layer, quad, bandX[side] + band[1] * shot.scale,
+               shot.ly + band[2] * shot.scale, 0, shot.scale, shot.scale)
+      end
     end
   end)
   if prevCanvas then g.setCanvas(prevCanvas) else g.setCanvas() end

@@ -26,6 +26,9 @@ local GroundFX = V.require("GroundFX")
 local Quality = V.require("Quality")
 local Wind = V.require("Wind")
 local Water = V.require("Water")
+local WaterBody = V.require("WaterBody")
+local FloorArt = V.require("FloorArt")
+local Underpass = V.require("Underpass")
 local Roamer = V.require("Roamer")
 local StreetLamps = V.require("StreetLamps")
 local Skyline = V.require("Skyline")
@@ -473,6 +476,16 @@ function VoxelScene.prefetch(state)
     -- and is bounded by the same neighbourhood
     TerrainAtlas.setLive(live)
   end
+  -- How big the water is, measured over the same neighbourhood the meshes
+  -- are built from. Its own key rather than this one: the size of a lake
+  -- depends on where the neighbours SIT and not only on which they are, and
+  -- the two differ on a map reached from more than one seam. Cheap on a
+  -- frame that changes nothing -- it compares a string and returns.
+  pcall(WaterBody.refresh, state)
+  -- Which sheet this map wears, for the paving art. Pushed rather than
+  -- pulled: FloorArt has no business knowing about the overworld, and the
+  -- frame already knows what it is drawing.
+  pcall(FloorArt.setMap, state.map)
 
   -- masks: where connected neighbour BODIES sit, so the border ring is
   -- suppressed under them (see runGeometry)
@@ -860,6 +873,26 @@ function VoxelScene.render(state, w, h, vw, vh, paletteFor)
   Voxel3D.skyAmount = outdoor and 1 or 0
   DayNight.applyRig(outdoor)
   Voxel3D.tint = DayNight.tint(outdoor or DayNight.isCanopy(state.map))
+  -- A PASSAGE HAS NO AMBIENT WORTH THE NAME, and dimming it is what makes
+  -- the fittings below visible at all. Measured: with the interior's normal
+  -- tint the corridor is already lit end to end, so adding eight point
+  -- lights on top moved almost nothing -- an A/B of lamps on against lamps
+  -- off came back nearly identical, because there was no dark for them to
+  -- push back. The light was never missing; the DARK was.
+  --
+  -- So the tint carries the emergency minimum -- enough that a wall out of
+  -- every pool is still a wall and not a hole -- and the lamps carry the
+  -- rest. That is also what a real tunnel looks like: bright under the
+  -- fittings, gloomy between them, never actually black.
+  if Underpass.matches(state.map) and Underpass.ENABLED then
+    local t = Voxel3D.tint
+    local k = Underpass.AMBIENT
+    if type(t) == "table" and t[3] then
+      -- cooled as well as dimmed: what little fill there is down here has
+      -- bounced off concrete under the same cold tubes
+      Voxel3D.tint = { t[1] * k * 0.92, t[2] * k * 0.96, t[3] * k * 1.06 }
+    end
+  end
   -- and the window glass: the tileset's own panes (found in its art --
   -- GlassMask), lit after dark. Outdoors only, like everything the clock
   -- touches, which also keeps any pane-shaped art in an interior tileset
@@ -882,6 +915,9 @@ function VoxelScene.render(state, w, h, vw, vh, paletteFor)
     -- and the box models put theirs somewhere else entirely.
     local okH, y = pcall(StreetLamps.flameHeight)
     Voxel3D.lampHeight = okH and y or nil
+    -- back to the shader's own default: the passage below overrides it, and
+    -- a value left behind would follow the player out into the street
+    Voxel3D.lampCore = nil
     -- The gas clock. Wrapped so a long session cannot walk sin() out into the
     -- range where a float has no fraction left and the flicker freezes.
     Voxel3D.lampFlicker =
@@ -889,9 +925,29 @@ function VoxelScene.render(state, w, h, vw, vh, paletteFor)
       and ((love.timer and love.timer.getTime and love.timer.getTime() or 0)
            * 2.4) % 6283.185
       or 0
+  elseif Underpass.matches(state.map) then
+    -- A PASSAGE IS WIRED. Indoors used to mean "no local lights" full stop,
+    -- which is right for a house (the room's own ambient is the light) and
+    -- wrong for a tunnel between two cities: there is no sun down here and
+    -- no window, so with the list nil every surface takes one flat ambient
+    -- and the corridor has no shape -- a black void with a lit floor in it.
+    --
+    -- Same eight point lights the street uses, in a row down the middle of
+    -- the corridor, pale and cold instead of gas-warm. See lib/Underpass.lua
+    -- for why the colour is most of what says "built" rather than "cave".
+    local ok, lamps = pcall(Underpass.lights, state.map, cx, cy)
+    Voxel3D.lampLights = ok and lamps or nil
+    Voxel3D.lampHeight = Underpass.HEIGHT
+    Voxel3D.lampColor = Underpass.COLOR
+    Voxel3D.lampCore = Underpass.CORE
+    -- flat zero: a tube on a ballast does not wander, and the uniform being
+    -- constant is also what folds the flicker's sin() away
+    Voxel3D.lampFlicker = Underpass.FLICKER
   else
     Voxel3D.lampLights = nil
     Voxel3D.lampFlicker = 0
+    Voxel3D.lampHeight = nil
+    Voxel3D.lampCore = nil
   end
   local g = VoxelScene.glintStep(glint, cx, cy)
   Voxel3D.glassPhase, Voxel3D.glassGlint = g.phase, g.amp
@@ -1196,6 +1252,11 @@ function VoxelScene.render(state, w, h, vw, vh, paletteFor)
   -- on the street.  Seams off -- these are not voxel-grid props.
   Voxel3D.seams(false)
   pcall(StreetLamps.draw, state.map, outdoor)
+  -- and, underground, the corridor itself: slab, walls, the fittings the
+  -- lamps are supposed to be coming out of, and the LED run along the foot
+  -- of each wall. Props rather than terrain, so they belong here with the
+  -- posts and with the seams off.
+  pcall(Underpass.draw, state.map)
   Voxel3D.seams(true)
 
   return Voxel3D.endScene()

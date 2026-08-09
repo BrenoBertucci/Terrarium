@@ -9,6 +9,11 @@
 --
 --   SWELL     Y = f(XZ) only -- watertight unindexed mesh, two crossing
 --             trains + body-size field + crest steepening under energy.
+--   SIZE      how big the water under a point actually is, measured off the
+--             map rather than guessed from a sine (lib/WaterBody.lua). Both
+--             the amplitude and the WAVELENGTH ride it, so a fountain gets
+--             short shallow ripples and a sea gets a long swell, out of the
+--             same two trains and the same row setting.
 --   SPARKLE   analytic normal (two cosines), cel-quantized glint rings.
 --   BODY      rain / snow / freeze / wind / thermal inertia / chop energy
 --             that lags the weather, so the surface has mass.
@@ -26,6 +31,10 @@
 local V = ...
 
 local ModSetting = V.require("ModSetting")
+-- How big the water under a point is (lib/WaterBody.lua). Required here
+-- rather than pushed in, and safe to: WaterBody knows about maps and cells
+-- and nothing about waves, so there is no way back to this file.
+local WaterBody = V.require("WaterBody")
 
 local Water = {}
 
@@ -35,6 +44,18 @@ Water.setting = ModSetting.new("swell", "WATER",
 
 -- World pixels one full cycle of water.png covers. 64 = four map cells.
 Water.ART_SCALE = 64
+
+-- How far the surface art is allowed to take over the albedo, 0..1.
+--
+-- This was 1.0 and not a knob -- the mix factor was `clamp(vWaterSurf)`,
+-- which is exactly 1 on every water face -- so the PNG did not decorate the
+-- water, it BECAME the water. The shipped sheet is a cel caustic whose white
+-- shapes are large and round, tiled every 64 world pixels, and at the sizes
+-- this camera draws a pond at those shapes read as clouds lying in the lake.
+--
+-- A third is enough to keep the sheet's detail and not enough for any one of
+-- its shapes to become a silhouette the eye names.
+Water.ART_MIX = 0.35
 Water.ASSET_DIR = "assets/water/"
 Water.ASSET_FILE = "water.png"
 
@@ -111,9 +132,37 @@ Water.STEEP_NOW = 0         -- live steep sent to shader / used in heightField
 Water.CURRENT = { 0.94, 0.34 }  -- unit XZ drift (from Wind.DIR)
 Water.THERM = 0.5           -- 0 cold .. 1 warm (DayNight elevation proxy)
 
--- Spatial body-size field (pond vs open water stand-in).
+-- Spatial body-size field: the STAND-IN, kept as the fallback. A sine in
+-- world space that varies with where you are and not with what you are in
+-- (see the note at the top of lib/WaterBody.lua). Used when there is no
+-- baked field -- headless, a probe, a bake that threw -- so those paths get
+-- exactly the behaviour they had before the field existed.
 Water.BODY_KX = 0.0039
 Water.BODY_KZ = 0.0045
+
+-- ------- and what the real field does with a wave
+--
+-- Two numbers move with the size of the body, and moving only one of them
+-- was the first version of this and it was wrong. Amplitude alone gives a
+-- puddle a full-length ocean swell at a tenth of the height, which does not
+-- read as a calm puddle -- it reads as the whole pond tilting. Length is
+-- what says "small": a pond carries short ripples, a sea carries long ones,
+-- and the height follows from that rather than the other way round.
+--
+-- FREQ is a scale on the wave VECTOR, so bigger is shorter. The stand-in's
+-- range was 0.55 .. 1.25 around a mean of 0.90 and meant nothing; these are
+-- picked so the mean lands near the old one and the ends actually separate:
+-- a fountain gets ripples about a third the length of the open sea's swell.
+Water.SIZE_FREQ_SMALL = 2.30   -- the smallest puddle
+Water.SIZE_FREQ_BIG = 0.72     -- fully open water
+-- The share of the row's amplitude the smallest puddle keeps. Not zero: a
+-- puddle with a dead-flat surface loses its glint, its bands and its foam
+-- in one go, and a still pond is a different thing from a small one.
+Water.SIZE_AMP_MIN = 0.16
+-- Curve on the amplitude ramp. Above 1 holds small water calm for longer
+-- before it starts growing, which is the shape a fetch-limited sea actually
+-- has -- it takes a lot of open water before the waves are worth anything.
+Water.SIZE_AMP_GAMMA = 1.35
 
 -- Advection: wind drags phase along CURRENT (group velocity feel).
 Water.ADVECT = 0.045
@@ -159,13 +208,51 @@ function Water.qualityMul()
   return 1
 end
 
--- Apparent body-size frequency scale at world XZ.
--- Shader twin: 0.90 + 0.35 * sin(x*BODY_KX) * cos(z*BODY_KZ)
+-- 1 open water .. 0 the smallest puddle, at a world XZ. 1 whenever there is
+-- no baked field, which is what puts the fallback path back on the old
+-- single-amplitude ocean rather than on a world of puddles.
+function Water.sizeAt(wx, wz)
+  if not WaterBody.on() then return 1 end
+  return WaterBody.sizeAt(wx, wz)
+end
+
+-- Body-size frequency scale at world XZ -- a multiplier on the wave vector,
+-- so BIGGER IS SHORTER.
+--
+-- Shader twin (see the water block in Voxel3D's SHADER):
+--   waterFieldOn > 0.5 ? mix(FREQ_SMALL, FREQ_BIG, size)
+--                      : 0.90 + 0.35 * sin(x*BODY_KX) * cos(z*BODY_KZ)
 function Water.bodyFreq(wx, wz)
-  wx = tonumber(wx) or 0
-  wz = tonumber(wz) or 0
-  local n = math.sin(wx * Water.BODY_KX) * math.cos(wz * Water.BODY_KZ)
-  return 0.90 + 0.35 * n
+  if not WaterBody.on() then
+    wx = tonumber(wx) or 0
+    wz = tonumber(wz) or 0
+    local n = math.sin(wx * Water.BODY_KX) * math.cos(wz * Water.BODY_KZ)
+    return 0.90 + 0.35 * n
+  end
+  local s = WaterBody.sizeAt(wx, wz)
+  return Water.SIZE_FREQ_SMALL
+       + (Water.SIZE_FREQ_BIG - Water.SIZE_FREQ_SMALL) * s
+end
+
+-- The share of the row's swell this point is allowed, 0..1.
+--
+-- A function of XZ ALONE, like the height it scales, which is what keeps
+-- the surface watertight: two quads meeting at a corner are damped by the
+-- same amount and the mesh never opens a seam.
+--
+-- The gradient of the damped height is amp*grad(h) + h*grad(amp), and only
+-- the first term is carried into the analytic normal (here and in the
+-- shader). The second is worth about a tenth of the first at the steepest
+-- part of the ramp -- the field runs 0 to 1 over ten cells -- and buying it
+-- back costs two more field taps per water VERTEX and per water FRAGMENT.
+-- On the machine this mod is tuned for that is not a trade worth making for
+-- a tenth of a normal on the two cells nearest a bank, where breaking foam
+-- is painted over the shading anyway.
+function Water.bodyAmp(wx, wz)
+  if not WaterBody.on() then return 1 end
+  local s = WaterBody.sizeAt(wx, wz)
+  local lo = Water.SIZE_AMP_MIN
+  return lo + (1 - lo) * (s ^ Water.SIZE_AMP_GAMMA)
 end
 
 -- Thermal proxy from sun elevation: high noon melts, night freezes.
@@ -521,7 +608,9 @@ function Water.heightAt(wx, wz)
   local swell = Water.swell()
   if swell <= 0 then return 0 end
   local h = Water.heightField(wx, wz, Water.phaseAt(wx, wz))
-  return swell * h
+  -- the row's amplitude is what the WEATHER asked for; bodyAmp is how much
+  -- of it this particular piece of water is big enough to carry
+  return swell * Water.bodyAmp(wx, wz) * h
 end
 
 function Water.surfaceAt(wx, wz)
