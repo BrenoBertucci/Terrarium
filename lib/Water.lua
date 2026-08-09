@@ -59,11 +59,113 @@ Water.ART_MIX = 0.35
 Water.ASSET_DIR = "assets/water/"
 Water.ASSET_FILE = "water.png"
 
--- Rest wavelengths (phase gain per world px). Live WAVE_A/B are mutated.
-Water.WAVE_A0 = { 0.070, 0.038 }
-Water.WAVE_B0 = { -0.031, 0.058 }
-Water.WAVE_A = { Water.WAVE_A0[1], Water.WAVE_A0[2] }
-Water.WAVE_B = { Water.WAVE_B0[1], Water.WAVE_B0[2] }
+-- ------- THE SPECTRUM: three trains of FIXED length, and nothing else
+--
+-- The size of a body of water used to shorten the wave by scaling the wave
+-- VECTOR: `a = (k . x) * bf(x) - phase`. That reads like the obvious thing to
+-- do and it is not, because the gradient of that argument is
+--
+--   grad a = bf * k  +  (k . x) * grad bf
+--
+-- and the second term is a product of WORLD POSITION -- unbounded, thousands
+-- of pixels across a route -- with the shoreline ramp, which is nonzero at
+-- every bank in the game. Measured at the bank of a test lake
+-- (tests/water_disperse_glint_offline.lua): the local wavenumber is 1.14x the
+-- one the wave should have at the world origin, 7.80x a thousand pixels out
+-- and 28.03x four thousand out. Past about a thousand pixels the perturbation
+-- is larger than the wave it perturbs, which is not a shorter wave -- it is
+-- noise with a period, drawn along every shoreline far from the origin.
+-- Watertightness never caught it: Y = f(XZ) stays perfectly continuous while
+-- the pattern underneath it comes apart.
+--
+-- So no wave vector is a function of position any more. There are three
+-- trains, their lengths are constants, and WHAT THE SIZE OF THE WATER MOVES
+-- IS HOW LOUD EACH ONE IS. A weight multiplies a sine; it does not live
+-- inside one. grad a is exactly k, everywhere, forever.
+--
+-- LONG and MID are the old pair at the open-water end of the old ramp
+-- (WAVE_A0 * SIZE_FREQ_BIG and WAVE_B0 * SIZE_FREQ_BIG), so open water comes
+-- out of this bit-identical in space to what it was. SHORT is new and is what
+-- a puddle actually gets: a third direction at 2.3x the wavenumber, which is
+-- the short end the old ramp was reaching for.
+Water.WAVE_L0 = { 0.05040, 0.02736 }   -- long swell   |k| 0.05735
+Water.WAVE_M0 = { -0.02232, 0.04176 }  -- mid cross    |k| 0.04735
+Water.WAVE_S0 = { 0.10763, -0.14825 }  -- short chop   |k| 0.18319
+
+-- Live vectors, stretched as one by wind/energy/freeze in refreshLive.
+-- WAVE_A / WAVE_B are the long and mid trains under their old names, because
+-- lib/RayFX.lua sends them straight through to its own screen-space ripple
+-- normal and has never known about body size at all.
+Water.WAVE_A = { Water.WAVE_L0[1], Water.WAVE_L0[2] }
+Water.WAVE_B = { Water.WAVE_M0[1], Water.WAVE_M0[2] }
+Water.WAVE_C = { Water.WAVE_S0[1], Water.WAVE_S0[2] }
+
+-- How loud each train is at the two ends of the size ramp. The long train is
+-- the one that dies on a puddle and the short one is the one that dies at
+-- sea; the mid train never dies, and that is the point of it -- a single
+-- surviving train is corduroy, and the smallest puddle has to keep at least
+-- two directions crossing or it stops reading as water.
+--
+-- At size 1 these are 0.55 / 0.45 / 0, which is exactly the old open-water
+-- mix. The end of the ramp nobody could see is the end that changed.
+Water.MIX_LONG = 0.55
+Water.MIX_MID = 0.45
+Water.MIX_SHORT = 0.55
+-- The floors are DELIBERATELY ASYMMETRIC. A puddle keeps a tenth of the long
+-- swell -- a long wave at a tenth of its height is a slow tilt, it costs
+-- nothing and it is the second crossing direction the smallest water needs.
+-- The open sea keeps NONE of the short chop: at |k| 0.183 that train is a
+-- fifth of a display pixel per cycle at this camera, which under a nearest
+-- upscale is not detail, it is the frame-to-frame churn the shimmer probe was
+-- built to hunt. So the sea comes out of this bit-identical to what it was.
+Water.MIX_FLOOR_LONG = 0.10
+Water.MIX_FLOOR_SHORT = 0.0
+Water.MIX_KNEE = 1.40    -- how fast the crossfade runs across the size ramp
+
+-- DISPERSION. 1 = a wave's tempo follows its own length, 0 = the old single
+-- clock. Kept as a knob because it is the one change in this file that moves
+-- every body of water at once and an ablation is the only honest way to rank
+-- it (tests/water_physics_probe.lua flips it).
+--
+-- The wave VECTOR is scaled by bodyFreq (see below) and the phase never was,
+-- so the crest of a short wave travelled at `rate / (k * bf)` -- inversely
+-- with bf. A puddle, whose bf is 2.3, crawled at less than half the speed of
+-- the open sea, which is why small water read as an ocean filmed in slow
+-- motion rather than as a puddle. Deep-water gravity waves disperse as
+-- `omega = sqrt(g * k)`, so the speed falls as `1 / sqrt(k)` and not as
+-- `1 / k`: multiply the phase by sqrt(bf) and the ratio is right.
+--
+-- ADVECTION IS DEDUCTED FROM THIS DELIBERATELY -- it is scaled by nothing.
+-- The advection term grows without bound with world position (0.045 * energy
+-- * dot(xz, current) is ~84 rad four thousand pixels out), so multiplying it
+-- by a quantity that varies across the map would put tens of radians between
+-- one bank and the other and tear the surface apart. The current drags the
+-- whole ocean at one speed; only the wave's own tempo knows how long it is.
+--
+-- IT IS SAFE ONLY BECAUSE THE WAVE VECTORS ARE CONSTANTS. The first attempt
+-- at this scaled the phase by sqrt(bf(x)) with bf still a field, and that put
+-- `phase * grad sqrt(bf)` into the gradient -- a spatially varying quantity
+-- multiplied by a clock that does not stop growing. Measured at a lake bank:
+-- 1.01x the wave's own wavenumber at twelve seconds and 42.9x at one hour.
+-- With fixed vectors each train's tempo is a CONSTANT SCALAR, the same number
+-- everywhere on the map, and it contributes nothing to any gradient at all.
+--
+-- The ratios are taken from the REST vectors and never from the live ones.
+-- refreshLive stretches all three together with wind and energy, and a tempo
+-- ratio that moved with it would make `time * rate` jump by `time * d rate`
+-- every time the weather turned -- an hour into a session that is a large
+-- number of radians. The stretch is common to all three, so leaving the
+-- ratios on the rest lengths costs nothing and removes the failure.
+Water.DISPERSE = 1.0
+
+-- Tempo of each train relative to the LONG one: omega ~ sqrt(k), so a short
+-- wave oscillates faster while its crest travels slower -- which is the whole
+-- of the effect and the reason a pond does not look like a filmed ocean.
+-- Reference is the long train rather than the mid so open water keeps the
+-- tempo it was tuned at (see Water.RATE and the shimmer measurement).
+Water.RATE_LONG = 1.0
+Water.RATE_MID = 0.90867    -- sqrt(0.04735 / 0.05735)
+Water.RATE_SHORT = 1.78730  -- sqrt(0.18319 / 0.05735)
 
 -- Base phase rate (rad/s) before wet/freeze/wind/energy scales in phase().
 -- R0 water_shimmer_probe (VERMILION, CALM, weather off, RES 1/2): continuous
@@ -75,8 +177,35 @@ Water.WAVE_B = { Water.WAVE_B0[1], Water.WAVE_B0[2] }
 -- still clean (0 continuous + tile impulses only).
 Water.RATE = 0.55
 Water.SPARKLE = 0.55
-Water.GLINT_LO = 0.020
-Water.GLINT_HI = 0.075
+-- The specular window, as a FRACTION of the slope this water can actually
+-- reach -- not as an absolute one, which is what it was and why the glint
+-- did not exist.
+--
+-- The shader measures the window from the flat plane's own alignment with
+-- the sun (`flat + LO`, `flat + HI`), so both numbers are a DEVIATION. But
+-- the deviation a swell can produce is `amp * |grad h| * |sunRay.xz|`, and
+-- amp is the row's swell times how much of it this body carries -- it is not
+-- a constant, it is the smallest number in the whole system. Measured at the
+-- default rung (CALM 0.8, sun at 44.6 deg): the largest deviation anywhere on
+-- the water was 0.0269 against a LO of 0.020, so `s` reached 0.029 of 1.0 and
+-- `floor(s * 4 + 0.5)` was 0 on every fragment of every lake. The rings were
+-- not rare, they were unreachable; the effect had never once been visible
+-- outside dawn and dusk, where a low sun stretches |sunRay.xz| enough to
+-- limp into the first ring.
+--
+-- As fractions the window rides the amplitude by construction: 0.34 means
+-- "the top two thirds of the slope this particular water can make", which is
+-- a crest on an ocean and a crest on a puddle, and both of them glint.
+Water.GLINT_LO = 0.34
+Water.GLINT_HI = 1.00
+
+-- Live |k| of each train, long / mid / short. Recomputed in refreshLive
+-- because the vectors are stretched there. The glint window needs it: the
+-- largest |grad h| at a point is the weighted sum of these -- every cosine
+-- allowed to peak at once, which is the bound and not the average -- and the
+-- weights are what the size of the water moves, so the ceiling is per-point
+-- and the shader works it out from the same three numbers.
+Water.WAVE_K = { 0.05735, 0.04735, 0.18319 }
 
 -- Fragment-only phase snap (radians). Geometry always uses continuous phase.
 -- Tried 0.20: converted crawl into ~32% water-mask IMPULSES and made the
@@ -219,9 +348,13 @@ end
 -- Body-size frequency scale at world XZ -- a multiplier on the wave vector,
 -- so BIGGER IS SHORTER.
 --
--- Shader twin (see the water block in Voxel3D's SHADER):
---   waterFieldOn > 0.5 ? mix(FREQ_SMALL, FREQ_BIG, size)
---                      : 0.90 + 0.35 * sin(x*BODY_KX) * cos(z*BODY_KZ)
+-- NO LONGER IN THE HEIGHT FIELD. This is what used to scale the wave vector,
+-- and scaling a wave vector by a field is the defect the spectrum at the top
+-- of this file exists to remove -- see the note there for the measurement.
+-- It is kept because it is still the honest answer to "how short is the water
+-- under this point", which is a question the size probes ask and one that no
+-- longer has a single wave to read it off. Nothing in the render path calls
+-- it, and nothing new should.
 function Water.bodyFreq(wx, wz)
   if not WaterBody.on() then
     wx = tonumber(wx) or 0
@@ -255,6 +388,45 @@ function Water.bodyAmp(wx, wz)
   return lo + (1 - lo) * (s ^ Water.SIZE_AMP_GAMMA)
 end
 
+-- How loud each of the three trains is here: long, mid, short, summing to 1.
+--
+-- THIS is what the size of the water moves now, and the reason it is a weight
+-- on a sine rather than a scale on a wave vector is the whole of the note at
+-- the top of this file: a weight contributes `h * grad w` to the gradient,
+-- which is bounded by the ramp itself, while a vector scale contributes
+-- `(k . x) * grad bf`, which is bounded by nothing at all.
+--
+-- Shader twin: waterShape() in Voxel3D's SHADER, which must return these same
+-- three numbers from the same field tap or the paint stops agreeing with the
+-- mesh it is painted on.
+function Water.bodyWeights(wx, wz)
+  local s = 1
+  if WaterBody.on() then s = WaterBody.sizeAt(wx, wz) end
+  local knee = Water.MIX_KNEE
+  local hi = clamp01(knee * s - (knee - 1))   -- open-water fade-in
+  local lo = clamp01(1 - knee * s)            -- puddle fade-in
+  local fL, fS = Water.MIX_FLOOR_LONG, Water.MIX_FLOOR_SHORT
+  local wL = Water.MIX_LONG * (fL + (1 - fL) * hi)
+  local wM = Water.MIX_MID
+  local wS = Water.MIX_SHORT * (fS + (1 - fS) * lo)
+  -- Normalised so the row's swell means the same height at every size. How
+  -- much a small body is allowed to move is bodyAmp's job and only its job;
+  -- if the partition were left un-normalised a mid-sized lake would come out
+  -- a fifth calmer than either end of the ramp for no stated reason.
+  local sum = wL + wM + wS
+  if sum <= 1e-6 then return 0, 1, 0 end
+  return wL / sum, wM / sum, wS / sum
+end
+
+-- Largest |grad h| available here before crest steepening: every cosine
+-- allowed to peak at once. The bound, not the average -- see Water.GLINT_LO
+-- for what happens to a specular window sized against anything smaller.
+function Water.gradMaxAt(wx, wz)
+  local wL, wM, wS = Water.bodyWeights(wx, wz)
+  local k = Water.WAVE_K
+  return wL * k[1] + wM * k[2] + wS * k[3]
+end
+
 -- Thermal proxy from sun elevation: high noon melts, night freezes.
 function Water.thermNow()
   local ok, DayNight = pcall(V.require, "DayNight")
@@ -277,12 +449,20 @@ function Water.refreshLive()
   local scale = 1 + w * Water.WIND_FREQ + e * 0.22 - f * 0.65
   if scale < 0.28 then scale = 0.28 end
   if scale > 1.95 then scale = 1.95 end
-  Water.WAVE_A[1] = Water.WAVE_A0[1] * scale
-  Water.WAVE_A[2] = Water.WAVE_A0[2] * scale
-  Water.WAVE_B[1] = Water.WAVE_B0[1] * scale
-  Water.WAVE_B[2] = Water.WAVE_B0[2] * scale
+  -- One stretch for all three trains. Common to the whole map, so it moves
+  -- no gradient and it leaves the tempo ratios (RATE_LONG/MID/SHORT) alone.
+  Water.WAVE_A[1] = Water.WAVE_L0[1] * scale
+  Water.WAVE_A[2] = Water.WAVE_L0[2] * scale
+  Water.WAVE_B[1] = Water.WAVE_M0[1] * scale
+  Water.WAVE_B[2] = Water.WAVE_M0[2] * scale
+  Water.WAVE_C[1] = Water.WAVE_S0[1] * scale
+  Water.WAVE_C[2] = Water.WAVE_S0[2] * scale
   Water.BODY = scale
   Water.STEEP_NOW = Water.STEEP * e * (1 - f)
+
+  Water.WAVE_K[1] = math.sqrt(Water.WAVE_A[1] ^ 2 + Water.WAVE_A[2] ^ 2)
+  Water.WAVE_K[2] = math.sqrt(Water.WAVE_B[1] ^ 2 + Water.WAVE_B[2] ^ 2)
+  Water.WAVE_K[3] = math.sqrt(Water.WAVE_C[1] ^ 2 + Water.WAVE_C[2] ^ 2)
 
   local dx, dz = Water.windDir()
   Water.CURRENT[1], Water.CURRENT[2] = dx, dz
@@ -354,13 +534,20 @@ function Water.phase()
   return 0
 end
 
--- Advected phase sample at a point: base phase + wind drag on XZ.
-function Water.phaseAt(wx, wz)
-  local p = Water.phase()
+-- The wind's drag on the phase at a point, ALONE. Split out from phaseAt
+-- because dispersion scales the wave's own tempo and must not touch this one
+-- (see Water.DISPERSE): this term grows with world position without bound, so
+-- anything that varies across the map cannot be allowed to multiply it.
+function Water.advectAt(wx, wz)
   local e = clamp01(Water.energy) * (1 - clamp01(Water.freeze))
   local dx, dz = Water.CURRENT[1], Water.CURRENT[2]
-  local adv = Water.ADVECT * e * ((wx or 0) * dx + (wz or 0) * dz)
-  return p + adv
+  return Water.ADVECT * e * ((wx or 0) * dx + (wz or 0) * dz)
+end
+
+-- Advected phase sample at a point: base phase + wind drag on XZ. Kept for
+-- callers that want the one number; the height field takes the two apart.
+function Water.phaseAt(wx, wz)
+  return Water.phase() + Water.advectAt(wx, wz)
 end
 
 -- ------- climate integration with thermal inertia + energy lag
@@ -587,27 +774,42 @@ Water.BASE = -2
 -- Shared height field -- byte for byte with the vertex shader.
 -- Two trains * bodyFreq * advection, then crest steepening under energy:
 --   h' = h + steep * h * |h|   (sharpens crests, deepens troughs a touch)
-function Water.heightField(wx, wz, phase)
+--
+-- `phase` is the wave's OWN clock and `adv` the current's drag, and they
+-- arrive apart rather than pre-added because only the first disperses. Called
+-- with the drag left out (adv nil) the field is the still-water one, which is
+-- what a probe asking "what shape is this" wants.
+function Water.heightField(wx, wz, phase, adv)
   wx = tonumber(wx) or 0
   wz = tonumber(wz) or 0
-  local ax, az = Water.WAVE_A[1], Water.WAVE_A[2]
-  local bx, bz = Water.WAVE_B[1], Water.WAVE_B[2]
-  local bf = Water.bodyFreq(wx, wz)
-  local a = (wx * ax + wz * az) * bf - phase
-  local b = (wx * bx + wz * bz) * bf + phase * 0.7
-  local h = math.sin(a) * 0.55 + math.sin(b) * 0.45
+  adv = tonumber(adv) or 0
+  local A, B, C = Water.WAVE_A, Water.WAVE_B, Water.WAVE_C
+  local wL, wM, wS = Water.bodyWeights(wx, wz)
+  -- Three constant tempos. Each is a scalar with the same value at every
+  -- point on the map, so none of them appears in grad(a) -- which is what
+  -- makes dispersion expressible here at all (see Water.DISPERSE).
+  local d = Water.DISPERSE
+  local pL = phase * (1 + (Water.RATE_LONG - 1) * d) + adv
+  local pM = phase * (1 + (Water.RATE_MID - 1) * d) + adv
+  local pS = phase * (1 + (Water.RATE_SHORT - 1) * d) + adv
+  -- Opposite phase signs, so the long and short trains run against the mid
+  -- one and the interference pattern travels rather than standing still.
+  local aL = (wx * A[1] + wz * A[2]) - pL
+  local aM = (wx * B[1] + wz * B[2]) + pM
+  local aS = (wx * C[1] + wz * C[2]) - pS
+  local h = math.sin(aL) * wL + math.sin(aM) * wM + math.sin(aS) * wS
   local steep = Water.STEEP_NOW or 0
   if steep > 0 then
     local ah = h < 0 and -h or h
     h = h + steep * h * ah
   end
-  return h, a, b, bf
+  return h, aL, aM, aS
 end
 
 function Water.heightAt(wx, wz)
   local swell = Water.swell()
   if swell <= 0 then return 0 end
-  local h = Water.heightField(wx, wz, Water.phaseAt(wx, wz))
+  local h = Water.heightField(wx, wz, Water.phase(), Water.advectAt(wx, wz))
   -- the row's amplitude is what the WEATHER asked for; bodyAmp is how much
   -- of it this particular piece of water is big enough to carry
   return swell * Water.bodyAmp(wx, wz) * h

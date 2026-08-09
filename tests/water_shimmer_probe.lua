@@ -482,14 +482,23 @@ return function(game)
 
   -- ------- SECOND QUESTION: is the glint sitting on the floor()'s tipping point
   --
-  -- Arithmetic, not pixels. `s = smoothstep(GLINT_LO, GLINT_HI, dot)` then
-  -- `floor(s*3 + 0.5)/3`, and floor() of a number that hovers around an
+  -- Arithmetic, not pixels. `s = smoothstep(lo, hi, dot)` then
+  -- `floor(s*4 + 0.5)/4`, and floor() of a number that hovers around an
   -- integer is a SWITCH: the ring turns fully on and fully off with the
-  -- wave instead of sliding. The suspicion is that at the default rung the
+  -- wave instead of sliding. The suspicion was that at the default rung the
   -- swell's whole slope range is barely wider than the glint window, so
-  -- s*3+0.5 spends its life near 1.0 -- which would make the sparkle a
-  -- blink rather than a highlight, and would be a calibration bug rather
+  -- s*4+0.5 spends its life near a boundary -- which would make the sparkle
+  -- a blink rather than a highlight, and would be a calibration bug rather
   -- than a matter of taste.
+  --
+  -- It was worse than that: the range was NARROWER than the window's floor,
+  -- every sample quantised to ring 0, and the effect did not exist at all.
+  -- The window is now a pair of FRACTIONS of the slope the water can reach
+  -- rather than a pair of absolute deviations (see Water.GLINT_LO), so the
+  -- sweep below builds the same ceiling the shader builds. bodyAmp and
+  -- bodyFreq are taken as 1 here, which is the no-bake fallback -- on a map
+  -- with a size field the shader scales the window per fragment and the
+  -- shape of this answer does not change, only which water is in it.
   --
   -- So: sweep the two wave trains through a full period, work out the exact
   -- normal the vertex shader would build, take the same dot against the same
@@ -500,11 +509,18 @@ return function(game)
   log("")
   log(("sun ray (pinned DAY): %.4f %.4f %.4f -> flat dot = %.4f")
       :format(ray[1], ray[2], ray[3], -ray[2]))
-  log(("glint window: %.4f .. %.4f  (width %.4f)")
-      :format(Water.GLINT_LO, Water.GLINT_HI, Water.GLINT_HI - Water.GLINT_LO))
+  -- The sweep below is the OPEN-WATER case: bodyAmp 1 and the long/mid pair at
+  -- 0.55/0.45 with no short chop, which is what Water.bodyWeights returns at
+  -- size 1. Smaller water rides a louder short train and therefore a larger
+  -- ceiling; the shape of the answer does not change, only which water is in
+  -- it. tests/water_spectrum_offline.lua is the one that walks the ramp.
+  local OPEN_GRAD = Water.MIX_LONG * Water.WAVE_K[1]
+                  + Water.MIX_MID * Water.WAVE_K[2]
+  log(("glint window: %.3f .. %.3f of the reachable slope  (open-water |grad h| %.5f)")
+      :format(Water.GLINT_LO, Water.GLINT_HI, OPEN_GRAD))
   log("")
-  log("  swell   maxdev   s_min   s_max   ring histogram 0 / 1/3 / 2/3 / 1"
-      .. "   near-boundary")
+  log("  swell   maxdev   s_min   s_max   rings 0 / 1 / 2 / 3 / 4"
+      .. "        near-boundary")
 
   local function smoothstep(e0, e1, x)
     local t = (x - e0) / (e1 - e0)
@@ -512,9 +528,13 @@ return function(game)
     return t * t * (3 - 2 * t)
   end
 
-  local function sweep(swell, lo, hi)
+  local function sweep(swell, loFrac, hiFrac)
     local flat = -ray[2]
-    local hist = { 0, 0, 0, 0 }
+    -- how much of the sun sits along the ground: the part of a tilted normal
+    -- that leans INTO the light, and therefore the part the window can catch
+    local rayXZ = math.sqrt(ray[1] * ray[1] + ray[3] * ray[3])
+    local steep = Water.STEEP_NOW or 0
+    local hist = { 0, 0, 0, 0, 0 }
     local sMin, sMax, devMax = 1e9, -1e9, 0
     local near, total = 0, 0
     local STEPS = 96
@@ -522,25 +542,30 @@ return function(game)
       for j = 0, STEPS - 1 do
         local a = (i / STEPS) * 2 * math.pi
         local b = (j / STEPS) * 2 * math.pi
-        local gx = A[1] * math.cos(a) * 0.55 + B[1] * math.cos(b) * 0.45
-        local gy = A[2] * math.cos(a) * 0.55 + B[2] * math.cos(b) * 0.45
+        local h = math.sin(a) * 0.55 + math.sin(b) * 0.45
+        local ah = h < 0 and -h or h
+        local chain = 1 + 2 * steep * ah
+        local gx = (A[1] * math.cos(a) * 0.55 + B[1] * math.cos(b) * 0.45) * chain
+        local gy = (A[2] * math.cos(a) * 0.55 + B[2] * math.cos(b) * 0.45) * chain
         local nx, ny, nz = -gx * swell, 1, -gy * swell
         local len = math.sqrt(nx * nx + ny * ny + nz * nz)
         nx, ny, nz = nx / len, ny / len, nz / len
         local dot = -(nx * ray[1] + ny * ray[2] + nz * ray[3])
         local dev = dot - flat
         if math.abs(dev) > devMax then devMax = math.abs(dev) end
-            -- the window is measured FROM the flat surface's own alignment with
-        -- the light: the uniform is {flat + GLINT_LO, flat + GLINT_HI} (see
-        -- Voxel3D.lua:1223). Comparing the raw dot against the bare
-        -- constants asks whether the sun is up, not whether a crest is
-        -- turned into it, and answers "ring 3" for every sample.
-        local s = smoothstep(flat + lo, flat + hi, dot)
+        -- The window is measured FROM the flat surface's own alignment with
+        -- the light AND scaled BY the slope this water can reach -- the same
+        -- two steps the shader does. Comparing the raw dot against bare
+        -- constants asks whether the sun is up rather than whether a crest is
+        -- turned into it; comparing it against a FIXED deviation asks for a
+        -- slope the swell cannot make, which is the bug this replaced.
+        local ceil = math.max(swell * OPEN_GRAD * chain * rayXZ, 1e-5)
+        local s = smoothstep(flat + loFrac * ceil, flat + hiFrac * ceil, dot)
         if s < sMin then sMin = s end
         if s > sMax then sMax = s end
-        local q = s * 3 + 0.5
+        local q = s * 4 + 0.5
         local ring = math.floor(q)
-        if ring < 0 then ring = 0 elseif ring > 3 then ring = 3 end
+        if ring < 0 then ring = 0 elseif ring > 4 then ring = 4 end
         hist[ring + 1] = hist[ring + 1] + 1
         -- within 0.12 of a tipping point: close enough that the wave's own
         -- travel flips it back and forth every few frames
@@ -555,11 +580,11 @@ return function(game)
   for _, sw in ipairs({ { 0.8, "CALM" }, { 1.4, "SWELL" }, { 1.9, "SWELL+rain" } }) do
     local devMax, sMin, sMax, hist, near =
       sweep(sw[1], Water.GLINT_LO, Water.GLINT_HI)
-    local t = hist[1] + hist[2] + hist[3] + hist[4]
-    log(("  %-5s   %.4f   %.3f   %.3f   %5.1f%% %5.1f%% %5.1f%% %5.1f%%   %5.1f%%")
+    local t = hist[1] + hist[2] + hist[3] + hist[4] + hist[5]
+    log(("  %-5s   %.4f   %.3f   %.3f   %5.1f%% %5.1f%% %5.1f%% %5.1f%% %5.1f%%   %5.1f%%")
         :format(sw[2], devMax, sMin, sMax,
-                100 * hist[1] / t, 100 * hist[2] / t,
-                100 * hist[3] / t, 100 * hist[4] / t, near))
+                100 * hist[1] / t, 100 * hist[2] / t, 100 * hist[3] / t,
+                100 * hist[4] / t, 100 * hist[5] / t, near))
   end
 
   log("")
@@ -568,9 +593,10 @@ return function(game)
   log("  A healthy one spreads across rings and sits away from the tipping"
       .. " points.")
 
-  -- and the same sweep against sun ELEVATION, because the window is measured
-  -- from `flat` but its WIDTH is a constant, and how much slope a crest turns
-  -- into the light depends entirely on how low the sun is
+  -- and the same sweep against sun ELEVATION. The window now scales with the
+  -- slope the water can reach AND with |sunRay.xz|, so the elevation term is
+  -- on both sides of the comparison and the rings should stop being a
+  -- dawn-and-dusk effect. That is the claim; this is the row that checks it.
   log("")
   log("  the same, at CALM, against sun elevation (deg above horizon):")
   log("     elev   maxdev   s_max   ring reached   near-boundary")
@@ -586,8 +612,8 @@ return function(game)
     local devMax, _, sMax, hist, near =
       sweep(0.8, Water.GLINT_LO, Water.GLINT_HI)
     local reached = 0
-    for k = 4, 1, -1 do if hist[k] > 0 then reached = k - 1 break end end
-    log(("     %3d    %.4f   %.3f   %d of 3        %5.1f%%")
+    for k = 5, 1, -1 do if hist[k] > 0 then reached = k - 1 break end end
+    log(("     %3d    %.4f   %.3f   %d of 4        %5.1f%%")
         :format(elev, devMax, sMax, reached, near))
   end
   ray = savedRay

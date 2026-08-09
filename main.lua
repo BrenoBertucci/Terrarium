@@ -1625,7 +1625,11 @@ mod.hooks:wrap("world.tod", function(next, tod, ctx)
   return DayNight.tod()
 end)
 
-mod.exports.version = "1.15.0-mobile.snow.1"
+-- What the probes log and what a companion mod reads. The loader's own field
+-- first so this cannot drift again: this literal sat five minors behind the
+-- manifest, and in a feature-encoded form the versioning rules in CHANGELOG.md
+-- forbid outright (`.snow.1` -- features live in the changelog, not here).
+mod.exports.version = mod.version or "1.20.0-mobile"
 -- exposed so a companion mod can pin its own tiles' shapes or read the
 -- camera without reaching into this mod's file layout
 mod.exports.lib = V

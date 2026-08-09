@@ -180,6 +180,19 @@ assets/hudxy/
 assets/menuxy/
 
 
+# ------------------------------------------------ OVERWORLD ROAMER SPRITES
+#
+# Gen-2-style 16x96 walker sheets for the WILD / TOWN rows. Same rule as the
+# X/Y GUI block above: crediting ShockSlayer / Crystal Clear / PokePC
+# Followers is not the same as holding a licence from them, and the
+# underlying art is Nintendo's and Game Freak's whichever way it travels.
+#
+# assets/roamers/CREDITS.md stays versioned (it says how to install).
+# tools/install_roamer_sprites.py fetches and renames the pack into place.
+# Without the PNGs the mod falls back to a greyscale front-pic bake.
+assets/roamers/*.png
+
+
 # ----------------------------------------------- BULK SPRITE RIPS (never)
 #
 # Downloaded sprite archives -- overworld sheets, generation dumps. Five
