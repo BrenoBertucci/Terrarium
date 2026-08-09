@@ -16,23 +16,23 @@ Issues URL: https://github.com/BrenoBertucci/Terrarium/issues
 
 ## Must fix / verify soon
 
-| item | draft | notes |
+| item | issue | notes |
 | --- | --- | --- |
-| Battle command menu: EN labels, HUD shift, one window size | `01-battle-menu.md` | X/Y UI leftover |
-| Town map still GB resolution | `02-town-map.md` | X/Y UI leftover |
-| Move select in X/Y capsules | `03-move-select.md` | enhancement |
-| Verify REV 3 roamer bake in-game | `04-roamer-bake-verify.md` | Sandshrew / Growlithe without pack |
-| Purge stale derived roamer bakes on REV bump | `05-purge-stale-roamer-bakes.md` | players keep unreadable caches |
-| Ear-pass ambient gains / loop seams | `07-ambient-ear-pass.md` | under map music, real speakers |
-| Catalog text for optional installers | `10-mod-page-optional-assets.md` | X/Y + roamers |
+| Battle command menu: EN labels, HUD shift, one window size | [#2](https://github.com/BrenoBertucci/Terrarium/issues/2) | X/Y UI leftover |
+| Town map still GB resolution | [#3](https://github.com/BrenoBertucci/Terrarium/issues/3) | X/Y UI leftover |
+| Move select in X/Y capsules | [#4](https://github.com/BrenoBertucci/Terrarium/issues/4) | enhancement |
+| Verify REV 3 roamer bake in-game | [#5](https://github.com/BrenoBertucci/Terrarium/issues/5) | Sandshrew / Growlithe without pack |
+| Purge stale derived roamer bakes on REV bump | [#6](https://github.com/BrenoBertucci/Terrarium/issues/6) | players keep unreadable caches |
+| Ear-pass ambient gains / loop seams | [#8](https://github.com/BrenoBertucci/Terrarium/issues/8) | under map music, real speakers |
+| Catalog text for optional installers | [#11](https://github.com/BrenoBertucci/Terrarium/issues/11) | X/Y + roamers |
 
 ## Next features
 
-| item | draft | notes |
+| item | issue | notes |
 | --- | --- | --- |
-| Ambient Tier 2 beds | `06-ambient-tier2.md` | stream, frogs, cicadas, fire, snow_wind, shop — **CC0 only** |
-| Ambient Tier 3 one-shots | `09-ambient-tier3-oneshots.md` | door, wind gust, distant thunder |
-| Bridge to installed PokePC Followers | `08-pokepc-followers-bridge.md` | use their sheets without a second copy |
+| Ambient Tier 2 beds | [#7](https://github.com/BrenoBertucci/Terrarium/issues/7) | stream, frogs, cicadas, fire, snow_wind, shop — **CC0 only** |
+| Ambient Tier 3 one-shots | [#10](https://github.com/BrenoBertucci/Terrarium/issues/10) | door, wind gust, distant thunder |
+| Bridge to installed PokePC Followers | [#9](https://github.com/BrenoBertucci/Terrarium/issues/9) | use their sheets without a second copy |
 
 ## Done recently (unreleased until next package)
 
