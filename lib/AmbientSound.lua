@@ -3,7 +3,9 @@
 -- The diorama has butterflies, fireflies, birds crossing the sky and grass
 -- bending in the wind, and all of it happens in silence over the map's own
 -- looping song. This is the other half: crickets after dark, birdsong in the
--- morning, water moving where there is water to move, and rain when it rains.
+-- morning, water moving where there is water to move, rain when it rains --
+-- and, occasionally, the cry of a Pokemon that is actually standing on the
+-- map (a wild roamer or a town pet). Never a species list of its own.
 --
 -- ------- recorded, with the synth kept underneath it
 --
@@ -569,6 +571,81 @@ local WATER_EVERY = 0.6           -- seconds between counts
 
 local water = { at = 0, near = 0, size = 0 }
 
+-- ------- cries from Pokemon that are actually here
+--
+-- Not a bed and not an encounter table. CityLife puts strays in the streets
+-- (`townPet`) and WildRoamers puts wild ones in the grass and the forest
+-- (`roamer`). Both already wear a real species. This only notices them and
+-- occasionally asks the engine for that species' own cry -- the same
+-- Sound.playCry CityLife uses when you press A. Empty grass, silence.
+--
+-- Sparse on purpose: a meadow of continuous cries is a ringtone, not a
+-- place. Distance fades the volume so a mon three cells off is louder than
+-- one at the edge of earshot. Never indoors (a house has its own talk cry
+-- on A); never invents a name that is not on an entity right now.
+local CRY_REACH = 7               -- cells, Chebyshev like water
+local CRY_MIN, CRY_MAX = 6.0, 16.0
+local cryWait = 4 + (love.math and love.math.random() or math.random()) * 6
+
+local function liveMons(ow)
+  local p = ow.player
+  local out = {}
+  for _, e in ipairs(ow.entities or {}) do
+    if e and not e.dead and type(e.species) == "string"
+       and (e.roamer or e.townPet) then
+      local d = math.max(math.abs((e.cellX or 0) - p.cellX),
+                         math.abs((e.cellY or 0) - p.cellY))
+      if d <= CRY_REACH then
+        out[#out + 1] = { species = e.species, d = d }
+      end
+    end
+  end
+  return out
+end
+
+-- Weighted pick: nearer mons cry more often, which is what earshot does.
+local function pickMon(list)
+  local total = 0
+  for i = 1, #list do
+    total = total + (CRY_REACH + 1 - list[i].d)
+  end
+  if total <= 0 then return list[1] end
+  local r = (love.math and love.math.random() or math.random()) * total
+  local acc = 0
+  for i = 1, #list do
+    acc = acc + (CRY_REACH + 1 - list[i].d)
+    if r <= acc then return list[i] end
+  end
+  return list[#list]
+end
+
+local function tickCries(dt, ow)
+  cryWait = cryWait - (dt or 0)
+  if cryWait > 0 then return end
+  local gap = CRY_MIN
+            + (love.math and love.math.random() or math.random())
+              * (CRY_MAX - CRY_MIN)
+  cryWait = gap
+  local list = liveMons(ow)
+  if #list == 0 then return end
+  local pick = pickMon(list)
+  if not (pick and pick.species) then return end
+  local Game = game()
+  if not (Game and Game.data) then return end
+  local ok, src = pcall(function()
+    return require("src.core.Sound").playCry(Game.data, pick.species)
+  end)
+  if not (ok and src) then return end
+  -- distance fade under the SFX row; sits well below map music
+  local near = 1 - pick.d / (CRY_REACH + 1)
+  local vol = AmbientSound.GAIN * sfxScale() * (0.18 + 0.50 * near)
+  pcall(src.setVolume, src, math.max(0.05, math.min(1, vol)))
+  -- tiny pitch wander so two cries in a row are not the same sample loop
+  local pitch = 0.94
+              + (love.math and love.math.random() or math.random()) * 0.12
+  pcall(src.setPitch, src, pitch)
+end
+
 local function countWater(ow)
   local map, p = ow.map, ow.player
   local best = 0
@@ -690,6 +767,12 @@ local function tick(dt)
   if far then
     playThunder(0.35 + 0.65 * (1 - far), 0.80 + far * 0.35)
   end
+
+  -- ------- live Pokemon cries
+  --
+  -- Towns and the forest (and any route with roamers) only. No cry when
+  -- nothing is on the map; no species that is not currently an entity.
+  pcall(tickCries, dt, ow)
 
   -- ------- crickets and birds
   --
