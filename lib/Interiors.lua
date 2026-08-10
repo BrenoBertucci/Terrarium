@@ -494,7 +494,12 @@ local function talk(ow, pet)
     local src = require("src.core.Sound").playCry(Game.data, pet.species)
     -- a sleepy cry: the same cry the species has, slowed down, which is what
     -- the engine's own GROWL does to one (Sound.playMoveCry)
-    if src then pcall(src.setPitch, src, 0.78) end
+    if src then
+      pcall(src.setPitch, src, 0.78)
+      local SpatialAudio = V.require("SpatialAudio")
+      local wx, wy, wz = SpatialAudio.cell(pet.cellX, pet.cellY, 8)
+      SpatialAudio.place(src, wx, wy, wz, { ref = 16, max = 80 })
+    end
   end)
   local line = Interiors.SLEEP_LINES[
     love.math.random(#Interiors.SLEEP_LINES)]
