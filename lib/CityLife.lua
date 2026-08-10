@@ -359,7 +359,13 @@ local function talk(ow, pet)
   local TextBox = require("src.render.TextBox")
   pet:facePlayer(ow.player)
   pcall(function()
-    require("src.core.Sound").playCry(Game.data, pet.species)
+    local src = require("src.core.Sound").playCry(Game.data, pet.species)
+    -- cry comes from the pet's cell, not the headphones centre
+    if src then
+      local SpatialAudio = V.require("SpatialAudio")
+      local wx, wy, wz = SpatialAudio.cell(pet.cellX, pet.cellY, 12)
+      SpatialAudio.place(src, wx, wy, wz, { ref = 20, max = 120 })
+    end
   end)
   local name = speciesName(Game, pet.species)
   if pet.challenger then

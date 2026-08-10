@@ -67,6 +67,7 @@ local Weather = V.require("Weather")
 local Wind = V.require("Wind")
 local WaterBody = V.require("WaterBody")
 local Underpass = V.require("Underpass")
+local SpatialAudio = V.require("SpatialAudio")
 
 local Map = require("src.world.Map")
 
@@ -514,6 +515,31 @@ local function driveBed(key, want, dt, pitch)
   pcall(bed.src.setPitch, bed.src, pitch or 1)
   pcall(bed.src.setVolume, bed.src,
         AmbientSound.GAIN * sfxScale() * spec.gain * bed.level)
+  -- world placement, if the tick handed one over (water at the bank,
+  -- wind upwind, town in the street). Relative beds (rain roof, room
+  -- tone) sit on the listener so they do not pan when you turn.
+  if bed.rel then
+    SpatialAudio.relative(bed.src)
+  elseif bed.wx then
+    SpatialAudio.place(bed.src, bed.wx, bed.wy or 6, bed.wz,
+                       bed.att)
+  end
+end
+
+-- Tag a bed's world anchor for this frame. Cleared when level falls away.
+local function anchorBed(key, wx, wy, wz, opts)
+  local bed = beds[key]
+  if not bed then return end
+  bed.wx, bed.wy, bed.wz = wx, wy, wz
+  bed.rel = false
+  bed.att = opts
+end
+
+local function relativeBed(key)
+  local bed = beds[key]
+  if not bed then return end
+  bed.rel = true
+  bed.wx, bed.wy, bed.wz = nil, nil, nil
 end
 
 -- Thunder is the one one-shot, so it gets a couple of clones: two claps can
@@ -543,6 +569,9 @@ local function playThunder(volume, pitch)
             AmbientSound.GAIN * sfxScale() * AmbientSound.THUNDER.gain
             * (volume or 1))
       pcall(src.setPitch, src, pitch or 1)
+      -- thunder is weather over the whole map: relative so it does not
+      -- stick to one tile of sky while you walk
+      SpatialAudio.relative(src)
       pcall(src.play, src)
       return
     end
@@ -596,7 +625,10 @@ local function liveMons(ow)
       local d = math.max(math.abs((e.cellX or 0) - p.cellX),
                          math.abs((e.cellY or 0) - p.cellY))
       if d <= CRY_REACH then
-        out[#out + 1] = { species = e.species, d = d }
+        out[#out + 1] = {
+          species = e.species, d = d,
+          cx = e.cellX, cy = e.cellY,
+        }
       end
     end
   end
@@ -636,30 +668,36 @@ local function tickCries(dt, ow)
     return require("src.core.Sound").playCry(Game.data, pick.species)
   end)
   if not (ok and src) then return end
-  -- distance fade under the SFX row; sits well below map music
-  local near = 1 - pick.d / (CRY_REACH + 1)
-  local vol = AmbientSound.GAIN * sfxScale() * (0.18 + 0.50 * near)
+  -- OpenAL distance does the falloff; volume is just the SFX row ceiling
+  local vol = AmbientSound.GAIN * sfxScale() * 0.55
   pcall(src.setVolume, src, math.max(0.05, math.min(1, vol)))
-  -- tiny pitch wander so two cries in a row are not the same sample loop
   local pitch = 0.94
               + (love.math and love.math.random() or math.random()) * 0.12
   pcall(src.setPitch, src, pitch)
+  -- cry comes FROM the mon: place it on its cell so left-bank and
+  -- right-bank read as left and right in the headphones
+  local wx, wy, wz = SpatialAudio.cell(pick.cx, pick.cy, 12)
+  SpatialAudio.place(src, wx, wy, wz, {
+    ref = 20, max = CRY_REACH * 16 + 32, rolloff = 1.2,
+  })
 end
 
 local function countWater(ow)
   local map, p = ow.map, ow.player
-  local best = 0
+  local best, bx, by = 0, p.cellX, p.cellY
   for dy = -WATER_REACH, WATER_REACH do
     for dx = -WATER_REACH, WATER_REACH do
       local cx, cy = p.cellX + dx, p.cellY + dy
       if map:inBounds(cx, cy) and map:isWaterCell(cx, cy) then
         local d = math.max(math.abs(dx), math.abs(dy))
         local closeness = 1 - d / (WATER_REACH + 1)
-        if closeness > best then best = closeness end
+        if closeness > best then
+          best, bx, by = closeness, cx, cy
+        end
       end
     end
   end
-  return best
+  return best, bx, by
 end
 
 -- ------- place, without a list of maps
@@ -741,12 +779,25 @@ local function tick(dt)
   end
   local room = (not outdoor) and (not canopy) and (not dungeon)
 
+  -- Listener first: every place() below is relative to this. Prefer the
+  -- free-roam camera eye so panning agrees with the diorama's facing.
+  local eye, focus = nil, nil
+  pcall(function()
+    local V3 = V.require("Voxel3D")
+    eye, focus = V3.eye, V3.focus
+  end)
+  SpatialAudio.updateListener(ow, eye, focus)
+
+  local px = (ow.player.cellX or 0) * 16 + 8
+  local pz = (ow.player.cellY or 0) * 16 + 8
+
   -- ------- rain
   --
   -- Still plays INDOORS, at a third and pitched down: that is a roof over
   -- your head, and it is the best thing weather does. Snow gets the same bed
   -- far quieter and an octave down, which is not snow falling (snow falling
-  -- is silent) but the wind that is bringing it.
+  -- is silent) but the wind that is bringing it. Relative: rain is the sky
+  -- over you, not a puddle on one tile.
   local rainWant, rainPitch = 0, 1
   if raining then
     rainWant = power * (outdoor and 1 or 0.34)
@@ -755,6 +806,7 @@ local function tick(dt)
     rainWant = power * (outdoor and 0.28 or 0.10)
     rainPitch = 0.5
   end
+  relativeBed("rain")
   driveBed("rain", rainWant, dt, rainPitch)
 
   -- Thunder, which this module does not decide. Weather owns the STRIKE
@@ -790,6 +842,8 @@ local function tick(dt)
     elseif evening then cricketWant = 0.55
     elseif morning then cricketWant = 0.12 end
   end
+  -- field beds sit a few cells around the player, not glued to the head
+  anchorBed("crickets", px + 40, 4, pz - 20, { ref = 48, max = 200 })
   driveBed("crickets", cricketWant * dry, dt)
 
   local birdWant = 0
@@ -804,6 +858,7 @@ local function tick(dt)
     if morning then birdWant = 0.18
     elseif day then birdWant = 0.10 end
   end
+  anchorBed("birds", px - 30, 28, pz - 50, { ref = 64, max = 240 })
   driveBed("birds", birdWant * dry, dt)
 
   -- ------- forest canopy
@@ -819,6 +874,7 @@ local function tick(dt)
     elseif evening then forestWant = 0.40
     elseif night then forestWant = 0.22 end
   end
+  anchorBed("forest", px, 18, pz - 36, { ref = 56, max = 220 })
   driveBed("forest", forestWant * dry, dt)
 
   -- ------- town walla
@@ -834,6 +890,8 @@ local function tick(dt)
     elseif evening then townWant = 0.55
     elseif night then townWant = 0.12 end
   end
+  -- street murmur ahead of the player: walking into town brings it up
+  anchorBed("town", px, 8, pz + 48, { ref = 40, max = 180 })
   driveBed("town", townWant * dry, dt)
 
   -- ------- wind
@@ -843,6 +901,7 @@ local function tick(dt)
   -- moderate breeze is a full bed and OFF is silence. Outdoor only -- a room
   -- has no air moving past the microphone.
   local windWant = 0
+  local wdx, wdz = 1, 0
   if outdoor then
     local okA, amt = pcall(Wind.amount)
     amt = (okA and tonumber(amt)) or 0
@@ -852,7 +911,11 @@ local function tick(dt)
       -- snow already reuses the rain bed low; let the wind speak more then
       windWant = math.min(1, windWant * 1.15 + 0.08 * power)
     end
+    wdx = (Wind.DIR and Wind.DIR[1]) or 1
+    wdz = (Wind.DIR and Wind.DIR[2]) or 0
   end
+  -- upwind of the player: the air arrives from where the dust is blown
+  anchorBed("wind", px - wdx * 56, 14, pz - wdz * 56, { ref = 48, max = 200 })
   driveBed("wind", windWant, dt)
 
   -- ------- water and waves
@@ -864,13 +927,19 @@ local function tick(dt)
   water.at = water.at - dt
   if water.at <= 0 then
     water.at = WATER_EVERY
-    local okw, near = pcall(countWater, ow)
-    water.near = okw and near or 0
+    local okw, near, bx, by = pcall(function()
+      return countWater(ow)
+    end)
+    if okw then
+      water.near = near or 0
+      water.cx, water.cy = bx, by
+    else
+      water.near = 0
+    end
     local size = 0
     if outdoor and water.near > 0 and WaterBody.on and WaterBody.on() then
-      local p = ow.player
-      local wx = (p.cellX or 0) * 16 + 8
-      local wz = (p.cellY or 0) * 16 + 8
+      local wx = (ow.player.cellX or 0) * 16 + 8
+      local wz = (ow.player.cellY or 0) * 16 + 8
       local oks, s = pcall(WaterBody.sizeAt, wx, wz)
       size = (oks and tonumber(s)) or 0
     end
@@ -883,6 +952,14 @@ local function tick(dt)
   if body > 0.35 then
     waveShare = math.min(1, (body - 0.35) / 0.45)
   end
+  -- water / surf sit ON the nearest water cell -- walk toward a pond and
+  -- it comes from that side of the headphones
+  do
+    local wx, wy, wz = SpatialAudio.cell(water.cx or ow.player.cellX,
+                                         water.cy or ow.player.cellY, 2)
+    anchorBed("water", wx, wy, wz, { ref = 28, max = 140, rolloff = 1.3 })
+    anchorBed("waves", wx, wy + 2, wz, { ref = 40, max = 200, rolloff = 1.1 })
+  end
   driveBed("water", near * (1 - 0.85 * waveShare), dt)
   driveBed("waves", near * waveShare, dt)
 
@@ -892,13 +969,16 @@ local function tick(dt)
   -- know what time it is -- and rain does not reach it. Underpass tilesets
   -- count even without a wild table, because the corridor is the place.
   local caveWant = dungeon and 1 or 0
+  -- ahead down the tunnel so it is not perfectly centre-panned
+  anchorBed("cave", px, 6, pz + 40, { ref = 36, max = 160 })
   driveBed("cave", caveWant, dt)
 
   -- ------- indoor room tone
   --
   -- A house with nothing is broken silence under the map music. A soft room
   -- tone fills it. When rain is loud indoors the tone steps down so the roof
-  -- still wins; dungeons use the cave bed instead.
+  -- still wins; dungeons use the cave bed instead. Relative: a room has no
+  -- "direction", only a space around the head.
   local indoorWant = 0
   if room then
     indoorWant = 1
@@ -906,6 +986,7 @@ local function tick(dt)
       indoorWant = math.max(0.25, 1 - power * 0.7)
     end
   end
+  relativeBed("indoor")
   driveBed("indoor", indoorWant, dt)
 end
 
