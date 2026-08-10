@@ -12,15 +12,29 @@
 -- existing grass pass (VoxelScene) -- the only new contract is that the
 -- mesh is textured from grass.png rather than the tileset atlas.
 --
--- If the bake is missing or unreadable the caller falls back to the slab
--- path; this file never throws into the mesh build.
+-- The GRASS options row picks the path:
+--   3D     authored tufts when the bake is present (default)
+--   VOXEL  classic tileset slab, even if the bake is on disk
+-- If the bake is missing or unreadable, available() is false either way and
+-- Structures falls back to the slab -- this file never throws into the mesh
+-- build.
 
 -- the mod namespace (see main.lua): V.require loads a sibling module
 local V = ...
 
+local ModSetting = V.require("ModSetting")
 local Voxel3D = V.require("Voxel3D")
 
 local Grass3D = {}
+
+-- mesh first = default when the bake ships with the mod
+Grass3D.setting = ModSetting.new("grass3d", "GRASS",
+                                 { "mesh", "voxel" },
+                                 { "3D", "VOXEL" })
+
+function Grass3D.wantsMesh()
+  return Grass3D.setting:get() == "mesh"
+end
 
 Grass3D.ASSET_DIR = "assets/ground/grass/"
 Grass3D.META = "grass.meta.json"
@@ -167,7 +181,41 @@ local function loadTemplate()
 end
 
 function Grass3D.available()
+  -- Player chose the classic slab, or the bake is not on disk: Structures
+  -- takes the tileset path. Checking the setting first so a VOXEL preference
+  -- never pays to decode the mesh only to throw it away.
+  if not Grass3D.wantsMesh() then return false end
   return loadTemplate() ~= nil and loadTexture() ~= nil
+end
+
+-- Remesh every map when the row flips: grassInstances vs grassQuads are
+-- chosen at Structures.buildGrass time, so a live toggle has to drop the
+-- cached meshes or the meadow keeps the shape it was built with.
+local function remesh()
+  pcall(function()
+    V.require("ChunkMesher").invalidate()
+  end)
+end
+
+-- OPTIONS row: cycle then rebuild. The manager page writes through
+-- mod.options_changed (main.lua), which also calls remesh for this key.
+function Grass3D.setting:row()
+  local self_ = self
+  return {
+    id = ((V.mod and V.mod.id) or "TERRARIUM") .. ":" .. self.key,
+    label = self.label,
+    value = function() return self_.labels[self_:read()] end,
+    step = function(game, dir)
+      self_:cycle(game, dir)
+      remesh()
+      return true
+    end,
+  }
+end
+
+function Grass3D.onOptionsChanged(value)
+  Grass3D.setting:sync(value)
+  remesh()
 end
 
 function Grass3D.texture()

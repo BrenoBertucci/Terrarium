@@ -15,5 +15,7 @@ Rebuild after replacing the GLB:
 python tools/optimize_grass_glb.py
 ```
 
-If these files are present the mesher uses real 3D tufts with wind + foot-crush.
-If missing, the classic tileset slab grass returns automatically.
+If these files are present **and** the OPTIONS row **GRASS** is on **3D**,
+the mesher uses real 3D tufts with wind + foot-crush. Set **GRASS** to
+**VOXEL** for the classic tileset slab even when the bake is installed.
+If the bake is missing, the slab is used either way.
