@@ -123,38 +123,38 @@ local SHADER = [[
   // THREE crossing wave trains, as phase per world pixel: long, mid, short.
   // Their lengths are constants -- nothing in this shader may scale them by
   // anything that varies across the map. See waterShape.
-  uniform vec2 swellA;        // long swell   (Water.WAVE_A)
-  uniform vec2 swellB;        // mid cross    (Water.WAVE_B)
-  uniform vec2 swellC;        // short chop   (Water.WAVE_C)
-  uniform float swellPhase;
-  uniform float waterSteep;   // crest steepening (energy * STEEP), heightField twin
-  uniform vec2  waterCurrent; // unit XZ wind/current for advection + foam streaks
-  uniform float waterAdvect;  // phase drag along current
-  uniform float waterEnergy;  // lagged chop energy 0..1
-  uniform float waterTherm;   // 0 cold .. 1 warm
+  uniform highp vec2 swellA;        // long swell   (Water.WAVE_A)
+  uniform highp vec2 swellB;        // mid cross    (Water.WAVE_B)
+  uniform highp vec2 swellC;        // short chop   (Water.WAVE_C)
+  uniform highp float swellPhase;
+  uniform highp float waterSteep;   // crest steepening (energy * STEEP), heightField twin
+  uniform highp vec2  waterCurrent; // unit XZ wind/current for advection + foam streaks
+  uniform highp float waterAdvect;  // phase drag along current
+  uniform highp float waterEnergy;  // lagged chop energy 0..1
+  uniform highp float waterTherm;   // 0 cold .. 1 warm
   // Dispersion (Water.DISPERSE): how far toward `omega ~ sqrt(k)` each train's
   // own clock runs. 0 puts all three back on one tempo. Applied to the wave
   // phases ONLY and never to the advection term beside them -- that one grows
   // without bound with world position, so anything multiplying it has to be
   // the same number everywhere. See the note on Water.DISPERSE.
-  uniform float waterDisperse;
+  uniform highp float waterDisperse;
   // The row's own amplitude, in world pixels; 0 = flat. Shared rather than
   // vertex-only because the fragment's glint window is scaled by it.
-  uniform float swell;
+  uniform highp float swell;
   // Tempo of each train relative to the long one (Water.RATE_LONG/MID/SHORT).
   // Constants, the same at every point on the map -- which is the property
   // that lets dispersion exist here without entering any gradient.
-  uniform vec3 waveRate;
+  uniform highp vec3 waveRate;
   // |k| of each live train, long / mid / short (Water.WAVE_K). The glint
   // window is sized against `dot(weights, waveK)`: every cosine allowed to
   // peak at once, which is the largest slope this particular water can make.
-  uniform vec3 waveK;
+  uniform highp vec3 waveK;
   // The spectrum's mix (Water.MIX_LONG / MID / SHORT) and its shape:
   // x = the long train's floor on a puddle, y = the short train's floor at
   // sea (zero on purpose -- see Water.MIX_FLOOR_SHORT), z = the crossfade
   // knee across the size ramp.
-  uniform vec3 waveMix;
-  uniform vec3 mixShape;
+  uniform highp vec3 waveMix;
+  uniform highp vec3 mixShape;
   // ------- HOW BIG THE WATER UNDER THIS POINT IS (lib/WaterBody.lua)
   //
   // One texel per 2D cell over the drawn neighbourhood, sampled in world XZ.
@@ -170,14 +170,14 @@ local SHADER = [[
   // unbound sampler is a driver-dependent crash, the same rule waterArt and
   // glassMask already follow. `waterFieldOn` is the real switch.
   uniform Image waterField;
-  uniform float waterFieldOn;
-  uniform vec2 waterFieldOrigin;  // world XZ of the field's corner
-  uniform vec2 waterFieldInv;     // 1 / its extent in world pixels
+  uniform highp float waterFieldOn;
+  uniform highp vec2 waterFieldOrigin;  // world XZ of the field's corner
+  uniform highp vec2 waterFieldInv;     // 1 / its extent in world pixels
   // (sizeFreqSmall / sizeFreqBig used to live here. They scaled the wave
   // VECTOR by the field and that is exactly what the spectrum removed -- the
   // size of the water now moves waveMix, not any wavelength.)
-  uniform float sizeAmpMin;       // amplitude share the smallest puddle keeps
-  uniform float sizeAmpGamma;
+  uniform highp float sizeAmpMin;       // amplitude share the smallest puddle keeps
+  uniform highp float sizeAmpGamma;
 
   // xyz = how loud the LONG, MID and SHORT trains are here, summing to 1.
   // w   = the share of the row's swell this body of water carries.
@@ -223,15 +223,15 @@ local SHADER = [[
   varying LOVE_HIGHP_OR_MEDIUMP vec3 vGrid;
 #endif
 #ifdef VERTEX
-  uniform mat4 vp;
-  uniform mat4 model;
-  uniform mat4 sunModel;      // where the SUN sees this vertex (see below)
-  uniform mat4 sunVP;         // world -> the shadow map's unit cube
-  uniform vec3 eye;
-  uniform float pull;
-  uniform vec4 curve;         // xy = the focus in world XZ, z = k; 0 = off
+  uniform highp mat4 vp;
+  uniform highp mat4 model;
+  uniform highp mat4 sunModel;      // where the SUN sees this vertex (see below)
+  uniform highp mat4 sunVP;         // world -> the shadow map's unit cube
+  uniform highp vec3 eye;
+  uniform highp float pull;
+  uniform highp vec4 curve;         // xy = the focus in world XZ, z = k; 0 = off
                               // w = the deepest the bend may go (see below)
-  uniform float sway;         // wind reach at the tip, world px; 0 = planted
+  uniform highp float sway;         // wind reach at the tip, world px; 0 = planted
   // Foot-crush on grass (packed vec4: xz pos, radius, strength). crushN is
   // how many are live this draw. Zero when not the grass pass so terrain
   // never folds under a walker.
@@ -243,28 +243,28 @@ local SHADER = [[
   // seconds rather than springing back in one. Four slots could hold the
   // feet or the trail and not both. An array also means one send for the
   // lot instead of eight, which is what makes the extra slots free.
-  uniform vec4 crush[8];
-  uniform float crushN;
-  uniform vec2 windDir;       // its bearing in world XZ, unit length
-  uniform vec2 windFreq;      // phase gained per world pixel, per axis
-  uniform float windPhase;    // advanced by the clock
-  uniform float grassH;       // tuft height in world px -- the bend normaliser
+  uniform highp vec4 crush[8];
+  uniform highp float crushN;
+  uniform highp vec2 windDir;       // its bearing in world XZ, unit length
+  uniform highp vec2 windFreq;      // phase gained per world pixel, per axis
+  uniform highp float windPhase;    // advanced by the clock
+  uniform highp float grassH;       // tuft height in world px -- the bend normaliser
   // How much of the physics this device is paying for (Quality.grassDetail):
   // 0 = the travelling wave alone, 1 = + per-tuft stiffness and the squall
   // front, 2 = + flutter, cross-axis drift, tip bob and the rain's tick.
   // A uniform, so every branch on it is coherent across the whole draw --
   // this costs a compare per vertex and saves six sines at the bottom rung.
-  uniform float grassDetail;
+  uniform highp float grassDetail;
   // What the blades are CARRYING and what is passing over them:
   //   x  rain on them now       weight + damping + the tick of drops landing
   //   y  settled snow on them   weight that stays, and stiffens what is left
   //   z  gust envelope 0..1     how far into a squall this instant is
-  uniform vec3 grassLoad;
+  uniform highp vec3 grassLoad;
   // `swell` used to be declared here. It is now up with the shared water
   // uniforms, because the fragment stage needs it too: the glint window is
   // sized against the slope this water can reach and the row's amplitude is
   // half of that product. Nothing else moved -- iceLift is vertex-only.
-  uniform float iceLift;      // freeze raises the surface a little (still y<-1 id)
+  uniform highp float iceLift;      // freeze raises the surface a little (still y<-1 id)
   attribute float VertexShade;
   // One number per TUFT, from the 8x8 cell it stands in. The grass mesh is
   // one buffer for a whole map and carries no per-instance attribute, so
@@ -611,9 +611,9 @@ local SHADER = [[
 #endif
 #ifdef PIXEL
   uniform Image sunMap;
-  uniform float sunDark;      // >0 = there is a map to sample; see Light.lua
-  uniform float sunBias;
-  uniform vec2 sunTexel;
+  uniform highp float sunDark;      // >0 = there is a map to sample; see Light.lua
+  uniform highp float sunBias;
+  uniform highp vec2 sunTexel;
 
 #ifdef SUN_SOFT
   // How wide the blocker search looks, in shadow-map texels. It doubles as
@@ -627,7 +627,7 @@ local SHADER = [[
   // the frustum's own depth and the rung's texel -- none of which this
   // shader can see -- so what arrives is one number that turns a depth gap
   // straight into a filter width. See ShadowMap.softness.
-  uniform float sunSoft;
+  uniform highp float sunSoft;
 #endif
 
   // the two-channel pack ShadowMap writes: high byte, then low
@@ -769,8 +769,8 @@ local SHADER = [[
   }
 
 #ifdef VOXEL_GRID
-  uniform float gridDark;     // how far toward black a seam pulls; 0 = off
-  uniform float gridWidth;    // seam width, in display pixels
+  uniform highp float gridDark;     // how far toward black a seam pulls; 0 = off
+  uniform highp float gridWidth;    // seam width, in display pixels
 
   // How much of this fragment a voxel seam covers, 0 to 1.
   float voxelSeam(vec3 p) {
@@ -801,72 +801,72 @@ local SHADER = [[
   }
 #endif
 
-  uniform vec3 ghostColor;    // the flat silhouette colour
-  uniform float ghost;        // 0 = shade normally, 1 = flatten to it
+  uniform highp vec3 ghostColor;    // the flat silhouette colour
+  uniform highp float ghost;        // 0 = shade normally, 1 = flatten to it
   // Aerial perspective (see lib/Aerial.lua). Packed rather than four
   // uniforms because every one of them is a property of the same ramp.
-  uniform vec4 fog;           // x = near, y = 1/span, z = top strength, w = rungs
-  uniform vec3 fogColor;      // the hour's haze -- the sky's own palest band
-  uniform vec3 fogEye;        // the camera itself: haze is path length to IT
+  uniform highp vec4 fog;           // x = near, y = 1/span, z = top strength, w = rungs
+  uniform highp vec3 fogColor;      // the hour's haze -- the sky's own palest band
+  uniform highp vec3 fogEye;        // the camera itself: haze is path length to IT
   // The hour's light, split in two (see Light.lua). A surface always gets
   // `skyTint`; `sunTint` is what the sun adds on top where it reaches. In
   // FLAT the whole hour goes in skyTint and sunTint is zero, which is the
   // single multiply this shader used to do.
-  uniform vec3 skyTint;
-  uniform vec3 sunTint;
-  uniform vec3 sunRay;        // the direction the light TRAVELS, normalized
-  uniform float sparkle;      // how far toward white a lit crest lifts
-  uniform vec2 glint;         // the slope window that catches it
-  uniform float foamPhase;    // the tide's clock, for the foam's lapping
+  uniform highp vec3 skyTint;
+  uniform highp vec3 sunTint;
+  uniform highp vec3 sunRay;        // the direction the light TRAVELS, normalized
+  uniform highp float sparkle;      // how far toward white a lit crest lifts
+  uniform highp vec2 glint;         // the slope window that catches it
+  uniform highp float foamPhase;    // the tide's clock, for the foam's lapping
   // Fragment paint phase snap (rad). 0 = continuous. Vertex geometry ignores
   // this -- only the cel block's re-evaluated height / noise / lip use it.
-  uniform float paintPhaseStep;
+  uniform highp float paintPhaseStep;
   // World-XZ paint cell (liquid / ice). Spatial snap for band/noise edges.
-  uniform float paintWCell;
-  uniform float paintWCellIce;
-  uniform float freeze;       // 0..1 progressive ice (CPU climate state)
-  uniform float crest;        // 0..1 mid-water crest foam (rain/wind chop)
-  uniform float snowVeil;     // 0..1 soft white veil while snow hits liquid
-  uniform float iceSparkle;   // cold silver glint on frozen plates
-  uniform float stepJitter;   // 0..1 footstep crack on ice (visual only)
-  uniform float waterWet;     // 0..1 rain on water (micro-ripples + heavy foam)
+  uniform highp float paintWCell;
+  uniform highp float paintWCellIce;
+  uniform highp float freeze;       // 0..1 progressive ice (CPU climate state)
+  uniform highp float crest;        // 0..1 mid-water crest foam (rain/wind chop)
+  uniform highp float snowVeil;     // 0..1 soft white veil while snow hits liquid
+  uniform highp float iceSparkle;   // cold silver glint on frozen plates
+  uniform highp float stepJitter;   // 0..1 footstep crack on ice (visual only)
+  uniform highp float waterWet;     // 0..1 rain on water (micro-ripples + heavy foam)
   // Optional world-XZ surface art (assets/water/water.png). Sampler always
   // bound (blank when the file is missing); waterArtOn gates the replace.
   uniform Image waterArt;
-  uniform float waterArtOn;   // 0 = tileset tile, 1 = sample waterArt
-  uniform float waterArtScale;// world pixels per one full UV cycle
-  uniform float waterArtMix;  // how far toward it, 0..1 -- see Water.ART_MIX
+  uniform highp float waterArtOn;   // 0 = tileset tile, 1 = sample waterArt
+  uniform highp float waterArtScale;// world pixels per one full UV cycle
+  uniform highp float waterArtMix;  // how far toward it, 0..1 -- see Water.ART_MIX
   // Optional world-XZ paving art (assets/floor/floor.png). Same always-bound
   // rule; floorArtOn is the switch. See lib/FloorArt.lua for why the class is
   // recognised from a colour box plus vUp plus a height rather than from a
   // tile id -- there is no tile id down here.
   uniform Image floorArt;
-  uniform float floorArtOn;
-  uniform float floorArtScale;
-  uniform float floorArtMix;
-  uniform float floorYMax;
+  uniform highp float floorArtOn;
+  uniform highp float floorArtScale;
+  uniform highp float floorArtMix;
+  uniform highp float floorYMax;
   // TWO boxes: the field and the lattice ruled over it are far apart in
   // colour, and one box wide enough for both swallows most of the sheet.
-  uniform vec3 floorKeyLo;
-  uniform vec3 floorKeyHi;
-  uniform vec3 floorKey2Lo;
-  uniform vec3 floorKey2Hi;
+  uniform highp vec3 floorKeyLo;
+  uniform highp vec3 floorKeyHi;
+  uniform highp vec3 floorKey2Lo;
+  uniform highp vec3 floorKey2Hi;
 
   bool inBox(vec3 c, vec3 lo, vec3 hi) {
     return all(greaterThanEqual(c, lo)) && all(lessThanEqual(c, hi));
   }
   // The deck over this water, as a COLOUR and a COVERAGE and never a shape
   // (Sky.deckColor / Sky.waterReflect).
-  uniform vec3 cloudReflCol;
-  uniform float cloudRefl;
+  uniform highp vec3 cloudReflCol;
+  uniform highp float cloudRefl;
   // iceLift lives with the vertex swell uniforms
   uniform Image glassMask;    // opaque where the atlas texel is window glass
-  uniform vec2 glassSize;     // the mask's dimensions: tc -> atlas texels
-  uniform float glassNight;   // 0 = daylight .. 1 = the lamps are on
-  uniform vec3 lampColor;     // what the lamps BURN (DayNight.lampColor)
-  uniform float glassPhase;   // the glint's phase: advances with TRAVEL
-  uniform float glassGlint;   // and its strength: 0 while standing still
-  uniform float glassOn;      // 0 for sprite-sheet draws (see Voxel3D.glass)
+  uniform highp vec2 glassSize;     // the mask's dimensions: tc -> atlas texels
+  uniform highp float glassNight;   // 0 = daylight .. 1 the lamps are on
+  uniform highp vec3 lampColor;     // what the lamps BURN (DayNight.lampColor)
+  uniform highp float glassPhase;   // the glint's phase: advances with TRAVEL
+  uniform highp float glassGlint;   // and its strength: 0 while standing still
+  uniform highp float glassOn;      // 0 for sprite-sheet draws (see Voxel3D.glass)
   // Up to eight nearby street lamps. xy = world XZ, z = radius and w =
   // intensity.  They are individual warm pools, not a global yellow tint.
   //
@@ -874,27 +874,27 @@ local SHADER = [[
   // floor: a lamp that only knows its ground position lights a wall beside it
   // exactly as hard as the road beneath it, which is the single thing that
   // makes fake lighting look fake. See localLamp.
-  uniform vec4 lamp0;
-  uniform vec4 lamp1;
-  uniform vec4 lamp2;
-  uniform vec4 lamp3;
-  uniform vec4 lamp4;
-  uniform vec4 lamp5;
-  uniform vec4 lamp6;
-  uniform vec4 lamp7;
-  uniform float lampGlow;
+  uniform highp vec4 lamp0;
+  uniform highp vec4 lamp1;
+  uniform highp vec4 lamp2;
+  uniform highp vec4 lamp3;
+  uniform highp vec4 lamp4;
+  uniform highp vec4 lamp5;
+  uniform highp vec4 lamp6;
+  uniform highp vec4 lamp7;
+  uniform highp float lampGlow;
 
 #ifdef ANIME_CEL
   // The cel rung's three numbers (see lib/Anime.lua). Declared inside the
   // define so a build without the rung carries no unused uniform and the
   // send below is free to fail silently against it.
-  uniform float animeBands;   // flat steps per unit of luminance
-  uniform float animeCell;    // the render-buffer cell the step snaps to
-  uniform float animeDither;  // checkerboard jitter, in band units
+  uniform highp float animeBands;   // flat steps per unit of luminance
+  uniform highp float animeCell;    // the render-buffer cell the step snaps to
+  uniform highp float animeDither;  // checkerboard jitter, in band units
 #endif
-  uniform float lampHeight;   // world y of the flame (from the post's bake)
-  uniform float lampFlicker;  // the gas clock; 0 holds every lamp perfectly still
-  uniform vec3 lampCore;      // the hot near-white at the centre of a pool
+  uniform highp float lampHeight;   // world y of the flame (from the post's bake)
+  uniform highp float lampFlicker;  // the gas clock; 0 holds every lamp perfectly still
+  uniform highp vec3 lampCore;      // the hot near-white at the centre of a pool
   // SNOW ON THE GEOMETRY ITSELF. 0..1, and it lands on the faces that point
   // at the sky -- vUp, which is a real face normal rather than a guess read
   // off how bright the face draws (see the `lie` line below for what that
@@ -904,9 +904,9 @@ local SHADER = [[
   //
   // Sent per DRAW and defaulting to zero, like `sway` and `glassOn`, so the
   // terrain wears it and the characters standing on the terrain do not.
-  uniform float snowTop;
-  uniform vec3 snowColor;
-  uniform float snowSide;     // how much of it a flank takes; 1 on the top
+  uniform highp float snowTop;
+  uniform highp vec3 snowColor;
+  uniform highp float snowSide;     // how much of it a flank takes; 1 on the top
 
   // One lamp's contribution here. Returns the energy in .x and how near the
   // flame this fragment is in .y, which the caller uses to run the pool from

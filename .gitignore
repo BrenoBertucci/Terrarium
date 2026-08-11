@@ -4,7 +4,7 @@
 # assets/docs/buidling_to_voxel/ -- generated on whatever machine ran them.
 __pycache__/
 *.py[cod]
-
+.vs/
 # agent worktrees and local scratch
 .claude/
 

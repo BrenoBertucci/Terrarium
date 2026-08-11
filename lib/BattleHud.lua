@@ -57,7 +57,7 @@ local frame = 0
 local luma = {}      -- panel key -> { value, dark, at }
 
 local SHADER = [[
-  uniform vec2 dir;
+  uniform highp vec2 dir;
   vec4 effect(vec4 color, Image tex, vec2 tc, vec2 sc) {
     vec4 sum = Texel(tex, tc) * 0.2270270270;
     sum += (Texel(tex, tc + dir) + Texel(tex, tc - dir)) * 0.1945945946;
@@ -291,7 +291,7 @@ end
 local INK = 0.35   -- luminance at or under which a pixel counts as ink
 
 local FLIP = [[
-  uniform float ink;
+  uniform highp float ink;
   vec4 effect(vec4 color, Image tex, vec2 tc, vec2 sc) {
     vec4 p = Texel(tex, tc);
     float luma = dot(p.rgb, vec3(0.299, 0.587, 0.114));

@@ -385,36 +385,36 @@ end
 -- edge in the sky lands on the diorama's pixel grid.
 local SHADER_SRC = [[
 uniform Image ramp;     // the bands, one texel each, top of the sky first
-uniform float count;    // how many texels wide that ramp is
-uniform float edge;     // the sky's bottom, in canvas pixels
-uniform float cell;     // the diorama's pixel size, in canvas pixels
-uniform float start;    // where the checker begins inside a band
-uniform float alpha;
-uniform float glowAmt;  // twilight warmth around the low sun; 0 = none
-uniform vec2 glowPos;   // the sun disc, in canvas pixels
-uniform float glowInvR; // 1 / the glow's reach
-uniform vec3 glowColor;
+uniform highp float count;    // how many texels wide that ramp is
+uniform highp float edge;     // the sky's bottom, in canvas pixels
+uniform highp float cell;     // the diorama's pixel size, in canvas pixels
+uniform highp float start;    // where the checker begins inside a band
+uniform highp float alpha;
+uniform highp float glowAmt;  // twilight warmth around the low sun; 0 = none
+uniform highp vec2 glowPos;   // the sun disc, in canvas pixels
+uniform highp float glowInvR; // 1 / the glow's reach
+uniform highp vec3 glowColor;
 // Volumetric clouds (cel density + wind advection). steps==0 skips the
 // march so a phone rung never pays for it.
-uniform float cloudAmt;    // coverage 0..1
-uniform float cloudTime;   // seconds * rate
-uniform vec2  cloudWind;   // unit XZ bearing
-uniform float cloudSteps;  // 0 / 4 / 6 / 8
-uniform vec3  cloudLit;    // sunlit face
-uniform vec3  cloudShade;  // self-shadow face
-uniform float cloudNight;  // 0 day .. 1 deep night dim
-uniform float frameW;      // canvas width for aspect-correct UVs
-uniform float cloudEvolve; // seconds * a slower rate: shape change, not drift
-uniform vec2  camOff;      // the camera in noise units -- the deck's parallax
+uniform highp float cloudAmt;    // coverage 0..1
+uniform highp float cloudTime;   // seconds * rate
+uniform highp vec2  cloudWind;   // unit XZ bearing
+uniform highp float cloudSteps;  // 0 / 4 / 6 / 8
+uniform highp vec3  cloudLit;    // sunlit face
+uniform highp vec3  cloudShade;  // self-shadow face
+uniform highp float cloudNight;  // 0 day .. 1 deep night dim
+uniform highp float frameW;      // canvas width for aspect-correct UVs
+uniform highp float cloudEvolve; // seconds * a slower rate: shape change, not drift
+uniform highp vec2  camOff;      // the camera in noise units -- the deck's parallax
 // Distant rain: a wall of shafts standing on the horizon, under the deck and
 // over the haze band. Leads the near streaks (Weather.curtain).
-uniform float curtainAmt;  // 0..1; 0.01 and under is the whole block off
-uniform vec3  curtainCol;
+uniform highp float curtainAmt;  // 0..1; 0.01 and under is the whole block off
+uniform highp vec3  curtainCol;
 // God rays: sunlight through a deck that is breaking up after a shower.
-uniform float rayAmt;      // 0..1 (Weather.afterRain, sun only -- not a moon)
-uniform vec2  rayPos;      // the disc, in canvas pixels
-uniform float rayInvR;     // 1 / the fan's reach
-uniform vec3  rayColor;
+uniform highp float rayAmt;      // 0..1 (Weather.afterRain, sun only -- not a moon)
+uniform highp vec2  rayPos;      // the disc, in canvas pixels
+uniform highp float rayInvR;     // 1 / the fan's reach
+uniform highp vec3  rayColor;
 
 // Band `i`, read from its own texel centre. The index is clamped rather than
 // trusted: `pos` below can land exactly on `count` when the arithmetic is

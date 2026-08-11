@@ -57,13 +57,13 @@ BattleDOF.SPACING = 0.0095
 BattleDOF.SATURATION = 1.12
 
 local SHADER = [[
-  uniform vec2 dir;        // one texel step along the axis being blurred
-  uniform float focusY;
-  uniform float band;
-  uniform float range;
-  uniform float spacing;
-  uniform float boost;     // 0 = plain blur pass, 1 = final pass (colour pop)
-  uniform float saturation;
+  uniform highp vec2 dir;        // one texel step along the axis being blurred
+  uniform highp float focusY;
+  uniform highp float band;
+  uniform highp float range;
+  uniform highp float spacing;
+  uniform highp float boost;     // 0 = plain blur pass, 1 = final pass (colour pop)
+  uniform highp float saturation;
   vec4 effect(vec4 color, Image tex, vec2 tc, vec2 sc) {
     float d = abs(tc.y - focusY) - band;
     float s = clamp(d / range, 0.0, 1.0);

@@ -384,10 +384,10 @@ RayFX.RAIN_RATE = 1.9         -- impacts per cell per second at full power
 
 local SHADER = [[
   uniform Image depthTex;
-  uniform mat4 invVP;       // clip -> world: the camera matrix run backwards
-  uniform vec3 eye;
-  uniform vec2 texel;       // one canvas pixel, in uv
-  uniform float aspect;     // canvas w/h, so a screen radius is round
+  uniform highp mat4 invVP;       // clip -> world: the camera matrix run backwards
+  uniform highp vec3 eye;
+  uniform highp vec2 texel;       // one canvas pixel, in uv
+  uniform highp float aspect;     // canvas w/h, so a screen radius is round
 
   // The cleared value. Nothing was drawn there, so it is sky -- which every
   // march below treats as "keep going, there is nothing here to hit".
@@ -425,9 +425,9 @@ local SHADER = [[
   }
 
 #ifdef RT_AO
-  uniform float aoRadius;   // the ring, in canvas pixels
-  uniform float aoRange;    // and how far a neighbour still shades, world px
-  uniform float aoPower;
+  uniform highp float aoRadius;   // the ring, in canvas pixels
+  uniform highp float aoRange;    // and how far a neighbour still shades, world px
+  uniform highp float aoPower;
 
   // The surface normal, out of four neighbouring depths rather than out of
   // fwidth().
@@ -523,12 +523,12 @@ local SHADER = [[
   }
 
 #ifdef RT_ANIME
-  uniform float animeRim;       // how much light the rim adds
-  uniform float animeRimEdge;   // where the silhouette starts, 1 - N.V
-  uniform vec3  animeRimColor;
-  uniform float animeInk;       // how far the line mixes toward the ink
-  uniform vec3  animeInkColor;
-  uniform float animeEdgeBias;  // out-of-plane distance that counts as edge
+  uniform highp float animeRim;       // how much light the rim adds
+  uniform highp float animeRimEdge;   // where the silhouette starts, 1 - N.V
+  uniform highp vec3  animeRimColor;
+  uniform highp float animeInk;       // how far the line mixes toward the ink
+  uniform highp vec3  animeInkColor;
+  uniform highp float animeEdgeBias;  // out-of-plane distance that counts as edge
 
   // THE LINE. One question asked four times: does the neighbouring pixel
   // stand OUT OF this pixel's own tangent plane?
@@ -617,37 +617,37 @@ local SHADER = [[
 #endif
 
 #ifdef RT_SSR
-  uniform mat4 vp;          // world -> clip, to walk the ray across the frame
-  uniform vec3 skyColor;    // what a ray that hits nothing came back with
-  uniform float swell;      // the water uniforms, exactly as the scene has them
-  uniform vec2 swellA;
-  uniform vec2 swellB;
-  uniform float swellPhase;
-  uniform float ssrAmount;
-  uniform float waterY;      // the band's ceiling, in the FLAT world
-  uniform float waterLo;     // and its floor
-  uniform float puddleTag;      // the mark the GROUND row stamps into alpha
-  uniform float puddleTagW;     // and how far off it a byte may land
-  uniform float puddleRipple;
-  uniform float puddleAmount;   // a film over paving reflects nearly all of it
-  uniform float puddleFresnel;  // and never drops below this, at any pitch
+  uniform highp mat4 vp;          // world -> clip, to walk the ray across the frame
+  uniform highp vec3 skyColor;    // what a ray that hits nothing came back with
+  uniform highp float swell;      // the water uniforms, exactly as the scene has them
+  uniform highp vec2 swellA;
+  uniform highp vec2 swellB;
+  uniform highp float swellPhase;
+  uniform highp float ssrAmount;
+  uniform highp float waterY;      // the band's ceiling, in the FLAT world
+  uniform highp float waterLo;     // and its floor
+  uniform highp float puddleTag;      // the mark the GROUND row stamps into alpha
+  uniform highp float puddleTagW;     // and how far off it a byte may land
+  uniform highp float puddleRipple;
+  uniform highp float puddleAmount;   // a film over paving reflects nearly all of it
+  uniform highp float puddleFresnel;  // and never drops below this, at any pitch
   // The probe's eye: paint what the pass CLASSIFIES rather than shade with
   // it. A reflection that lands on the wrong surface is invisible until it
   // is strong enough to be a bug, and the pair of shots that would show it
   // are two different frames of a rain animation -- so the only honest test
   // of a mask is to look at the mask. 0 in every build the player runs.
-  uniform float debugMask;
-  uniform vec3 curveK;       // xy = the bend's focus in world XZ, z = k
+  uniform highp float debugMask;
+  uniform highp vec3 curveK;       // xy = the bend's focus in world XZ, z = k
   // The shower, and the clock it rides. `rain` is Water.rain() -- 0 when
   // nothing is falling, which is what makes a drying pool go glassy still.
-  uniform float rain;
-  uniform float rainPhase;      // seconds, absolute (see Water.phase)
-  uniform float rainChop;       // the scatter's slope at full downpour
-  uniform float rainChopFreq;   // radians per world pixel
-  uniform float rainRing;       // an impact ring's own slope
-  uniform float rainRingFreq;
-  uniform float rainReach;      // world px a ring travels before it is gone
-  uniform float rainRate;       // impacts per cell per second
+  uniform highp float rain;
+  uniform highp float rainPhase;      // seconds, absolute (see Water.phase)
+  uniform highp float rainChop;       // the scatter's slope at full downpour
+  uniform highp float rainChopFreq;   // radians per world pixel
+  uniform highp float rainRing;       // an impact ring's own slope
+  uniform highp float rainRingFreq;
+  uniform highp float rainReach;      // world px a ring travels before it is gone
+  uniform highp float rainRate;       // impacts per cell per second
 
   // How far the V-CURVE dropped this column. The same expression the vertex
   // shader applies, read here so it can be taken back off: everything the
@@ -855,9 +855,9 @@ local SHADER = [[
 #endif
 
 #ifdef RT_SHAFTS
-  uniform vec2 sunUV;
-  uniform vec3 shaftColor;
-  uniform float shaftAmount;   // 0 = no body worth marching toward
+  uniform highp vec2 sunUV;
+  uniform highp vec3 shaftColor;
+  uniform highp float shaftAmount;   // 0 = no body worth marching toward
 
 #define SHAFT_STEPS 14
 #define SHAFT_DENSITY 0.85
