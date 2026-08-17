@@ -1,0 +1,18 @@
+{
+  "format": "terrarium-tree-v2",
+  "kind": "tree_willow",
+  "bin": "tree_willow.mesh.bin",
+  "texture": "tree_willow.png",
+  "verts": 1091,
+  "indices": 1260,
+  "tris": 420,
+  "trunkTris": 9,
+  "canopyTris": 411,
+  "height": 28.542476892471313,
+  "radius": 13.256835043430328,
+  "canopyY": 4.470348358154297e-06,
+  "canopyR": 15.652730013483055,
+  "canopyWeightBase": 0.0,
+  "canopyWeightCrown": 0.6364350914955139,
+  "source": "tree_willow.glb"
+}

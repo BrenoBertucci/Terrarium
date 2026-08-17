@@ -19,11 +19,57 @@ MAJOR.MINOR.PATCH[-CHANNEL]
 
 Tags and packages:
 
-- Git tag: `v1.21.0-mobile`
-- Zip asset: `TERRARIUM-1.21.0-mobile.zip`
-- `manifest.json` / catalog `version` field: `1.21.0-mobile`
+- Git tag: `v1.22.0-mobile`
+- Zip asset: `TERRARIUM-1.22.0-mobile.zip`
+- `manifest.json` / catalog `version` field: `1.22.0-mobile`
 
 ## Unreleased
+
+## 1.22.0-mobile
+
+Trees that are trees, rain that is water, and the street lamps that were
+quietly never loading.
+
+### Authored 3D trees
+
+Round-tree sites wear a real triangle tree (willow bake) instead of the
+outline hull carved from the tileset. One combined mesh per map, built
+across frames so a route does not stall for half a second while the forest
+appears.
+
+The sun pass no longer consumes the build (it was stamping two slices per
+tick). Abandoned builds retire when you walk off the map. Card-less shadow
+meshes now exclude the foliage cards (28% fewer triangles on the depth
+pass).
+
+### Canopy shelter
+
+A per-cell crown cover rides the unused alpha channel of the grass-wear
+field -- no second texture, no second tap. Puddles do not form under a
+dense crown, and snow thins patchily instead of leaving a clean circle.
+Not folded into the wind-lee channel: rain still falls behind a wall.
+
+### Rain and after-rain drip
+
+Streaks are a mesh with per-vertex alpha, drawn additive, in one call for
+the whole field. They lean with the wind as a fraction of their own length
+instead of standing like a picket fence. Splashes are a ring, not a plus
+sign.
+
+After the sky clears, the canopy keeps dripping for about three minutes
+(the same mote the roof eaves already use).
+
+### Street lamps actually load
+
+The engine's `love.filesystem` proxy raises on field access, so the old
+reader threw before any fallback and every town silently got the box
+templates. The authored post now loads through `mod:read` / a guarded
+filesystem / Assets / native io -- the same ladder the grass bake uses.
+
+The rebake finds lantern glass from the wide head above the shaft and the
+amber panes in the atlas, so the night pool hangs on the lantern instead
+of a guessed height band. Posts on a neighbouring town draw with that
+town (glass mask off -- `lamppost.png` is not the tileset atlas).
 
 ## 1.21.0-mobile
 

@@ -199,17 +199,50 @@ local function candidatePaths(name)
   return { rel, abs, absWin }
 end
 
+-- Read a shipped asset, trying every route this engine might offer.
+--
+-- THE love.filesystem BLOCK IS INSIDE ONE pcall, AND THAT IS THE POINT.
+--
+-- The previous cut guarded the reads and not the guard:
+--
+--     if love and love.filesystem and love.filesystem.read then
+--       local ok, data = pcall(love.filesystem.read, path)
+--
+-- which looks defensive and is not. This engine does not merely omit
+-- love.filesystem for mods -- it installs a proxy that RAISES ON FIELD
+-- ACCESS ("love.filesystem is not available to mods, use mod.storage and
+-- mod:read"), so `love.filesystem.read` in the condition threw before any
+-- guarded call ran, outside every pcall, and took the two fallbacks below
+-- with it. The authored post could never load: every town quietly got the
+-- box templates, and nothing said so.
+--
+-- Grass3D hit this first and its header records the same diagnosis; this is
+-- that fix applied to the other prop reader.
 local function readBinary(name)
   for _, path in ipairs(candidatePaths(name)) do
-    if love and love.filesystem and love.filesystem.read then
-      local ok, data = pcall(love.filesystem.read, path)
+    -- 0. the sanctioned mod API, when the host provides one
+    if V and V.mod and V.mod.read then
+      local ok, data = pcall(V.mod.read, V.mod, path)
       if ok and type(data) == "string" and #data > 16 then return data end
     end
+    -- 1. love.filesystem, IF this build lets a mod touch it at all
+    do
+      local ok, data = pcall(function()
+        local lf = love and rawget(love, "filesystem")
+        if not (lf and lf.read) then return nil end
+        local d = lf.read(path)
+        if type(d) == "string" and #d > 16 then return d end
+        return nil
+      end)
+      if ok and type(data) == "string" and #data > 16 then return data end
+    end
+    -- 2. engine Assets helper, if it has a raw read
     local okA, Assets = pcall(require, "src.render.Assets")
     if okA and Assets and Assets.read then
       local ok, data = pcall(Assets.read, path)
       if ok and type(data) == "string" and #data > 16 then return data end
     end
+    -- 3. native file (desktop absolute path under V.path)
     if io and io.open then
       local f = io.open(path, "rb")
       if f then

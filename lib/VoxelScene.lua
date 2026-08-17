@@ -1,4 +1,4 @@
-﻿-- Voxel world mode: assemble and draw one frame of the 3D scene.
+-- Voxel world mode: assemble and draw one frame of the 3D scene.
 --
 -- World space is world pixels and shares its origin with the 2D paths, so
 -- the terrain mesh needs no transform at all and a connected map just
@@ -881,6 +881,20 @@ local function castShadows(state, terrain, nbMesh, posed, cx, cy, vw, vh,
     end
   end
 
+  -- Authored trees, for the same reason and at the same place. A forest
+  -- that casts nothing reads as hovering, not as unshadowed.
+  do
+    local okT, Trees3D = pcall(V.require, "Trees3D")
+    if okT and Trees3D and Trees3D.castShadows then
+      pcall(Trees3D.castShadows, state.map)
+      if Quality.neighbourShadows() then
+        for _, nb in ipairs(state.neighbors or {}) do
+          pcall(Trees3D.castShadows, nb.map, nb.ox, nb.oy)
+        end
+      end
+    end
+  end
+
   ShadowMap.finish(sig)
 end
 
@@ -1375,6 +1389,20 @@ function VoxelScene.render(state, w, h, vw, vh, paletteFor)
   for _, nb in ipairs(state.neighbors or {}) do
     local nOut = nb.map and nb.map.def and Map.isOutdoor(nb.map.def)
     pcall(StreetLamps.draw, nb.map, nOut, nb.ox, nb.oy)
+  end
+  -- Authored trees ride the same pass for the same reason: their bake is
+  -- its own texture, not the tileset atlas, so they need seams and the
+  -- window-light mask off exactly as the posts do. When no bake is present
+  -- this is a no-op and the hulls in the terrain mesh are the forest.
+  do
+    local okT, Trees3D = pcall(V.require, "Trees3D")
+    if okT and Trees3D then
+      pcall(Trees3D.draw, state.map, outdoor)
+      for _, nb in ipairs(state.neighbors or {}) do
+        local nOut = nb.map and nb.map.def and Map.isOutdoor(nb.map.def)
+        pcall(Trees3D.draw, nb.map, nOut, nb.ox, nb.oy)
+      end
+    end
   end
   Voxel3D.glass(true)
   -- and, underground, the corridor itself: slab, walls, the fittings the

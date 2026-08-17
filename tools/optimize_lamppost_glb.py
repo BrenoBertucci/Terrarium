@@ -367,6 +367,88 @@ def main():
     print(f"reduced verts={len(pos)} tris={len(tris)}")
 
     # Place the post: feet on y=0, centred on xz, scaled to the world height.
+    def find_glass_without_emissive(pos, uv, tris, base_img, height):
+        """Which triangles are lantern glass, for a GLB that ships no emissive map.
+
+        Model generators produce a basecolor and (optionally) metallic /
+        roughness / normal.  Emissive is not among them, so the mask the
+        original bake read simply is not there, and the old fallback -- "the
+        top 20% is the lantern" -- is a guess about HEIGHT.  It decides where
+        StreetLamps hangs its point light (flameHeight reads lampY straight
+        out of this bake), so a guess puts the pool of light in the wrong
+        place on every post in every town.
+
+        The shape knows better than the guess.  A lamp post is a thin shaft
+        with something WIDE on top, so:
+
+          1. Bin the model into height bands and measure each band's radius
+             about the vertical axis.
+          2. The shaft is the middle of the model; take its median radius.
+          3. The lantern is the topmost run of bands wider than 1.5x that.
+
+        That much finds the whole head -- roof cap, panes and collar.  The
+        roof is not glass: flattening it to the lamp colour at night would
+        light up the tin.  So inside the head, glass is the part that is
+        WARM AND BRIGHT in the basecolor, which is the amber the panes were
+        authored with.  Colour alone is not enough (a cream shaft is bright
+        too), and geometry alone is not enough (the roof is up there too);
+        the pair is what isolates the panes.
+        """
+        r = np.sqrt(pos[:, 0] ** 2 + pos[:, 2] ** 2)
+        BANDS = 64
+        band = np.clip((pos[:, 1] / max(height, 1e-9) * BANDS).astype(int), 0, BANDS - 1)
+        band_r = np.array([
+            r[band == b].max() if (band == b).any() else 0.0 for b in range(BANDS)
+        ])
+        mid = band_r[int(BANDS * 0.30):int(BANDS * 0.70)]
+        shaft_r = float(np.median(mid[mid > 0])) if (mid > 0).any() else 0.0
+        if shaft_r <= 0:
+            raise SystemExit("lantern: no shaft to measure; the model is not a post")
+
+        wide = band_r > shaft_r * 1.5
+        if not wide[int(BANDS * 0.5):].any():
+            raise SystemExit(
+                "lantern: nothing above half height is wider than 1.5x the shaft "
+                f"(shaft r={shaft_r:.3f}, max r={band_r.max():.3f}). "
+                "Refusing to ship a post whose light would hang at a guessed height."
+            )
+        top = BANDS - 1
+        while top > 0 and not wide[top]:
+            top -= 1
+        low = top
+        while low > 0 and wide[low - 1]:
+            low -= 1
+        head_y0 = low / BANDS * height
+        print(f"lantern: shaft r={shaft_r:.3f}, head from y={head_y0:.1f} to {height:.1f}")
+
+        centroid = (pos[tris[:, 0]] + pos[tris[:, 1]] + pos[tris[:, 2]]) / 3.0
+        in_head = centroid[:, 1] >= head_y0
+
+        # Amber is not merely "warm": the roof cap is warm too, and a plain
+        # warm test handed 1262 of 1800 triangles to the glass -- the whole
+        # head, tin roof included, which the night pass would then light up.
+        #
+        # What separates them is the GREEN-TO-RED RATIO, measured off the
+        # baked atlas rather than guessed:
+        #
+        #     amber pane   (224,160, 64)   G/R 0.71   B/G 0.40
+        #     roof cap     (160, 32, 32)   G/R 0.20
+        #     cream shaft  (224,224,192)   G/R 1.00   B/G 0.86
+        #
+        # so glass is the middle band of that ratio, bright, and low in blue
+        # (which is what keeps cream out).
+        uv_mid = (uv[tris[:, 0]] + uv[tris[:, 1]] + uv[tris[:, 2]]) / 3.0
+        rgb = sample(base_img, uv_mid)
+        red = np.maximum(rgb[:, 0], 1e-6)
+        gr = rgb[:, 1] / red
+        amber = (rgb[:, 0] > 0.60) & (gr > 0.55) & (gr < 0.90) & (rgb[:, 2] < 0.65 * rgb[:, 1])
+        glass = in_head & amber
+        if glass.sum() < 8:
+            print(f"note: only {int(glass.sum())} warm triangles in the head; "
+                  "using the whole head as glass")
+            glass = in_head
+        return glass
+
     def normalize(p, scale=None):
         p = p.copy()
         p[:, 0] -= (p[:, 0].min() + p[:, 0].max()) * 0.5
@@ -403,12 +485,8 @@ def main():
         tri_glass = np.zeros(len(tris), dtype=bool)
     body_tris, glass_tris = tris[~tri_glass], tris[tri_glass]
     if len(glass_tris) == 0:
-        # No emissive authored: treat the top eighth as the lantern so the
-        # lamp still reads as lit rather than as a dark pole at midnight.
-        cy = pos[tris[:, 0], 1]
-        tri_glass = cy > height * 0.80
+        tri_glass = find_glass_without_emissive(pos, uv, tris, base_img, height)
         body_tris, glass_tris = tris[~tri_glass], tris[tri_glass]
-        print("note: no emissive texels over cut; using the top 20% as glass")
     glass_pos = pos[np.unique(glass_tris.ravel())] if len(glass_tris) else pos
     lamp_y = float(glass_pos[:, 1].mean())
     lamp_r = float(np.sqrt(glass_pos[:, 0] ** 2 + glass_pos[:, 2] ** 2).max())

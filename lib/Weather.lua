@@ -706,10 +706,18 @@ Weather.STREAKS_MAX = 80
 -- World-space shafts at full power, around the player. Quality.scale cuts
 -- this the same way it cuts WindFX -- 1/4 RES cannot afford a hundred
 -- extra projections.
-Weather.SHAFTS = 88
-Weather.SHAFTS_MAX = 140
+-- Raised once the field became ONE draw call instead of one per drop.
+-- Thin rain is most of what made this look fake -- a shower is a texture
+-- of many faint streaks, and at eighty-eight you can count them. The old
+-- numbers were rationing draw calls, not fill rate.
+Weather.SHAFTS = 150
+Weather.SHAFTS_MAX = 240
 Weather.SHAFT_FALL = 102            -- world px / s
 Weather.SHAFT_LEN = 16              -- world px of streak above the drop
+-- How far a shaft leans back per unit of streak, at full wind. A fraction
+-- of its own LENGTH, so the slant is an angle rather than a pixel count
+-- that vanishes the moment the streak gets longer.
+Weather.LEAN = 0.20
 Weather.SHAFT_REACH = 9             -- cells around the player
 -- Splashes are mostly spawned by a shaft hitting something. A small
 -- ambient floor stays so a street still ticks when the shafts are sparse.
@@ -739,6 +747,13 @@ Weather.RAIN_NEAR = { 0.86, 0.92, 1.00 }
 Weather.RAIN_MID  = { 0.70, 0.80, 0.94 }
 Weather.RAIN_FAR  = { 0.50, 0.62, 0.82 }
 Weather.RAIN_CORE = { 0.96, 0.98, 1.00 }   -- bright tip on near streaks
+-- The streak's alpha at each end, as a share of the drop's own. Additive,
+-- so these are far below the opaque draw's: a shower is hundreds of faint
+-- highlights, and a drop bright enough to read on its own is a scratch.
+-- The tail is not zero on purpose -- a trail that vanishes completely
+-- makes the head look like a floating dash.
+Weather.ADD_HEAD = 0.62
+Weather.ADD_TAIL = 0.05
 Weather.SPLASH = { 0.85, 0.92, 1.00 }
 Weather.SNOW = { 0.97, 0.98, 1.00 }
 
@@ -968,6 +983,83 @@ local function spawnDrip(ow, x, z, yRoof)
     kind = "drip", x = nx, z = nz, y = yRoof - 1,
     yLand = yLand, fall = 70 + rand() * 30,
     t = 0, ttl = 1.4,
+  }
+end
+
+-- ------- AND THE WOOD KEEPS RAINING AFTER THE SKY STOPS
+--
+-- A canopy holds water and lets it go slowly, so the minutes after a
+-- shower are the ones where standing under a tree still gets you wet. It
+-- is the other half of the shelter the canopy gives (GrassWear's alpha
+-- channel, baked by Trees3D): the same crown that kept the ground dry is
+-- what is dripping onto it now.
+--
+-- NEVER ITERATES THE FOREST. A route is 862 trees and this runs every
+-- frame for three minutes; walking that list to find the near ones would
+-- cost more than the whole weather system. Instead it throws a dart at a
+-- cell near the player and ASKS whether that cell is under a crown -- one
+-- O(1) read of a field that is already baked and already resident. The
+-- reach is what makes it local, and the cover is what makes it land on
+-- trees; neither needs a list.
+--
+-- Reuses the "drip" mote the eaves already use, so a drop off a branch and
+-- a drop off the Mart's roof fall and land through the same code.
+Weather.DRIP_REACH = 7            -- cells around the player
+Weather.DRIP_COVER = 0.35         -- below this a cell is not under enough tree
+Weather.DRIP_MAX = 26             -- live canopy drips at once
+-- SPAWN ATTEMPTS per second, and it is four steps removed from how many
+-- drips are actually on screen -- which is why the first two guesses at
+-- this number were both far too low (11 and 48 each measured a peak of
+-- THREE in a whole wood).
+--
+-- The arithmetic, because guessing it twice was enough:
+--
+--   attempts/s            this number
+--   x ~0.25               most darts land on a cell with no crown over
+--                         it, or lose the roll against a thin one
+--   = spawns/s
+--   x ~0.25 s of LIFE     and this is the part that bites: a drop leaves
+--                         a branch about DRIP_HEIGHT above the ground and
+--                         falls at ~80 px/s, so it exists for a quarter
+--                         of a second. The mote's 1.6 s ttl never runs --
+--                         it lands long before that.
+--   = drips alive
+--
+-- So ~16 attempts for every drip visible at once. 170 buys about ten,
+-- which is a wood letting go here and there rather than a downpour.
+Weather.DRIP_RATE = 170
+-- How far above the ground a branch lets go. The bake stands ~28 model
+-- units and a route's sites scale it to about two thirds of that, so this
+-- is the underside of a crown rather than its top -- a drop that started
+-- at the very tip would fall past the silhouette it is supposed to come
+-- from.
+Weather.DRIP_HEIGHT = 14
+
+local function spawnCanopyDrip(ow)
+  local p = ow.player
+  if not p then return end
+  local r = Weather.DRIP_REACH
+  local cx = p.cellX + rand(-r, r)
+  local cy = p.cellY + rand(-r, r)
+  local cover = 0
+  local okg, GW = pcall(V.require, "GrassWear")
+  if okg and GW and GW.canopyAt then
+    local okv, v = pcall(GW.canopyAt, cx, cy)
+    cover = (okv and tonumber(v)) or 0
+  end
+  if cover < Weather.DRIP_COVER then return end
+  -- Denser crown drips more often, so a wood's interior ticks and its
+  -- fringe only occasionally -- the gradient the field already carries,
+  -- spent rather than thresholded away.
+  if rand() > cover then return end
+  local x = cx * 16 + rand(0, 15)
+  local z = cy * 16 + rand(0, 15)
+  local yLand = select(1, surfaceAt(ow, x, z))
+  motes[#motes + 1] = {
+    kind = "drip", x = x, z = z,
+    y = yLand + Weather.DRIP_HEIGHT + rand() * 5,
+    yLand = yLand, fall = 62 + rand() * 34,
+    t = 0, ttl = 1.6,
   }
 end
 
@@ -1225,7 +1317,16 @@ local function tick(dt)
   -- Splashes and flakes need a map to stand on and a player to stand near, so
   -- they stop the moment either is missing -- and they are dropped outright
   -- when the sky closes over, rather than left to drift indoors.
-  local canDraw = visible and ow and ow.map and ow.player
+  -- The after-rain window keeps the world half alive: the sky is clear, so
+  -- `visible` is nil and everything below used to be dropped outright --
+  -- which would have thrown away the canopy drips on the frame the shower
+  -- ended, i.e. exactly when they are the whole point.
+  local dripAfter = 0
+  do
+    local okA, v = pcall(Weather.afterRain)
+    if okA then dripAfter = tonumber(v) or 0 end
+  end
+  local canDraw = (visible or dripAfter > 0) and ow and ow.map and ow.player
                   and Game.stack and Game.stack:top() == ow
                   and not ow.transitioning
   if not canDraw then
@@ -1249,10 +1350,35 @@ local function tick(dt)
       if motes[i].kind == "splash" then splashes = splashes + 1 end
     end
     for _ = 1, math.max(0, floor - splashes) do spawnSplash(ow) end
-  else
+  elseif visible then
     if #shafts > 0 then shafts = {} end
     local want_n = math.floor(Weather.FLAKES * state.power)
     for _ = 1, math.min(3, math.max(0, want_n - #motes)) do spawnFlake(ow) end
+  else
+    if #shafts > 0 then shafts = {} end
+  end
+
+  -- ------- the wood, still letting go of the last shower
+  --
+  -- Runs whether or not the sky is still doing something, because the
+  -- window outlives the rain by design (AFTER_RAIN is three minutes) and
+  -- because a shower tailing off into a dripping wood is the transition
+  -- worth having. Budgeted by a live count rather than a rate limiter: the
+  -- ceiling is what guarantees this cannot become the frame, and drips die
+  -- on their own in under two seconds.
+  if dripAfter > 0 then
+    local live = 0
+    for i = 1, #motes do
+      if motes[i].kind == "drip" then live = live + 1 end
+    end
+    if live < Weather.DRIP_MAX then
+      local tries = Weather.DRIP_RATE * dripAfter * dt
+      local whole = math.floor(tries)
+      if rand() < tries - whole then whole = whole + 1 end
+      for _ = 1, math.min(whole, Weather.DRIP_MAX - live) do
+        spawnCanopyDrip(ow)
+      end
+    end
   end
 
   local windAmt = 0
@@ -1365,12 +1491,125 @@ local LAYER_ORDER = { far = 1, mid = 2, near = 3 }
 local function layerRank(d)
   return LAYER_ORDER[d.layer or (d.near and "near" or "far")] or 2
 end
+-- ------- A RAIN STREAK IS A NEEDLE, NOT A BAR
+--
+-- What was here was `setLineWidth` + `g.line`, and a thick LOVE line is a
+-- rectangle with square ends -- so every drop in the world was a white
+-- stick of even brightness that stopped dead at both ends. Zoomed in on a
+-- rain screenshot they read as poles standing in the air, which is exactly
+-- what a rectangle is.
+--
+-- A falling drop does not look like that. It is brightest and widest where
+-- the water is, and behind it is a thinning trail of where it just was. So
+-- this draws a QUAD that is wide at the head and comes to a point at the
+-- tail -- one draw call, same as the line it replaces, and the shape does
+-- the work.
+--
+-- The bright head is a SECOND short needle rather than the square that
+-- used to be stamped over the tip. A square head on a slanted streak sits
+-- crooked on it at every angle except vertical, which was most of what
+-- made the near drops look pasted on.
+--
+-- Two flat tones and no gradient, which is this file's rule and the right
+-- one: a soft-edged raindrop over a cel-shaded diorama reads as a photo
+-- filter. A taper is a SHAPE, not a blur.
+-- ONE MESH FOR THE WHOLE SHOWER, and the colour lives in the vertices.
+--
+-- Three problems solved by the same change, which is why it is a mesh and
+-- not another loop of primitives:
+--
+--   IT LOOKED PAINTED. Every drop was one flat colour from end to end, so
+--   the field read as white sticks lying on the picture. Water does not
+--   look like that: a falling drop is bright where the water IS and fades
+--   to nothing along the trail behind it. Per-vertex alpha gives that for
+--   free -- the head vertices carry the light, the tail vertices carry
+--   almost none, and the hardware interpolates between them. There is no
+--   way to draw that with a line or a polygon, which take one colour.
+--
+--   IT LOOKED OPAQUE. Rain is nearly clear: you see it because it CATCHES
+--   light, not because it covers what is behind it. So this draws
+--   ADDITIVE -- it brightens the trees and the sky rather than painting
+--   over them -- which is also why the alphas below are far lower than the
+--   ones the old opaque draw needed.
+--
+--   IT COST A DRAW CALL PER DROP. A hundred-odd setColor/line pairs per
+--   frame is what kept the counts down, and thin rain is exactly what
+--   makes a shower look fake. One buffer, one draw, and the density stops
+--   being the thing being rationed.
+--
+-- g.polygon is also gone, and not only for cost: LOVE throws on a fill it
+-- considers degenerate or self-intersecting, so a streak that happened to
+-- collapse took the whole driver down mid-run. A mesh has no such opinion.
+local RAIN_FMT = {
+  { "VertexPosition", "float", 2 },
+  { "VertexColor", "float", 4 },
+}
+local rainV, rainMesh, rainN, rainCap = {}, nil, 0, 0
+
+local function rainReset(maxQuads)
+  local need = maxQuads * 6
+  if need > rainCap then
+    -- The vertex tables are allocated ONCE and mutated in place from then
+    -- on. Rebuilding them per frame would put a few thousand short-lived
+    -- tables a second in front of the GC, on the machine least able to
+    -- afford it.
+    for i = rainCap + 1, need do rainV[i] = { 0, 0, 1, 1, 1, 0 } end
+    rainCap = need
+    rainMesh = nil
+  end
+  if rainMesh == nil and love.graphics and love.graphics.newMesh then
+    local ok, m = pcall(love.graphics.newMesh, RAIN_FMT, rainV,
+                        "triangles", "stream")
+    rainMesh = (ok and m) or false
+  end
+  rainN = 0
+end
+
+-- One streak: a quad, wide and bright at the head, narrow and transparent
+-- at the tail.
+local function rainPush(hx, hy, ux, uy, w, r, g, b, aH, aT)
+  if not rainMesh then return end
+  local i = rainN * 6
+  if i + 6 > rainCap then return end
+  local dx, dy = hx - ux, hy - uy
+  local l2 = dx * dx + dy * dy
+  if l2 < 0.25 then return end
+  local inv = 1 / math.sqrt(l2)
+  local px, py = -dy * inv, dx * inv
+  local hw = w * 0.5
+  local tw = hw * 0.22
+  local h1x, h1y = hx + px * hw, hy + py * hw
+  local h2x, h2y = hx - px * hw, hy - py * hw
+  local t1x, t1y = ux + px * tw, uy + py * tw
+  local t2x, t2y = ux - px * tw, uy - py * tw
+  local v
+  v = rainV[i + 1]; v[1] = h1x; v[2] = h1y; v[3] = r; v[4] = g; v[5] = b; v[6] = aH
+  v = rainV[i + 2]; v[1] = h2x; v[2] = h2y; v[3] = r; v[4] = g; v[5] = b; v[6] = aH
+  v = rainV[i + 3]; v[1] = t2x; v[2] = t2y; v[3] = r; v[4] = g; v[5] = b; v[6] = aT
+  v = rainV[i + 4]; v[1] = h1x; v[2] = h1y; v[3] = r; v[4] = g; v[5] = b; v[6] = aH
+  v = rainV[i + 5]; v[1] = t2x; v[2] = t2y; v[3] = r; v[4] = g; v[5] = b; v[6] = aT
+  v = rainV[i + 6]; v[1] = t1x; v[2] = t1y; v[3] = r; v[4] = g; v[5] = b; v[6] = aT
+  rainN = rainN + 1
+end
+
+local function rainFlush()
+  if not rainMesh or rainN == 0 then return end
+  local g = love.graphics
+  rainMesh:setVertices(rainV)
+  rainMesh:setDrawRange(1, rainN * 6)
+  local pm, pa = g.getBlendMode()
+  g.setBlendMode("add", "alphamultiply")
+  g.setColor(1, 1, 1, 1)
+  g.draw(rainMesh)
+  g.setBlendMode(pm, pa)
+end
+
 
 local function drawDrops(h, power)
   if power <= 0.01 or #drops == 0 then return end
   local g = love.graphics
   local scale = math.max(1, h / 288)
-  local prevWidth = g.getLineWidth and g.getLineWidth() or 1
+  rainReset(#drops)
 
   -- cheap insertion order: partition into three buckets (no full sort)
   local buckets = { {}, {}, {} }
@@ -1409,21 +1648,18 @@ local function drawDrops(h, power)
       local shim = 0.82 + 0.18 * math.sin((d.phase or 0) * 6.2832)
       local a = (d.alpha or 0.4) * power * shim
       local thick = (d.thick or 1) * scale
-      if g.setLineWidth then g.setLineWidth(thick) end
-      g.setColor(c[1], c[2], c[3], a)
-      g.line(d.x, d.y, d.x + dx, d.y + dy)
-      -- bright core tip on near drops (the "head" of a stretch particle)
-      if (d.layer == "near" or d.near) and a > 0.2 then
-        local tip = 0.28
-        local core = Weather.RAIN_CORE
-        if g.setLineWidth then g.setLineWidth(thick * 0.55) end
-        g.setColor(core[1], core[2], core[3], a * 0.85)
-        g.line(d.x + dx * (1 - tip), d.y + dy * (1 - tip),
-               d.x + dx, d.y + dy)
-      end
+      -- Head is where the drop IS (x+dx, y+dy); the tail is where it came
+      -- from. Same buffer as the world shafts, so the mist in front of the
+      -- camera and the rain behind it are one drawing at two scales rather
+      -- than two different-looking rains in one frame.
+      local head = c
+      if d.layer == "near" or d.near then head = Weather.RAIN_CORE end
+      rainPush(d.x + dx, d.y + dy, d.x, d.y, thick,
+               head[1], head[2], head[3],
+               a * Weather.ADD_HEAD, a * Weather.ADD_TAIL)
     end
   end
-  if g.setLineWidth then g.setLineWidth(prevWidth) end
+  rainFlush()
 end
 
 -- World-space shafts: project the drop and a point `len` above it (upwind
@@ -1434,7 +1670,7 @@ end
 local function drawShafts(project, scale, power)
   if power <= 0.01 or #shafts == 0 then return end
   local g = love.graphics
-  local prevWidth = g.getLineWidth and g.getLineWidth() or 1
+  rainReset(#shafts)
   local wAmt = 0
   local okw, n = pcall(Wind.amount)
   if okw then wAmt = n or 0 end
@@ -1454,9 +1690,17 @@ local function drawShafts(project, scale, power)
       local s = list[i]
       local hx, hy, hps = project(s.x, s.y, s.z)
       if hx then
-        local tx = s.x - wdx * wAmt * 0.35
+        -- WHERE THE DROP WAS, and the lean is a fraction of the streak's
+        -- own LENGTH rather than a flat number of pixels. It used to be
+        -- `wAmt * 0.35` -- about half a pixel of sideways against sixteen
+        -- of fall, so every shaft in every wind stood bolt upright and the
+        -- field read as a picket fence rather than as weather. Tying it to
+        -- the length means the lean survives whatever the streak length
+        -- becomes, and a gale actually slants the rain.
+        local lean = Weather.LEAN * math.min(wAmt, 3) * s.len
+        local tx = s.x - wdx * lean
         local ty = s.y + s.len
-        local tz = s.z - wdz * wAmt * 0.35
+        local tz = s.z - wdz * lean
         local ux, uy, ups = project(tx, ty, tz)
         if not ux then ux, uy, ups = hx, hy - (s.len * (hps or 1)), hps end
         local c
@@ -1472,20 +1716,16 @@ local function drawShafts(project, scale, power)
         -- perspective: nearer shafts read brighter and thicker
         if ps > 1 then a = a * math.min(1.25, 0.75 + ps * 0.25) end
         local thick = math.max(1, (s.thick or 1) * scale * math.max(0.7, ps))
-        if g.setLineWidth then g.setLineWidth(thick) end
-        g.setColor(c[1], c[2], c[3], a)
-        g.line(ux, uy, hx, hy)
-        if s.layer == "near" and a > 0.22 then
-          local core = Weather.RAIN_CORE
-          local d = math.max(1.2, scale * ps * 1.15)
-          g.setColor(core[1], core[2], core[3], a * 0.95)
-          g.rectangle("fill", hx - d * 0.45, hy - d * 0.45, d * 0.9, d * 0.9)
-        end
+        local head = c
+        if s.layer == "near" then head = Weather.RAIN_CORE end
+        rainPush(hx, hy, ux, uy, thick, head[1], head[2], head[3],
+                 a * Weather.ADD_HEAD, a * Weather.ADD_TAIL)
       end
     end
   end
-  if g.setLineWidth then g.setLineWidth(prevWidth) end
+  rainFlush()
 end
+
 
 local function drawSplash(g, sx, sy, s, m, power)
   local k = m.t / m.ttl
@@ -1496,11 +1736,24 @@ local function drawSplash(g, sx, sy, s, m, power)
   local c = Weather.SPLASH
   local t = math.max(1, s * 0.7)
   g.setColor(c[1], c[2], c[3], a)
-  -- four cardinal ticks (the ring)
-  g.rectangle("fill", sx - r, sy - t * 0.5, r * 0.55, t)
-  g.rectangle("fill", sx + r * 0.45, sy - t * 0.5, r * 0.55, t)
-  g.rectangle("fill", sx - t * 0.5, sy - r * 0.5, t, r * 0.3)
-  g.rectangle("fill", sx - t * 0.5, sy + r * 0.2, t, r * 0.25)
+  -- ------- THE RING IS A RING
+  --
+  -- This was four axis-aligned bars -- left, right, top, bottom -- which
+  -- is not a ring, it is a PLUS SIGN, and at splash sizes that is exactly
+  -- what it read as: a little white cross blinking on the ground.
+  --
+  -- Eight ticks around an ELLIPSE instead. Ellipse rather than circle
+  -- because the ground is seen at the diorama's angle, so a ring lying on
+  -- it is squashed vertically -- a round one reads as a decal standing up
+  -- facing the camera. Each tick is still a hard little rectangle, which
+  -- keeps the cel look; what changed is where they are put.
+  local squash = 0.42
+  for k = 0, 7 do
+    local ang = k * 0.7854 + 0.3927          -- 8 around, offset off-axis
+    local ex = sx + math.cos(ang) * r
+    local ey = sy + math.sin(ang) * r * squash
+    g.rectangle("fill", ex - t * 0.5, ey - t * 0.4, t, t * 0.8)
+  end
   -- water / puddle: a second wider ring so a hit on standing water
   -- reads from across the street, which is how rain on a pond looks
   if (surf == "water" or surf == "pool") and k < 0.85 then
@@ -1508,9 +1761,13 @@ local function drawSplash(g, sx, sy, s, m, power)
     local a2 = a * 0.45
     local t2 = math.max(1, t * 0.55)
     g.setColor(c[1], c[2], c[3], a2)
-    g.rectangle("fill", sx - r2, sy - t2 * 0.5, r2 * 0.4, t2)
-    g.rectangle("fill", sx + r2 * 0.6, sy - t2 * 0.5, r2 * 0.4, t2)
-    g.rectangle("fill", sx - t2 * 0.5, sy - r2 * 0.35, t2, r2 * 0.22)
+    -- the outer ring the same way, half as many ticks: it is the fainter
+    -- one and it only has to say "this is wider"
+    for k2 = 0, 3 do
+      local ang = k2 * 1.5708 + 0.7854
+      g.rectangle("fill", sx + math.cos(ang) * r2 - t2 * 0.5,
+                  sy + math.sin(ang) * r2 * squash - t2 * 0.4, t2, t2 * 0.8)
+    end
   end
   -- secondary flecks on the diagonals (particle burst)
   if k < 0.75 then
@@ -1616,6 +1873,30 @@ end
 --
 -- Snow answers false unless the sky is lit: there is nothing for a flake to
 -- fall THROUGH without the camera, and screen-space snow is dandruff.
+-- ------- a seam the screenshot probes need
+--
+-- How many world-space motes of a kind are alive, and where they are.
+-- Drips in particular are otherwise unmeasurable: they are a handful of
+-- 2px specks falling for a second and a half in the minutes AFTER a
+-- shower, which is exactly the sort of feature a screenshot agrees with
+-- whether or not it is running. Counting them is how the probe tells
+-- "dripping" from "the rain stopped and nothing replaced it".
+--
+-- Returns the count and, for a caller that asks, the list itself so a
+-- probe can check the drips are near the player and under a crown rather
+-- than raining somewhere off-screen.
+function Weather.moteCount(kind, out)
+  local n = 0
+  for i = 1, #motes do
+    local m = motes[i]
+    if not kind or m.kind == kind then
+      n = n + 1
+      if out then out[#out + 1] = { x = m.x, y = m.y, z = m.z, kind = m.kind } end
+    end
+  end
+  return n
+end
+
 function Weather.paintsFlat()
   local kind = Weather.visible()
   if not kind then return false end

@@ -37,41 +37,40 @@ Upstream Dramatic Shape still uses `3` / `5` / `6` / `7` / `8` / `9`.
 - Wild Pokemon visible in the grass; ecology / shelter / city life systems
 - Tuned defaults for lower-end / mobile hardware
 
-## Coming next (unreleased work)
+## New in 1.22.0-mobile
 
-Already in the source tree; will ride the next package when it ships.
+Trees, rain, and the street lamps that were never actually loading.
 
-### Ambient sound beds
+- **Trees are trees.** Round-tree sites wear a real 3D willow instead of the
+  round hull carved from the tileset. The forest builds across frames so a
+  route does not hitch while it appears.
+- **A wood stays dry underneath.** The crown keeps puddles off the ground
+  it covers, and snow thins in patches rather than a clean circle. Rain
+  still falls behind a wall -- that is a different kind of shelter.
+- **Rain looks like water.** Streaks brighten what is behind them, fade
+  along their length, and lean with the wind. After the shower the canopy
+  keeps dripping for a few minutes.
+- **Town lamps are the authored post again.** A host filesystem proxy was
+  swallowing the bake, so every town silently drew the box templates. The
+  lantern now lights from the glass, and posts on the next map over stay
+  visible when you stand on the seam.
 
-More place-sound under the map music (still CC0 only): town murmur, wind,
-forest canopy, sea vs pond, cave, indoor room tone — driven by the same
-clocks the diorama already has (hour, weather, wind, water size, indoor /
-canopy / dungeon). Credits per file in `assets/audio/CREDITS.md`.
+## Coming next
+
+Tracked on GitHub:
+https://github.com/BrenoBertucci/Terrarium/issues
 
 ### Readable wild Pokémon (optional art)
 
 WILD roamers can wear **Gen 2-style walk sheets** (16×96) instead of a
 shrunk battle portrait. **Those sheets are not in the zip** — same rule as
-the X/Y GUI pack: crediting an artist is not a licence, and the art is still
-Nintendo / Game Freak's wherever it travels.
+the X/Y GUI pack.
 
 ```text
 python tools/install_roamer_sprites.py
 ```
 
-That pulls [PokéPC Followers](https://github.com/gamecorner-033/PokePCFollowers)
-(ShockSlayer / Crystal Clear lineage) into `assets/roamers/`. Without it the
-mod still draws wild mons from a greyscale front-pic bake (improved, but not
-as clear as real walk cycles). Details: `assets/roamers/CREDITS.md`.
-
-### Open issues / roadmap
-
-Tracked on GitHub:
-https://github.com/BrenoBertucci/Terrarium/issues
-
-Drafts ready to file (UI leftovers + roamer/ambient follow-ups):
-`.github/issues-draft/` — run `powershell -File .github/issues-draft/create.ps1`
-after `gh auth login`.
+Details: `assets/roamers/CREDITS.md`.
 
 ## New in 1.21.0-mobile
 
