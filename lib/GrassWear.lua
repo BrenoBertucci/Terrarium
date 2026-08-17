@@ -158,6 +158,15 @@ local function shelterOf(st, idx)
   return (st.sh and st.sh[idx]) or 1
 end
 
+-- How much CANOPY stands over this cell, 0 = open sky, 1 = deep under a
+-- crown. Rides the texel's fourth channel, which was a constant 1 and is
+-- now the one number in this field that is about the SKY rather than the
+-- wind. See the note on the texel layout for why it is not folded into
+-- shelter.
+local function canopyOf(st, idx)
+  return (st.cv and st.cv[idx]) or 0
+end
+
 local function halfFor(cause)
   if cause == GrassWear.CAUSE_BURN then return GrassWear.HALF_BURN end
   if cause == GrassWear.CAUSE_CUT then return GrassWear.HALF_CUT end
@@ -432,6 +441,22 @@ end
 -- boundary of the calm moves with nothing -- it is the building's shape,
 -- and buildings do not move. That is the entire cost of "local wind": a
 -- bake, and a channel of a texel that was already being fetched.
+--
+-- TWO THINGS SHELTER A CELL AND THEY ARE NOT THE SAME NUMBER -- the canopy
+-- rides the ALPHA channel, not this one, and that separation is the whole
+-- design note.
+--
+-- Folding them together is the obvious move and it is wrong. This channel
+-- is a WIND lee: it is baked around every unwalkable cell within three
+-- cells, which is most of the ground next to any hedge, wall or boulder on
+-- a route. Rain still falls behind a wall. Sharing one number would have
+-- meant the puddles disappearing from every cell within three of anything
+-- solid the first time the ground consulted it, which is not a canopy
+-- feature, it is a drought.
+--
+-- What they DO share is the texel, and that is what the sharing was for:
+-- alpha was a constant 1, already fetched and already uploaded, so the
+-- cover costs no second field, no second upload and no second tap.
 GrassWear.SHELTER_REACH = 3     -- cells downwind a wall keeps calming
 GrassWear.SHELTER_MIN = 0.30    -- deepest calm directly behind a wall
 
@@ -486,6 +511,38 @@ local function bakeShelter(st, map)
       end
     end
   end
+
+  -- ------- and then the canopies, into their OWN channel
+  --
+  -- Authored trees stand on cells the player WALKS OVER (the round-tree
+  -- sites are the shrubbery, r=8, one cell each), so the walkability test
+  -- above cannot see them: to that loop a wood is open ground. That is the
+  -- whole reason the canopy needs a pass of its own rather than a wider
+  -- reach on the existing one.
+  --
+  -- Trees3D owns where the crowns actually landed -- the jitter and the
+  -- per-site scale are its arithmetic, and asking it is what keeps the
+  -- cover under the tree that casts it. Guarded at every step: no bake, no
+  -- forest, no Trees3D at all, and this is a no-op that leaves a map with
+  -- no authored trees reading exactly as it did before.
+  local cv = {}
+  st.cv = cv
+  local okT, Trees3D = pcall(V.require, "Trees3D")
+  if okT and Trees3D and Trees3D.eachCanopyCell then
+    pcall(Trees3D.eachCanopyCell, map, function(cx, cy, cover)
+      local i = idxOf(cx, cy)
+      if not i then return end
+      if cover > 1 then cover = 1 end
+      -- Crowns that overlap take the DEEPEST rather than adding up: two
+      -- canopies over one cell is not twice the shade, it is the same sky
+      -- blocked twice. Summing put a solid 1.0 across the middle of every
+      -- wood, which is a roof, not a canopy.
+      if cover > (cv[i] or 0) then
+        cv[i] = cover
+        st.dirty[i] = true
+      end
+    end)
+  end
 end
 
 -- Shelter never goes out on the public read path -- the shader gets it
@@ -498,6 +555,22 @@ function GrassWear.shelterAt(cx, cy)
   local idx = idxOf(math.floor(cx or 0), math.floor(cy or 0))
   if not idx then return 1 end
   return shelterOf(st, idx)
+end
+
+-- How much canopy stands over this cell: 0 = open sky, 1 = deep under a
+-- crown. Unlike shelter this one DOES go out on the public read path --
+-- GroundFX decides where puddles and drifts may lie on the CPU, at chunk
+-- build time, and needs the same answer the shader gets from alpha.
+--
+-- Safe before any bake: an unbound map, a map with no authored trees, or a
+-- run with no Trees3D all read 0, which is open sky and the behaviour
+-- everything had before this existed.
+function GrassWear.canopyAt(cx, cy)
+  local st = bound
+  if not st then return 0 end
+  local idx = idxOf(math.floor(cx or 0), math.floor(cy or 0))
+  if not idx then return 0 end
+  return canopyOf(st, idx)
 end
 
 -- ------- binding a map
@@ -516,6 +589,12 @@ function GrassWear.bind(map, key)
     for idx in pairs(bound.live) do bound.dirty[idx] = true end
     if bound.sh then
       for idx in pairs(bound.sh) do bound.dirty[idx] = true end
+    end
+    -- and the canopy, for the same reason and it is not the same set: a
+    -- crown covers cells no wall shelters, so a map returned to would come
+    -- back with its wood's alpha still holding the PREVIOUS map's texels.
+    if bound.cv then
+      for idx in pairs(bound.cv) do bound.dirty[idx] = true end
     end
     pruneCursor = nil
     forgetBuckets()
@@ -549,15 +628,21 @@ end
 -- green channel matters -- a blank field of zeroes would multiply the
 -- wind amplitude by nothing and stop the meadow dead on any driver that
 -- refused the image.
-local function paint(idx, wear, shelter, cause)
+local function paint(idx, wear, shelter, cause, canopy)
   local res = GrassWear.RES
   local x, z = idx % res, math.floor(idx / res)
+  -- ALPHA IS THE CANOPY. It was a constant 1 -- a channel already being
+  -- fetched, already uploaded, and carrying nothing -- so the cover under
+  -- a crown costs no second field and no second tap. Written as 1 MINUS
+  -- the cover so the neutral value stays 1 exactly like the other
+  -- channels' neutrals, and a driver that refuses the image degrades to
+  -- "open sky everywhere" rather than to "the whole map is under a tree".
   pcall(mapIdata.setPixel, mapIdata, x, z,
-        wear, shelter, (cause or 0) * 0.5, 1)
+        wear, shelter, (cause or 0) * 0.5, 1 - (canopy or 0))
   -- Neutral is wear 0 AND open sky. A sheltered cell with no wear is
   -- still non-neutral, so it has to stay tracked or the shelter bake
   -- would leak across a map change.
-  if wear <= 0 and shelter >= 1 then
+  if wear <= 0 and shelter >= 1 and (canopy or 0) <= 0 then
     painted[idx] = nil
   else
     painted[idx] = true
@@ -603,7 +688,8 @@ local function flush(all)
   local done = {}
   for idx in pairs(st.dirty) do
     if budget <= 0 then break end
-    paint(idx, decayed(st, idx), shelterOf(st, idx), st.c[idx])
+    paint(idx, decayed(st, idx), shelterOf(st, idx), st.c[idx],
+          canopyOf(st, idx))
     done[#done + 1] = idx
     budget = budget - 1
   end
