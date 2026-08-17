@@ -36,7 +36,7 @@ Issues URL: https://github.com/BrenoBertucci/Terrarium/issues
 
 ## Done recently (unreleased until next package)
 
-- (empty -- 1.22.0-mobile took trees, canopy shelter, rain/drip, lamp load)
+- (empty -- 1.23.0-mobile took window-res battle UI, flock scale, townsfolk agenda)
 
 ## Policy reminders
 
