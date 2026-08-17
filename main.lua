@@ -1381,6 +1381,26 @@ StartMenuXY.install()
 -- already bound to the world canvas. Both in lib/BattleBoxXY.lua.
 V.require("BattleBoxXY").install()
 
+-- ------- the party and the bag, over the diorama
+--
+-- The engine's own seam for exactly this: StateStack asks the
+-- `screen.render_visible` hook before it counts a state toward the visible
+-- base, so answering false for the battle's party menu or bag leaves the
+-- screen on the stack -- cursor, choices and all -- while the frame's base
+-- falls through to the battle and the diorama underneath. The replacement
+-- is drawn from snapHUDs; see lib/BattleScreenXY.lua for both halves.
+--
+-- Gated on OverworldBattle.screensLive, not merely on a session: a battle
+-- whose scene broke has no snapHUDs pass, and hiding a screen nobody
+-- redraws is a frame with no menu at all.
+local BattleScreenXY = V.require("BattleScreenXY")
+mod.hooks:wrap("screen.render_visible", function(next, state)
+  if OverworldBattle.screensLive() and BattleScreenXY.hides(state) then
+    return false
+  end
+  return next(state)
+end)
+
 -- ------- wild Pokemon standing in the grass
 --
 -- The two seams this needs -- Player:tryMove, which is where walking into

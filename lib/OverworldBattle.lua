@@ -46,6 +46,7 @@ local BattleDOF = V.require("BattleDOF")
 local BattleHud = V.require("BattleHud")
 local BattleHudXY = V.require("BattleHudXY")
 local BattleBoxXY = V.require("BattleBoxXY")
+local BattleScreenXY = V.require("BattleScreenXY")
 local BattlePics = V.require("BattlePics")
 local Voxel3D = V.require("Voxel3D")
 local ChunkMesher = V.require("ChunkMesher")
@@ -400,6 +401,16 @@ end
 -- screenshot can be labelled with the ground it was taken on.
 function OverworldBattle.arena()
   return session and session.arena or nil
+end
+
+-- Whether snapHUDs is actually reaching the canvas this battle -- which is
+-- the only condition under which hiding a screen's own render (the
+-- render_visible hook in main.lua) leaves a replacement on the frame
+-- instead of nothing. A broken scene or a failed HUD pass answers false and
+-- the party menu stays the Game Boy's: white and ugly beats invisible.
+function OverworldBattle.screensLive()
+  return (session and session.snapped and not session.broken) and true
+         or false
 end
 
 function OverworldBattle.finish()
@@ -1114,17 +1125,10 @@ function OverworldBattle.drawXYBlock(battle, shot, side)
   else
     x = shot.pw - w - m
     y = shot.ly + 96 * s - h - m       -- clear of the text box's top row
-    -- With the command menu up the box grows upward to hold the X/Y buttons
-    -- (BattleBoxXY.MENU_GROW) and the player's capsule ends up sitting on
-    -- FIGHT. X/Y does not have this problem because its HUD is on the other
-    -- screen; here the capsule steps up out of the way and steps back when
-    -- the menu closes.
-    if battle.phase == "menu" and BattleBoxXY.covers(battle) then
-      local grown = OverworldBattle.textRects(battle).box
-      if grown then
-        y = y - grown[4] * s * (BattleBoxXY.MENU_GROW - 1)
-      end
-    end
+    -- The capsule used to step upward here while the command menu was up,
+    -- dodging a panel that grew to 1.9x the box's height. The X/Y menu now
+    -- keeps every phase inside the box's own rect, so there is nothing to
+    -- dodge and the capsule holds still through the whole battle.
   end
   -- Debug seam for tests/hudxy_probe.lua, off in normal play. Paints the
   -- side's whole band before the block goes down. What it settles is ORDER,
@@ -1243,14 +1247,17 @@ function OverworldBattle.snapHUDs(battle, shot)
     -- engine's box is gone and its rect needs no glass under it: the X/Y
     -- panel is opaque.
     -- Only the phases BattleBoxXY draws lose their glass. On a phase it does
-    -- not cover -- the move list above all -- the engine's own box is still
-    -- the one on screen and still needs the frost under it.
+    -- not cover -- mimicSelect, for one -- the engine's own box is still the
+    -- one on screen and still needs the frost under it. The `moves` rect goes
+    -- with the box: it is where the GB drew its TYPE/ panel, and with the X/Y
+    -- move list up nothing lands there -- frosting it would hang a blank pane
+    -- of glass in the middle of the arena.
     local xyBox = nil
     if BattleBoxXY.covers(battle) and BattleBoxXY.claim(battle) then
       xyBox = live.box
     end
     for key, rect in pairs(live) do
-      if not (xyBox and key == "box") then
+      if not (xyBox and (key == "box" or key == "moves")) then
         BattleHud.panel(rect, shot, dark, true)
       end
     end
@@ -1259,7 +1266,15 @@ function OverworldBattle.snapHUDs(battle, shot)
                 .. (live.box and ".box" or ".nobox")
       BattleBoxXY._stats[k] = (BattleBoxXY._stats[k] or 0) + 1
     end
-    if xyBox then BattleBoxXY.draw(battle, xyBox) end
+    -- The party or the bag on top of the stack takes the frame: the box
+    -- would only put an empty message panel under it (the battle sits in
+    -- `messages` while a screen is up). When no covered screen is up --
+    -- or its draw fails -- the box is back, so a broken party screen
+    -- degrades to the old frame rather than to none.
+    local screenUp = BattleScreenXY.draw(game(), battle, shot)
+    if not screenUp then
+      if xyBox then BattleBoxXY.draw(battle, xyBox) end
+    end
     g.setColor(1, 1, 1, 1)
     for side, band in pairs(OverworldBattle.HUD_BAND) do
       -- Named for the suite: which branch each side took, counted. A frame
@@ -1273,7 +1288,14 @@ function OverworldBattle.snapHUDs(battle, shot)
         st[k] = (st[k] or 0) + 1
       end
       if xy[side] then
-        if xyLive[side] then OverworldBattle.drawXYBlock(battle, shot, side) end
+        -- Not while the party or the bag holds the frame: the capsules
+        -- landed ON TOP of the cards (they draw after the screen does), and
+        -- everything they say is on the cards already. The GB bands stay
+        -- suppressed either way -- that suppression is what KEEPS the
+        -- engine's own HUD tiles off a frame the X/Y screen owns.
+        if xyLive[side] and not screenUp then
+          OverworldBattle.drawXYBlock(battle, shot, side)
+        end
       else
         -- The band still goes down whenever the XY block is NOT covering this
         -- side, and that is not a fallback -- it is the rest of the band's

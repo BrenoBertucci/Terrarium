@@ -42,14 +42,21 @@
 --     leaves the rectangle untouched;
 --   * the art is innocent: frame_player.png has zero pixels of that blue and
 --     the build's copy is byte-identical to the repo's.
--- So the world canvas is not cleared under these bands, and one band blitted
--- early -- before the art had loaded, or during a frame when the side was not
--- yet live -- stays on screen for the rest of the fight. It was invisible
--- before this change because BattleHud.panel's frosted glass was drawn over
--- it every frame; it is visible now because an opaque capsule does not need
--- that glass and no longer gets it.
+-- SOLVED (2026-08-17), and the "stale composite" theory this note used to
+-- close on was WRONG. The bar is a LIVE draw by the quality_of_life mod's
+-- XP BAR feature (qol_feature_xp_bar.lua): its drawExpBar reads
+-- `dramaticShapeShot` off the battle and paints straight onto the world
+-- canvas at the snapped band's position, every frame, after this mod's own
+-- draw. It measured as constant because EXP does not change mid-battle --
+-- a live draw of a constant number is pixel-identical to a stale one, which
+-- is what fooled the six-shot test. The branch counters never saw it
+-- because it is not this mod's branch.
 --
--- The fix belongs where the canvas is cleared, not here.
+-- The fix is IN the QoL mod, by its own design language: its drawExpBar now
+-- skips battles marked `terrariumXYBox` (the field BattleBoxXY.claim
+-- rawsets), because this capsule already draws the same EXP in its own
+-- slot. That patch lives in the INSTALLED copy of quality_of_life, not in
+-- any repo -- reinstalling that mod resurrects the bar.
 
 -- the mod namespace (see main.lua): V.require loads a sibling module
 local V = ...
