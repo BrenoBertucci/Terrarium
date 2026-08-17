@@ -36,10 +36,7 @@ Issues URL: https://github.com/BrenoBertucci/Terrarium/issues
 
 ## Done recently (unreleased until next package)
 
-- Ambient Tier 1 beds + CC0 credits + source→build policy for audio
-- Roamer policy: no redistributed Gen-2 sheets; installer + improved bake
-  fallback (`RoamerArt.REV` 3); `trueColor` when sheets present
-- Water size / swell fixes in 1.20.0-mobile (shipped)
+- (empty -- 1.22.0-mobile took trees, canopy shelter, rain/drip, lamp load)
 
 ## Policy reminders
 

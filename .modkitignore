@@ -70,6 +70,12 @@ tests/fog_probe.lua
 tests/thunder_probe.lua
 tests/lamppost_probe.lua
 tests/night_lamps_probe.lua
+tests/prop_alpha_probe.lua
+tests/trees_probe.lua
+tests/trees_drip_probe.lua
+tests/trees_ready_offline.lua
+tests/trees_shelter_probe.lua
+tests/trees_wind_probe.lua
 
 # NOTE: twenty older probes are still NOT listed here and therefore still
 # ship (ambient_beds, ambsound_cost, carry_headless, coexist, ds_z_anchor,
