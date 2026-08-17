@@ -37,6 +37,23 @@ Upstream Dramatic Shape still uses `3` / `5` / `6` / `7` / `8` / `9`.
 - Wild Pokemon visible in the grass; ecology / shelter / city life systems
 - Tuned defaults for lower-end / mobile hardware
 
+## New in 1.23.0-mobile
+
+The battle is drawn at the window. The birds are the right size. People
+in town have somewhere to be.
+
+- **Command menu, moves, party and bag at window resolution.** The fight
+  prompt stays in the box; X/Y buttons float on the right. The move list
+  is one row per move in that type's colour. Party and bag sit on the
+  diorama instead of a white 160x144 page. The bag has DS pockets
+  (ITENS / CURA / BOLAS / TM/HM).
+- **Flock birds scale by species.** A Fearow is bigger than a Pidgey,
+  from the same size table the ground roamers already use. Towns get
+  Pidgey instead of grey chevrons.
+- **Townsfolk keep an agenda.** Wanderers go to a post by day and a
+  doorway after dark -- never in front of you, never a trainer. New
+  AGENDA row (OFF / DAY / FULL). Shelter still wins over the clock.
+
 ## New in 1.22.0-mobile
 
 Trees, rain, and the street lamps that were never actually loading.
