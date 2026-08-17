@@ -32,6 +32,7 @@ local Underpass = V.require("Underpass")
 local Roamer = V.require("Roamer")
 local StreetLamps = V.require("StreetLamps")
 local Skyline = V.require("Skyline")
+local FirstPerson = V.require("FirstPerson")
 local PaletteFX = require("src.render.PaletteFX")
 local Map = require("src.world.Map")
 
@@ -760,6 +761,10 @@ local function shadowSignature(terrain, nbMesh, posed, cx, cy, vw, vh)
   -- few times a minute rather than every frame.
   put(math.floor(ShadowMap.KX * 128))
   put(math.floor(ShadowMap.KZ * 128))
+  -- and the first-person head: the box is fitted around wherever it looks
+  -- and the sprite cards swap frames as it circles them, so a turn on the
+  -- spot re-fits and redraws exactly like a camera move ("" outside 1ST)
+  put(FirstPerson.signature())
   put(tostring(terrain))
   for i = 1, #nbMesh do put(tostring(nbMesh[i])) end
   for _, p in ipairs(posed) do
@@ -965,6 +970,12 @@ function VoxelScene.render(state, w, h, vw, vh, paletteFor)
 
   local posed, me = posesOf(state, spriteColors)
   castShadows(state, terrain, nbMesh, posed, cx, cy, vw, vh, atlasFor)
+
+  -- the first-person rig: builds the placed camera for 1ST/3RD rungs and
+  -- hands it to Voxel3D, or returns nil to leave the orbit in charge.
+  -- Called BEFORE beginScene so the rig's eye/focus/fov are what the
+  -- projection matrix is built from.
+  FirstPerson.frame(me, cx, cy, vw, vh)
 
   if not Voxel3D.beginScene(w, h, cx, cy, vw, vh, skyFor(state.map)) then
     return nil

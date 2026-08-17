@@ -141,6 +141,12 @@ local ExpShare = V.require("ExpShare")
 local Comforts = V.require("Comforts")
 local MiniMap = V.require("MiniMap")
 local StartMenuXY = V.require("StartMenuXY")
+-- Camera and movement modules for 1ST/3RD person views
+local Jump = V.require("Jump")
+local FirstPerson = V.require("FirstPerson")
+local ThirdPerson = V.require("ThirdPerson")
+local CamControl = V.require("CamControl")
+local FreeMove = V.require("FreeMove")
 
 -- Forward declaration: the voxel pipeline's update hook (registered below)
 -- calls this, and it is defined further down with the settings it drives.
@@ -220,6 +226,11 @@ mod.content.render_pipelines:register(PIPE_VOXEL, {
     -- would fight anyone who changed one deliberately.
     applyFull(level)
     Voxel.update(dt, level)
+    -- the first-person head, on the same tick: its blend in and out of the
+    -- orbit, the mouse capture lifecycle, and the frame's stick-rate look.
+    -- Unconditional like Voxel.update, because the blend has to keep easing
+    -- OUT after the rung is left
+    FirstPerson.update(dt)
     -- the day/night clock, on the same always-running tick: Pipelines.update
     -- runs whatever the level, so time passes with the mode off, through
     -- battles and menus, and a CYCLE evening falls mid-fight exactly as it
@@ -234,6 +245,10 @@ mod.content.render_pipelines:register(PIPE_VOXEL, {
     -- and the whole battle. Ahead of the active() gate below, because a 3D
     -- battle does not require the free-roam mode to be switched on.
     OverworldBattle.update(dt)
+    -- the battle's own camera controls: the right stick walks the shot,
+    -- the mouse drags it, and the wheel zooms the lens. Ticked here because
+    -- it needs to run while the battle is on top of the stack.
+    CamControl.tick(dt)
     -- The wild Pokemon standing in the grass ride the same hook for one of
     -- the same two reasons: it is the tick that keeps running whatever is on
     -- top, which is what lets the population notice a map arriving while a
@@ -1647,6 +1662,18 @@ end)
 -- forbid outright (`.snow.1` -- features live in the changelog, not here).
 mod.exports.version = mod.version or "1.20.0-mobile"
 -- exposed so a companion mod can pin its own tiles' shapes or read the
+
+-- ------- 1ST and 3RD person camera and movement
+--
+-- FirstPerson.install claims the LOOK inputs the engine ignores: the right
+-- stick's axes, relative mouse motion, and touch gestures for camera control.
+-- FreeMove.install wraps OverworldState:handleInput to enable continuous
+-- camera-relative walking while in 1ST or 3RD mode.
+-- CamControl.install claims zoom controls (wheel, Q/E, pinch) for whichever
+-- camera is active -- the third-person boom or the engine's survey zoom.
+FirstPerson.install()
+FreeMove.install()
+CamControl.install()
 -- camera without reaching into this mod's file layout
 mod.exports.lib = V
 mod.exports.pipelines = { voxel = PIPE_VOXEL, tiltshift = PIPE_TILT }
