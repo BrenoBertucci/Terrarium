@@ -111,6 +111,18 @@ local SHADER = [[
   // that, and it is a separate channel from vUp rather than a fudge of it
   // precisely because it is a different fact: not "which way does this
   // face point" but "how much has piled on this blade".
+  // How much of this vertex is CANOPY, 0..1 -- zero down a trunk, one out
+  // at the leaf tips. Only the tree draw sends it, packed into the fine
+  // decimals of VertexShade's magnitude (see packedShade below); every
+  // other draw leaves it zero and reads the channel exactly as before.
+  varying float vCanopy;
+  // 1 when THIS DRAW's VertexShade carries a packed canopy weight. Gating
+  // per draw rather than changing the channel outright is what keeps
+  // terrain, characters, lamps and grass reading the way they always did:
+  // the decode below is global code on a shared vertex format, so an
+  // unconditional change would corrupt the brightness of every mesh that
+  // does not pack.
+  uniform float packedShade;
   varying float vGrassCap;
   varying float vWater;       // 1 when swell/ice paint runs, 0 otherwise
   varying float vWaterSurf;   // 1 on recessed water geometry always (y < -1)
@@ -314,7 +326,20 @@ local SHADER = [[
     // magnitude is the shading, sign is the face normal's Y (see vUp). A
     // shade is a product of positive factors with a floor well above zero,
     // so zero is not a value any mesher can emit and the split is exact.
-    vShade = abs(VertexShade);
+    // Unpack. The magnitude holds a 0..63 brightness LEVEL in its integer
+    // part once multiplied by 64, and the canopy weight in the fraction --
+    // the exact inverse of Trees3D's packShade, and the two must be read
+    // as a pair or neither makes sense.
+    float shadeMag = abs(VertexShade);
+    if (packedShade > 0.5) {
+      float m = shadeMag * 64.0;
+      float lvl = floor(m);
+      vCanopy = m - lvl;
+      vShade = lvl / 63.0;
+    } else {
+      vCanopy = 0.0;
+      vShade = shadeMag;
+    }
     vUp = step(VertexShade, 0.0);
 #ifdef VOXEL_GRID
     // MODEL space, deliberately: every mesh here is built a unit per
@@ -353,7 +378,75 @@ local SHADER = [[
     // for the same reason: a varying left over from the previous draw is
     // a snowed hedge on a bare wall.
     vGrassCap = 0.0;
-    if (sway > 0.0) {
+    // ------- THE CANOPY TAKES THE WIND
+    //
+    // Trees are the other thing out here with a base planted in the ground
+    // and a top free to give, and they arrive at this block already
+    // carrying the one number the bend needs. vCanopy IS the curve: zero
+    // down the bole, rising through the crown, one at the tips, continuous
+    // (Trees3D bakes it and packs it into VertexShade's decimals -- see
+    // packedShade above, which is also what identifies this draw as a
+    // tree). No height fraction, no grassH, no extra attribute. And it is
+    // the RIGHT curve, which the grass one would not be: a tree does not
+    // give according to how high a vertex is, it gives according to how
+    // much of it is leaf, so a low branch tip sways while the trunk beside
+    // it at the same height does not.
+    //
+    // Kept as its own branch rather than folded into the grass path
+    // because that path is pinned -- tests/grass_crush_offline.lua hashes
+    // it -- and because almost none of it applies: a tree has no foot
+    // crush, no wear thinning, no per-tuft stiffness scatter, and no
+    // snow-cap ramp (canopyCap in the fragment stage already does that
+    // off the same vCanopy).
+    if (sway > 0.0 && packedShade > 0.5) {
+      float bend = vCanopy;
+      if (bend > 0.0) {
+        float wet  = clamp(grassLoad.x, 0.0, 1.0);
+        float gust = clamp(grassLoad.z, 0.0, 1.0);
+
+        // ONE HARMONIC, and that is a budget decision before it is an
+        // aesthetic one. This mesh is the WHOLE FOREST: 862 trees at 1091
+        // verts is ~940k vertices, an order of magnitude past any meadow,
+        // on a frame already measured at 39.5 ms on ROUTE_2. The meadow's
+        // five sines are what a meadow can afford.
+        //
+        // A canopy does not want them either. Leaves read as mass moving
+        // together; flutter at sixteen pixels a tree is noise, not detail.
+        //
+        // Half the grass wavelength, because a crown is a bigger thing
+        // than a blade: the gust should cross a wood more slowly than it
+        // crosses a meadow, so neighbouring trees lean together and the
+        // stand rolls instead of rippling.
+        float p = dot(w.xz, windFreq * 0.5) - windPhase * 0.62;
+        float wave = sin(p);
+
+        // RAIN'S OWN TICK -- the grass's fast note, transposed. This is
+        // the only part of the response that says RAIN rather than "a
+        // windier day": amplitude alone is indistinguishable from weather
+        // that is merely stronger. Drops landing put a quicker, smaller
+        // shiver on top of the roll, scattered by the vertex's own canopy
+        // weight so the crown does not shiver as one plate.
+        //
+        // Gated on wet, so a dry frame pays one compare instead of a sine
+        // on every one of those 940k vertices.
+        if (wet > 0.0) {
+          wave += wet * 0.30 * sin(p * 3.7 + vCanopy * 5.1);
+        }
+
+        // STORM IS THIS CURVE WITH MORE IN IT, never a second one. The
+        // extra amplitude arrives through `sway` (Wind.amount already
+        // folds the shower's drive into the climate) and through the gust
+        // envelope. A separate storm curve would be two winds disagreeing
+        // about which way the air is going, in the same wood, on the same
+        // frame.
+        float amp = sway * (1.0 + 0.55 * gust);
+        w.xz += windDir * (amp * bend * wave);
+        // No arc-length drop, unlike the grass. That term is lean^2/2H,
+        // and at a canopy's amplitude over a tree's height it is a
+        // fraction of a pixel -- a dot and a divide per vertex to move
+        // nothing visible.
+      }
+    } else if (sway > 0.0) {
       // Height fraction. `grassH` is what the mesh in front of the shader
       // actually stands (the bake's own height for a 3D tuft, the slab's
       // for the classic path) rather than the flat 0.1 that used to stand
@@ -1597,7 +1690,29 @@ local SHADER = [[
       // sparkle) exactly as a roof ridge does. No second snow path, no
       // decal floating over the meadow, and the base of the tuft stays
       // green because its cap is zero.
-      float lie = mix(snowSide, 1.0, max(vUp, vGrassCap));
+      // A CANOPY IS THE GRASS PROBLEM AGAIN, one plant up.
+      //
+      // vUp is a face normal and it is honest: a leaf cluster's faces point
+      // outward, so a crown is all "flank" and takes the flank's share --
+      // a forest tinted a third pale while the ground beneath it went
+      // white. Grass hit this first and answered it with vGrassCap, which
+      // carries a different fact: not which way a face points, but how much
+      // has piled here.
+      //
+      // vCanopy is that fact for trees, and it arrives already shaped like
+      // it -- zero down the bole, rising through the crown, one at the tips
+      // (Trees3D packs it into VertexShade; see packedShade). Snow lands
+      // from above and rests on the crown, so the crown takes the TOP
+      // share and the trunk keeps the flank's.
+      //
+      // It also retires a workaround: the canopy's 60 alpha cards are
+      // near-horizontal, so vUp would have called every one of them a roof
+      // and given each tree a fistful of white discs. They were shipped
+      // with a forced positive shade to suppress exactly that. Now their
+      // snow comes from how high in the crown they sit, which is the fact
+      // that was wanted in the first place.
+      float canopyCap = smoothstep(0.35, 0.85, vCanopy);
+      float lie = mix(snowSide, 1.0, max(max(vUp, vGrassCap), canopyCap));
       float depth = snowTop * lie;      // how deep it lies on this face
 
       // ------- the two noises every layer below is cut from
@@ -1687,7 +1802,8 @@ local SHADER = [[
         // the same snow catching the same sun, and leaving it out would put
         // a glittering field behind a dull white meadow.
         float spark = step(0.93, grain) * step(0.62, drift)
-                      * step(0.55, lit) * max(vUp, step(0.5, vGrassCap))
+                      * step(0.55, lit) * max(max(vUp, step(0.5, vGrassCap)),
+                                            step(0.5, canopyCap))
                       * step(0.5, depth);
         snow = mix(snow, snowColor * light * 1.5, spark);
 
@@ -2570,6 +2686,7 @@ function Voxel3D.beginScene(w, h, cx, cy, vw, vh, sky, slot)
   pcall(sh.send, sh, "glassGlint", Voxel3D.glassGlint or 0)
   -- on until a sprite pass says otherwise, reset per frame like `ghost`
   pcall(sh.send, sh, "glassOn", 1)
+  pcall(sh.send, sh, "packedShade", 0)
   -- the wind's bearing, wavelength and phase. Constant across the frame --
   -- only `sway` varies per draw, and it is what decides whether a mesh
   -- takes any of this at all
@@ -2775,6 +2892,15 @@ end
 function Voxel3D.glass(on)
   if not (active and activeShader) then return end
   pcall(activeShader.send, activeShader, "glassOn", on and 1 or 0)
+end
+
+-- Does THIS DRAW's VertexShade carry a packed canopy weight? Off by
+-- default and reset by the caller, exactly like glass(): the tree pass is
+-- the only thing that packs, and leaving it on would misread the next
+-- mesh's brightness as a 64-level ramp.
+function Voxel3D.packedShade(on)
+  if not (active and activeShader) then return end
+  pcall(activeShader.send, activeShader, "packedShade", on and 1 or 0)
 end
 
 function Voxel3D.endGhost()

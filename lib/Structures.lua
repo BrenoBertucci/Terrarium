@@ -225,7 +225,7 @@ function Structures.forMap(map)
         hideBareRing = hullRingOnly or nil,
         runs = {}, skip = {}, ground = {}, doorFold = {}, objectQuads = {},
         grassQuads = {}, grassInstances = {}, flowerQuads = {},
-        roundStamps = {}, figures = {} }
+        roundStamps = {}, treeSites = {}, figures = {} }
   Buildings.build(S, map, pixels(tileset), perRow)
 
   -- Fold doors into their buildings. A door cell is WALKABLE (the player
@@ -988,6 +988,25 @@ function Structures.buildCylinders(S, map, x0, x1, y0, y1, groundTiles)
   end
   local tsid = tostring(map.tileset.id or map.tileset.image or "?")
 
+  -- Authored trees replace the hulls WHOLESALE rather than joining them:
+  -- both in the scene would put a model and a ball on the same cell. So
+  -- when a bake is loadable, record the site and emit no hull quads --
+  -- Trees3D builds one combined mesh from these and VoxelScene draws it.
+  --
+  -- available() INSIDE the pcall, not beside it: a module that throws while
+  -- deciding (this engine throws just for naming love.filesystem) would
+  -- otherwise land here, in the middle of a chunk build, which is not a
+  -- place that expects to catch anything. Grass3D's header records the same
+  -- lesson from the same failure.
+  local treesAuthored = false
+  do
+    local ok, yes = pcall(function()
+      local M = V.require("Trees3D")
+      return M and M.available and M.available()
+    end)
+    treesAuthored = (ok and yes) and true or false
+  end
+
   -- the stump class's drawn-ellipse height, hand-authored per tileset
   -- (the profile's stump_cap, in art rows)
   local stumpCap = 6
@@ -1042,10 +1061,23 @@ function Structures.buildCylinders(S, map, x0, x1, y0, y1, groundTiles)
               tpl = { quads = tq, bg = tbg }
               roundCache[sig] = tpl
             end
-            ground = tpl.bg or false
-            S.roundStamps[#S.roundStamps + 1] =
-              { quads = tpl.quads, mx = cx * 16 + 16, mz = cy * 16 + 16,
-                r = 16 }
+            -- The hull hid the cell it stood on, so the round path claims
+            -- the floor MATCHED TO THE TREE'S OWN ART -- which for a Gen 1
+            -- tree tile is the pale background the sprite is drawn against.
+            -- An authored tree is narrower than the ball it replaces and
+            -- stops hiding it, and a pale disc under every tree turned
+            -- Viridian's lawn white. Fall to the commonest-ground pass
+            -- instead, so the tree stands on the same grass as its
+            -- neighbours.
+            ground = (not treesAuthored) and (tpl.bg or false) or false
+            if treesAuthored then
+              S.treeSites[#S.treeSites + 1] =
+                { mx = cx * 16 + 16, mz = cy * 16 + 16, r = 16 }
+            else
+              S.roundStamps[#S.roundStamps + 1] =
+                { quads = tpl.quads, mx = cx * 16 + 16, mz = cy * 16 + 16,
+                  r = 16 }
+            end
           end
           for dy = 0, 3 do
             for dx = 0, 3 do
@@ -1076,9 +1108,14 @@ function Structures.buildCylinders(S, map, x0, x1, y0, y1, groundTiles)
             tpl = { quads = tq, bg = tbg }
             roundCache[sig] = tpl
           end
-          ground = tpl.bg or false
-          S.roundStamps[#S.roundStamps + 1] =
-            { quads = tpl.quads, mx = cx * 16 + 8, mz = cy * 16 + 8 }
+          ground = (not treesAuthored) and (tpl.bg or false) or false
+          if treesAuthored then
+            S.treeSites[#S.treeSites + 1] =
+              { mx = cx * 16 + 8, mz = cy * 16 + 8, r = 8 }
+          else
+            S.roundStamps[#S.roundStamps + 1] =
+              { quads = tpl.quads, mx = cx * 16 + 8, mz = cy * 16 + 8 }
+          end
         end
         -- headless (no pixels): no hull, but still claim the tiles so
         -- the volume path never boxes a pinned cell. Ground is the
