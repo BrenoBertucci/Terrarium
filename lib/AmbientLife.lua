@@ -399,24 +399,94 @@ local FLYERS = {
   SCYTHER = true,
 }
 
--- A flying species off this map's own encounter table, or nil to keep the
--- old chevron. Deliberately NOT falling back to "some Pidgey somewhere": a
--- map whose table has nothing airborne in it is a map where a flock is a
--- lie, and the chevron at least does not name a species that is not there.
+-- ------- how big it reads
+--
+-- The flock drew every species at one multiplier, so a Pidgey and a Fearow
+-- crossing the same sky were the same bird under two names -- and all of
+-- them read as specks. Two separate things were wrong and only one of them
+-- is a constant.
+--
+-- The constant: 3.0 was too small. Altitude is 34-48 world pixels and the
+-- perspective scale has already taken most of the size away before this
+-- multiplier lands, so a flock meant to be noticed arrived as grit on the
+-- lens. Altitude itself stays where it is -- lowering it is the other way
+-- to make a bird bigger and it flies them through the tree canopy.
+local FLOCK_SCALE = 4.5
+
+-- The other: `frontSize` is the battle pic's own buffer in tiles, and it is
+-- the only statement Gen 1 ever makes about how big a Pokemon is. RoamerArt
+-- already sizes a ground roamer off it (see cellSize), so reading the same
+-- field here keeps a species the same creature whether it is standing in
+-- the grass or passing overhead.
+--
+-- Wider spread than cellSize uses, on purpose: that one is defending
+-- readability inside a 16-pixel cell and has to floor at 12. The sky has no
+-- such floor, so the hierarchy can actually be seen.
+local function sizeFromFront(n)
+  local k = 0.80 + (n - 4) * 0.15
+  if k < 0.70 then k = 0.70 end
+  if k > 1.30 then k = 1.30 end
+  return k
+end
+
+-- Overrides, by species. Empty on purpose. The derived number is right
+-- until something is seen to be wrong, and a table filled in advance is a
+-- table of guesses wearing the authority of data. A line goes in here when
+-- a screenshot says so, not before.
+local FLYER_SCALE = {}
+
+-- Resolved once per species, never per frame: this is read from the draw
+-- path's spawn side for the same reason flyerArt is (see spawnFlock).
+local flyerScaleMemo = {}
+
+local function flyerScale(species)
+  if not species then return FLOCK_SCALE end
+  local hit = flyerScaleMemo[species]
+  if hit then return hit end
+  local k = FLYER_SCALE[species]
+  if not k then
+    local Game = game()
+    local mon = Game and Game.data and Game.data.pokemon
+                and Game.data.pokemon[species]
+    k = sizeFromFront(tonumber(mon and mon.frontSize) or 7)
+  end
+  local sc = FLOCK_SCALE * k
+  flyerScaleMemo[species] = sc
+  return sc
+end
+
+-- A flying species off this map's own encounter table.
+--
+-- This used to return nil where the map's table held nothing airborne, and
+-- keep the grey chevron rather than name a species the route does not have.
+-- That honesty cost more than it bought. The chevron is three rectangles --
+-- it is the exact thing the species work was done to get rid of -- and on
+-- any table without a flyer it is what the player actually sees. Nobody
+-- audits a silhouette at forty pixels of altitude against Viridian's slot
+-- list; everybody can see that one map has birds in it and the next one has
+-- shapes.
+--
+-- So the map's own table still wins wherever it has an answer, and PIDGEY
+-- stands in where it does not: Kanto's sparrow, on nearly every early
+-- route, and the least surprising thing that can cross a sky here. The
+-- chevron stays as the last resort for a species whose art cannot be baked
+-- at all, which is the case it was always better at covering.
+local FALLBACK_FLYER = "PIDGEY"
+
 local function flockSpecies(ow)
   local Game = game()
   local map = ow.map
   local enc = Game.data and Game.data.encounters and map and map.id
               and Game.data.encounters[map.id]
   local tbl = enc and enc.grass
-  if not (tbl and tbl.slots) then return nil end
+  if not (tbl and tbl.slots) then return FALLBACK_FLYER end
   local pool = {}
   for _, slot in ipairs(tbl.slots) do
     if slot.species and FLYERS[slot.species] then
       pool[#pool + 1] = slot.species
     end
   end
-  if #pool == 0 then return nil end
+  if #pool == 0 then return FALLBACK_FLYER end
   return pool[rand(1, #pool)]
 end
 
@@ -458,10 +528,12 @@ local function spawnFlock(ow)
   local baseZ = pz + rand(-8, 8) * 16
   local species = flockSpecies(ow)
   if species then flyerArt(species) end        -- bake now, never mid-draw
+  local scale = flyerScale(species)            -- and size it now, not per frame
   for i = 1, n do
     critters[#critters + 1] = {
       kind = "bird",
       species = species,
+      scale = scale,
       x = px + (fromWest and -1 or 1) * (RADIUS + 3) * 16 - (i - 1) * 10,
       z = baseZ + (i - 1) * 7 - n * 3,
       y = 34 + rand() * 14,
@@ -847,7 +919,7 @@ function AmbientLife.draw(project, scale)
           -- SpriteRenderer's stepFlip mirrors a walker: there is no right
           -- facing anywhere in this game's art.
           local q = quads[flap > 0 and 2 or 5] or quads[2]
-          local sc = s * 3.0
+          local sc = s * (c.scale or FLOCK_SCALE)
           local k = sc / 16
           g.setColor(1, 1, 1, 0.92 * fade)
           g.draw(img, q, sx, sy, 0, c.vx > 0 and -k or k, k, 8, 8)
