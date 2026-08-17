@@ -87,10 +87,41 @@ local state = { mapId = nil, birdTimer = 12, spawnTick = 0 }
 -- out of the corner of your eye, and twenty butterflies over one patch is
 -- not a meadow, it is a lure.
 local MAX_BUTTERFLY = 6
-local MAX_LEAF = 12
+local MAX_LEAF = 160              -- hard ceiling; live cap scales with wind
 local MAX_SPARROW = 3
 local MAX_DRAGONFLY = 3
 local SPAWN_EVERY = 0.5           -- seconds between spawn attempts
+-- Leaves only fly once the air is moving; floor matches WindFX spirit.
+local LEAF_WIND_FLOOR = 0.38
+
+-- How many leaves may be aloft for this Wind.amount. Weak breeze = a few
+-- tumblers; a real gale should look like the trees emptied. Soft-power
+-- (1.25) so the middle of AUTO is not already a blizzard, but GALE
+-- actually fills the frame.
+local function leafQualityMax()
+  local s = 1
+  local ok, Q = pcall(V.require, "Quality")
+  if ok and Q and Q.scale then
+    local oks, n = pcall(Q.scale)
+    if oks and tonumber(n) then s = n end
+  end
+  if s >= 4 then return 24 end
+  if s == 3 then return 56 end
+  if s == 2 then return 110 end
+  return MAX_LEAF
+end
+
+local function leafCap(windAmt, canopy)
+  windAmt = tonumber(windAmt) or 0
+  if windAmt < LEAF_WIND_FLOOR then return 0 end
+  local t = (windAmt - LEAF_WIND_FLOOR) / 3.2
+  if t < 0 then t = 0 elseif t > 1 then t = 1 end
+  local ceil = leafQualityMax()
+  if canopy then ceil = math.min(MAX_LEAF, math.floor(ceil * 1.45)) end
+  local n = math.floor(5 + (t ^ 1.25) * (ceil - 5))
+  if n > ceil then n = ceil end
+  return n
+end
 local CELL_TRIES = 12             -- cells sampled per attempt
 local RADIUS = 11                 -- cells around the player a spawn may land
 local STARTLE = 40                -- world px at which a sparrow flees
@@ -202,23 +233,118 @@ local function spawnDragonfly(ow)
   }
 end
 
+-- Flight styles. The sheet only has a handful of silhouettes; the variety
+-- is how they MOVE and what colour they wear. A maple and a willow chip
+-- should not share a sine.
+local LEAF_STYLES = { "flutter", "maple", "sail", "tumble",
+                      "skip", "spiral", "heavy", "chip" }
+
+-- Multipliers on the authored strip. Season picks the bag; the bag still
+-- has leftovers so a March street is not one green.
+local LEAF_TINTS = {
+  { 1.00, 1.00, 1.00 },
+  { 0.82, 1.12, 0.55 },   -- spring lime
+  { 0.55, 0.78, 0.32 },   -- deep green
+  { 0.72, 0.88, 0.40 },   -- summer
+  { 1.15, 1.05, 0.42 },   -- gold
+  { 1.18, 0.78, 0.28 },   -- yellow
+  { 1.15, 0.48, 0.28 },   -- rust
+  { 0.95, 0.32, 0.24 },   -- red
+  { 0.68, 0.42, 0.24 },   -- dead brown
+  { 0.52, 0.46, 0.34 },   -- grey-brown
+  { 0.78, 0.82, 0.88 },   -- frost
+  { 0.90, 0.62, 0.38 },   -- tan
+}
+
+local function leafTintBag()
+  local month = 0
+  local ok, m = pcall(DayNight.month)
+  if ok then month = tonumber(m) or 0 end
+  -- Kanto-as-Japan: autumn is Sep-Nov. HEMISPHERE is south for weather
+  -- snow, but trees still follow a temperate palette -- mix, don't lock.
+  if month >= 9 and month <= 11 then
+    return { 5, 6, 7, 8, 9, 12, 1 }
+  elseif month == 12 or month == 1 or month == 2 then
+    return { 9, 10, 11, 8, 12 }
+  elseif month >= 3 and month <= 5 then
+    return { 2, 3, 4, 1, 5 }
+  end
+  return { 1, 3, 4, 2, 12, 5 }
+end
+
+local function pickLeafStyle()
+  local r = rand()
+  if r < 0.18 then return "flutter" end
+  if r < 0.32 then return "maple" end
+  if r < 0.46 then return "sail" end
+  if r < 0.62 then return "tumble" end
+  if r < 0.72 then return "skip" end
+  if r < 0.82 then return "spiral" end
+  if r < 0.92 then return "heavy" end
+  return "chip"
+end
+
 local function spawnLeaf(ow)
   local p = ow.player
-  local x = (p.cellX + rand(-RADIUS, RADIUS)) * 16 + rand(0, 15)
-  local z = (p.cellY + rand(-RADIUS, RADIUS)) * 16 + rand(0, 15)
+  -- Spawn UPWIND so the leaf crosses the camera (same idea as WindFX).
+  local dx = (Wind.DIR and Wind.DIR[1]) or 1
+  local dz = (Wind.DIR and Wind.DIR[2]) or 0
+  local back = (2 + rand() * 6) * 16
+  local side = (rand() * 2 - 1) * RADIUS * (8 + rand() * 6)
+  local x = p.cellX * 16 + 8 - dx * back - dz * side
+  local z = p.cellY * 16 + 8 - dz * back + dx * side
+  local style = pickLeafStyle()
+  local bag = leafTintBag()
+  local tint = LEAF_TINTS[bag[rand(1, #bag)]] or LEAF_TINTS[1]
+  local y0, fall, spin, size, ttl, carry
+  if style == "maple" then
+    y0, fall, spin, size, ttl, carry = 14 + rand() * 18, 2.2 + rand() * 2.0,
+      (rand() * 2 - 1) * (7 + rand() * 5), 0.70 + rand() * 0.70,
+      10 + rand() * 8, 0.85
+  elseif style == "sail" then
+    y0, fall, spin, size, ttl, carry = 12 + rand() * 14, 1.6 + rand() * 1.8,
+      (rand() * 2 - 1) * (0.6 + rand() * 1.2), 0.85 + rand() * 0.80,
+      12 + rand() * 10, 1.15
+  elseif style == "tumble" then
+    y0, fall, spin, size, ttl, carry = 8 + rand() * 20, 5.5 + rand() * 4.5,
+      (rand() * 2 - 1) * (4 + rand() * 6), 0.50 + rand() * 0.90,
+      7 + rand() * 8, 0.95
+  elseif style == "skip" then
+    y0, fall, spin, size, ttl, carry = 3 + rand() * 8, 3.0 + rand() * 2.5,
+      (rand() * 2 - 1) * (2 + rand() * 3), 0.45 + rand() * 0.55,
+      6 + rand() * 7, 1.05
+  elseif style == "spiral" then
+    y0, fall, spin, size, ttl, carry = 16 + rand() * 16, 3.2 + rand() * 2.4,
+      (rand() * 2 - 1) * (5 + rand() * 4), 0.55 + rand() * 0.65,
+      9 + rand() * 8, 0.80
+  elseif style == "heavy" then
+    y0, fall, spin, size, ttl, carry = 10 + rand() * 12, 8.0 + rand() * 4.0,
+      (rand() * 2 - 1) * (1.2 + rand() * 1.6), 0.90 + rand() * 0.85,
+      6 + rand() * 6, 0.70
+  elseif style == "chip" then
+    y0, fall, spin, size, ttl, carry = 6 + rand() * 18, 6.0 + rand() * 5.0,
+      (rand() * 2 - 1) * (8 + rand() * 7), 0.28 + rand() * 0.35,
+      5 + rand() * 6, 1.20
+  else -- flutter
+    y0, fall, spin, size, ttl, carry = 8 + rand() * 16, 3.8 + rand() * 3.2,
+      (rand() * 2 - 1) * (2.0 + rand() * 2.8), 0.50 + rand() * 0.65,
+      8 + rand() * 10, 1.00
+  end
   critters[#critters + 1] = {
-    kind = "leaf", x = x, z = z, y = 22 + rand() * 10,
-    seed = rand() * 6.2831, t = 0, ttl = 30,
-    -- which frame of assets/vfx/leaves.png, and spin rate
-    frame = love.math.random(0, 9),
-    spin = (rand() * 2 - 1) * 3.5,
+    kind = "leaf", x = x, z = z, y = y0,
+    seed = rand() * 6.2831, t = 0, ttl = ttl,
+    frame = rand(0, 15),
+    spin = spin, size = size, fall = fall,
+    style = style, tint = tint, carry = carry,
+    flip = rand() < 0.5 and -1 or 1,
+    wobble = 0.7 + rand() * 1.6,
   }
 end
 
 -- ------- leaf sprite strip
 --
--- 10 frames at 16x16 in assets/vfx/leaves.png (see LICENSE.md). Loaded once
--- on first leaf draw; missing art falls back to the old green rectangle.
+-- 10× 16×16 flying-leaf silhouettes in assets/vfx/leaves.png (cel, coloured;
+-- tools/make_wind_sprites.py). Not plant growth stages.
 local leafImg, leafQuads = nil, nil
 
 local function leafArt()
@@ -241,17 +367,101 @@ local function leafArt()
   return leafImg, leafQuads
 end
 
--- A flock: three to five birds abreast with a little scatter, entering off
--- one side of the view and flying straight across the sky to the other.
+-- ------- what is actually up there
+--
+-- The flock used to be three rectangles apiece -- a chevron of two wing
+-- strokes about a body block, in a flat slate grey. It read as "bird" and
+-- that was the whole problem: there are no birds in Kanto. Every other
+-- living thing this mod put on the map is a Pokemon drawn in its own art,
+-- and the one thing crossing the sky was a generic silhouette.
+--
+-- So the flock wears a species now, and RoamerArt is already the answer to
+-- "what does this species look like on the map" -- the same 16x96 walker it
+-- bakes for a wild roamer, or the shipped Gen-2 sheet when the optional pack
+-- is installed. Nothing new is downloaded and nothing new is drawn: the art
+-- for this has been in the game the whole time.
+--
+-- WHICH species is the map's own answer, not a list kept here. The encounter
+-- table is what the WILD row already reads to decide who is standing in the
+-- grass, and a route whose table is full of Spearow gets Spearow overhead
+-- for the same reason it gets them underfoot. A cave's table is Zubat and
+-- that is exactly right without a special case.
+--
+-- The set below is only the FILTER -- which Gen 1 species belong in the sky
+-- at all. Doduo and Dodrio are birds that famously cannot fly; Gyarados and
+-- Dragonite can, but a Dragonite crossing Route 1 is not ambience, it is an
+-- event. Held to the ordinary sky traffic on purpose.
+local FLYERS = {
+  PIDGEY = true, PIDGEOTTO = true, PIDGEOT = true,
+  SPEAROW = true, FEAROW = true,
+  ZUBAT = true, GOLBAT = true,
+  BUTTERFREE = true, BEEDRILL = true, VENOMOTH = true,
+  SCYTHER = true,
+}
+
+-- A flying species off this map's own encounter table, or nil to keep the
+-- old chevron. Deliberately NOT falling back to "some Pidgey somewhere": a
+-- map whose table has nothing airborne in it is a map where a flock is a
+-- lie, and the chevron at least does not name a species that is not there.
+local function flockSpecies(ow)
+  local Game = game()
+  local map = ow.map
+  local enc = Game.data and Game.data.encounters and map and map.id
+              and Game.data.encounters[map.id]
+  local tbl = enc and enc.grass
+  if not (tbl and tbl.slots) then return nil end
+  local pool = {}
+  for _, slot in ipairs(tbl.slots) do
+    if slot.species and FLYERS[slot.species] then
+      pool[#pool + 1] = slot.species
+    end
+  end
+  if #pool == 0 then return nil end
+  return pool[rand(1, #pool)]
+end
+
+-- species -> Image, or false once it is known there is none. The sheet is
+-- whatever RoamerArt hands out, so an installed Gen-2 pack shows up here
+-- too without this file knowing the pack exists.
+local flyerImg, flyerQuads = {}, {}
+
+local function flyerArt(species)
+  if not species then return nil end
+  local hit = flyerImg[species]
+  if hit ~= nil then return hit or nil, flyerQuads[species] end
+  local RoamerArt = V.require("RoamerArt")
+  -- mayBake = true, and this runs from the SPAWN path rather than the draw
+  -- path on purpose: a first bake writes a PNG, and a frame that stalls for
+  -- it is a frame the player sees stutter under a passing flock.
+  local ok, def = pcall(RoamerArt.def, species, true)
+  if not (ok and def and def.image) then flyerImg[species] = false return nil end
+  local oki, img = pcall(love.graphics.newImage, def.image)
+  if not (oki and img) then flyerImg[species] = false return nil end
+  img:setFilter("nearest", "nearest")
+  local F = RoamerArt.FRAME
+  local q = {}
+  for i = 0, RoamerArt.FRAMES - 1 do
+    q[i] = love.graphics.newQuad(0, i * F, F, F, img:getDimensions())
+  end
+  flyerImg[species], flyerQuads[species] = img, q
+  return img, q
+end
+
+-- A flock: three to five of one species abreast with a little scatter,
+-- entering off one side of the view and crossing the sky to the other.
+-- One species for the whole flock, because that is what a flock is.
 local function spawnFlock(ow)
   local p = ow.player
   local fromWest = rand() < 0.5
   local px, pz = p.cellX * 16, p.cellY * 16
   local n = rand(3, 5)
   local baseZ = pz + rand(-8, 8) * 16
+  local species = flockSpecies(ow)
+  if species then flyerArt(species) end        -- bake now, never mid-draw
   for i = 1, n do
     critters[#critters + 1] = {
       kind = "bird",
+      species = species,
       x = px + (fromWest and -1 or 1) * (RADIUS + 3) * 16 - (i - 1) * 10,
       z = baseZ + (i - 1) * 7 - n * 3,
       y = 34 + rand() * 14,
@@ -345,18 +555,52 @@ function AmbientLife.update(dt, voxelOn)
   local day = tod == "DAY" or tod == "MORNING"
   local glowTime = tod == "NIGHT" or tod == "EVENING"
   local canopy = DayNight.isCanopy(ow.map)
-  local windy = Wind.enabled() and Wind.amount() > 0
+  local windAmtNow = 0
+  if Wind.enabled() then
+    local okw, wa = pcall(Wind.amount)
+    if okw then windAmtNow = tonumber(wa) or 0 end
+  end
+  local windy = windAmtNow > LEAF_WIND_FLOOR
+  local leavesWant = leafCap(windAmtNow, canopy)
 
-  -- one spawn attempt per half second, one kind per attempt: a route fills
-  -- in over a few seconds rather than all at once
+  -- one spawn attempt per half second for critters; leaves refill harder
+  -- under a gale so the stream stays full as old ones land.
   state.spawnTick = state.spawnTick + dt
   if state.spawnTick >= SPAWN_EVERY then
     state.spawnTick = 0
     if day and count("butterfly") < MAX_BUTTERFLY then spawnButterfly(ow) end
     if glowTime and count("firefly") < fireflyCap() then spawnFirefly(ow) end
-    if windy and count("leaf") < MAX_LEAF then spawnLeaf(ow) end
     if day and count("sparrow") < MAX_SPARROW then spawnSparrow(ow) end
     if day and count("dragonfly") < MAX_DRAGONFLY then spawnDragonfly(ow) end
+  end
+  -- Leaves: refill hard under a gale; cull when the wind dies so a calm
+  -- field is not still full of tumblers from the last squall.
+  do
+    local have = count("leaf")
+    if leavesWant <= 0 then
+      if have > 0 then
+        for i = #critters, 1, -1 do
+          if critters[i].kind == "leaf" then table.remove(critters, i) end
+        end
+      end
+    else
+      if have > leavesWant then
+        local drop = have - leavesWant
+        for i = #critters, 1, -1 do
+          if drop <= 0 then break end
+          if critters[i].kind == "leaf" then
+            table.remove(critters, i)
+            drop = drop - 1
+          end
+        end
+      elseif have < leavesWant then
+        local t = math.min(1, (windAmtNow - LEAF_WIND_FLOOR) / 3.2)
+        -- gale dumps a handful a tick so the stream fills in a couple of
+        -- seconds, not half a minute of two-at-a-time
+        local batch = 2 + math.floor(t * 16)
+        for _ = 1, math.min(batch, leavesWant - have) do spawnLeaf(ow) end
+      end
+    end
   end
 
   -- the flock, on its own long clock, and only under an open sky
@@ -371,7 +615,7 @@ function AmbientLife.update(dt, voxelOn)
   local p = ow.player
   local px, pz = p.cellX * 16, p.cellY * 16
   local far = (RADIUS + 6) * 16
-  local windAmt = windy and Wind.amount() or 0
+  local windAmt = windy and windAmtNow or 0
 
   for i = #critters, 1, -1 do
     local c = critters[i]
@@ -394,12 +638,61 @@ function AmbientLife.update(dt, voxelOn)
       c.y = 4 + 2 * math.sin(c.t * 1.3 + c.seed)
       if not glowTime then dead = true end
     elseif c.kind == "leaf" then
-      -- falls, and the wind carries it sideways on the gust's own strength;
-      -- the flutter is the leaf's, the drift is the weather's
-      c.y = c.y - 6 * dt
-      c.x = c.x + (10 + 6 * math.sin(c.t * 2 + c.seed)) * windAmt * dt
-      c.z = c.z + 3 * math.cos(c.t * 1.7 + c.seed) * windAmt * dt
-      if c.y <= 0.5 then dead = true end
+      -- Each style has its own air: maple spins and hangs, sail rides,
+      -- tumble chaos, skip bounces, spiral corkscrews, heavy drops,
+      -- chip is grit with a colour.
+      local wdx = (Wind.DIR and Wind.DIR[1]) or 1
+      local wdz = (Wind.DIR and Wind.DIR[2]) or 0
+      local style = c.style or "flutter"
+      local k = c.carry or 1
+      local carry = (12 + 20 * windAmt) * k
+      local wob = c.wobble or 1
+      local flutter, lift, side
+      if style == "maple" then
+        flutter = math.sin(c.t * 5.4 + c.seed) * (10 + 6 * windAmt) * wob
+        lift = math.cos(c.t * 2.6 + c.seed) * 7
+        side = math.cos(c.t * 4.1 + c.seed * 0.7) * 5
+      elseif style == "sail" then
+        flutter = math.sin(c.t * 1.4 + c.seed) * (4 + 3 * windAmt)
+        lift = math.sin(c.t * 0.9 + c.seed) * 3
+        side = math.cos(c.t * 1.1 + c.seed) * 2
+      elseif style == "tumble" then
+        flutter = math.sin(c.t * 7.2 + c.seed) * (12 + 8 * windAmt) * wob
+        lift = math.sin(c.t * 5.5 + c.seed * 2) * 11
+        side = math.cos(c.t * 6.0 + c.seed) * 8
+      elseif style == "skip" then
+        flutter = math.sin(c.t * 4.0 + c.seed) * (7 + 4 * windAmt)
+        lift = math.abs(math.sin(c.t * 3.3 + c.seed)) * 9 - 2
+        side = math.sin(c.t * 2.2 + c.seed) * 4
+      elseif style == "spiral" then
+        local ang = c.t * 3.4 + c.seed
+        flutter = math.cos(ang) * (9 + 5 * windAmt)
+        lift = math.sin(c.t * 2.0) * 4
+        side = math.sin(ang) * (9 + 5 * windAmt)
+      elseif style == "heavy" then
+        flutter = math.sin(c.t * 1.8 + c.seed) * (3 + 2 * windAmt)
+        lift = math.sin(c.t * 1.2 + c.seed) * 1.5
+        side = math.cos(c.t * 1.5 + c.seed) * 2
+      elseif style == "chip" then
+        flutter = math.sin(c.t * 9.0 + c.seed) * (8 + 7 * windAmt)
+        lift = math.sin(c.t * 7.5 + c.seed) * 6
+        side = math.cos(c.t * 8.2 + c.seed) * 6
+      else
+        flutter = math.sin(c.t * 3.2 + c.seed) * (6 + 4 * windAmt) * wob
+        lift = math.cos(c.t * 2.1 + c.seed * 1.3) * (4 + 3 * windAmt)
+        side = math.sin(c.t * 2.4 + c.seed) * 3
+      end
+      c.x = c.x + (wdx * carry - wdz * flutter + wdx * side * 0.15) * dt
+      c.z = c.z + (wdz * carry + wdx * flutter + wdz * side * 0.15) * dt
+      c.y = c.y - (c.fall or 6) * dt + lift * dt * 0.45
+      if style == "skip" and c.y < 1.2 then
+        c.y = 1.2
+        c.fall = -(5 + rand() * 4)
+      elseif c.fall and c.fall < 0 then
+        c.fall = c.fall + 18 * dt
+      end
+      if c.y < 0.4 then dead = true end
+      if c.y > 36 then c.y = 36 end
       if not windy then dead = true end
     elseif c.kind == "bird" then
       c.x = c.x + c.vx * dt
@@ -522,27 +815,52 @@ function AmbientLife.draw(project, scale)
         g.setBlendMode("alpha")
         local img, quads = leafArt()
         local ang = c.t * (c.spin or 2) + c.seed
-        local bob = math.sin(c.t * 4 + c.seed) * s * 0.35
+        local bob = math.sin(c.t * 4 + c.seed) * s * 0.25
+        -- flip + squash so a spinning leaf turns over instead of orbiting
+        local flip = math.sin(ang * 0.5)
+        local sxScale = ((flip >= 0) and 1 or -1) * (c.flip or 1)
+        local squash = 0.55 + 0.45 * math.abs(flip)
+        local tint = c.tint or { 1, 1, 1 }
         if img and quads then
           local n = math.max(1, math.floor(img:getWidth() / 16))
           local q = quads[(c.frame or 0) % n]
-          g.setColor(1, 1, 1, 0.92 * fade)
-          local sc = math.max(0.6, s * 0.85)
-          g.draw(img, q, sx, sy + bob, ang, sc / 16, sc / 16, 8, 8)
+          g.setColor(tint[1], tint[2], tint[3], 0.92 * fade)
+          local sc = math.max(0.40, s * 0.62 * (c.size or 1))
+          g.draw(img, q, sx, sy + bob, ang,
+                 sxScale * sc / 16, squash * sc / 16, 8, 8)
         else
-          g.setColor(0.45, 0.62, 0.25, 0.85 * fade)
-          g.rectangle("fill", sx - s * 0.5, sy - s * 0.5 + bob, s, s * 0.7)
+          g.setColor(tint[1] * 0.45, tint[2] * 0.62, tint[3] * 0.25, 0.85 * fade)
+          g.rectangle("fill", sx - s * 0.35, sy - s * 0.25 + bob, s * 0.7, s * 0.5)
         end
       elseif c.kind == "bird" then
         g.setBlendMode("alpha")
-        g.setColor(0.20, 0.22, 0.28, 0.9 * fade)
         local flap = math.sin(c.t * 9 + c.seed)
-        -- a chevron: two wing strokes meeting at the body, beating
-        local wing = s * 1.6
-        local lift = flap * s * 0.8
-        g.rectangle("fill", sx - wing, sy - lift, wing, s * 0.6)
-        g.rectangle("fill", sx, sy - lift, wing, s * 0.6)
-        g.rectangle("fill", sx - s * 0.4, sy - s * 0.2, s * 0.8, s * 0.8)
+        local img, quads = flyerArt(c.species)
+        if img and quads then
+          -- The walker sheet's LEFT-facing pair: frame 2 stands, frame 5 is
+          -- the walk rung, and alternating them is the one animation this
+          -- art has. It is a wingbeat here for the same reason it is a step
+          -- on the ground -- the sheet only ever had two poses, and which
+          -- one a passing Pidgey is in is the whole of the motion.
+          --
+          -- Mirrored when the flock is heading east, exactly as
+          -- SpriteRenderer's stepFlip mirrors a walker: there is no right
+          -- facing anywhere in this game's art.
+          local q = quads[flap > 0 and 2 or 5] or quads[2]
+          local sc = s * 3.0
+          local k = sc / 16
+          g.setColor(1, 1, 1, 0.92 * fade)
+          g.draw(img, q, sx, sy, 0, c.vx > 0 and -k or k, k, 8, 8)
+        else
+          -- No species on this map's table, or the bake said no. The old
+          -- chevron: two wing strokes meeting at a body, beating.
+          g.setColor(0.20, 0.22, 0.28, 0.9 * fade)
+          local wing = s * 1.6
+          local lift = flap * s * 0.8
+          g.rectangle("fill", sx - wing, sy - lift, wing, s * 0.6)
+          g.rectangle("fill", sx, sy - lift, wing, s * 0.6)
+          g.rectangle("fill", sx - s * 0.4, sy - s * 0.2, s * 0.8, s * 0.8)
+        end
       elseif c.kind == "sparrow" then
         g.setBlendMode("alpha")
         -- a plump brown speck with a paler breast; wings only in the air

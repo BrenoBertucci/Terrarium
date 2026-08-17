@@ -27,21 +27,27 @@
 -- as an effect being switched on: the world darkens at exactly the rate the
 -- rain thickens, because they are the same ramp.
 --
--- ------- the two registers
+-- ------- the three registers
 --
--- Rain is drawn twice, and it has to be.
+-- Rain is drawn three times, and it has to be.
 --
---   STREAKS are SCREEN-SPACE: flat pale lines falling across the whole frame,
---            slanted by the WIND row's own bearing. Rain between the camera
---            and the world has no world position -- it is in front of
---            everything, including the near edge of the diorama -- and
---            trying to give it one puts it behind the trees.
+--   SHAFTS   are WORLD-SPACE: a drop with an (x, y, z) that falls through
+--            the diorama and STOPS on whatever is under it -- the street,
+--            a puddle, a pond, a roof. Projected through the same camera
+--            as the splashes. This is the rain you can walk through, the
+--            one that hits the Mart and then drips off the eave. A 2D
+--            cloth over the frame cannot do any of that.
 --
---   SPLASHES are WORLD-SPACE: little cel-shaded rings that open and vanish on
---            the ground around the player, projected through the same camera
---            the field FX and the ambient life anchor through. They are what
---            says the rain is landing on THIS world rather than on the lens,
---            and they are the reason the effect survives the camera moving.
+--   STREAKS  are SCREEN-SPACE, and now they are only the air BETWEEN the
+--            camera and the near edge of the diorama -- a thin mist, not
+--            the shower. Rain that close has no world position, and
+--            giving it one puts it behind the trees. Kept few and dim so
+--            they do not read as a sheet taped to the lens.
+--
+--   SPLASHES are WORLD-SPACE: cel rings that open where a shaft actually
+--            landed. Water gets a crown, a roof a tick and a drip, dry
+--            stone a small ring. They are what says the rain is landing
+--            on THIS world rather than on the glass.
 --
 -- Snow is world-space only, and slower: a flake has a position in the
 -- diorama, drifts down through it and lands, which is the whole reason snow
@@ -69,6 +75,7 @@ local ModSetting = V.require("ModSetting")
 local DayNight = V.require("DayNight")
 local Water = V.require("Water")
 local Wind = V.require("Wind")
+local Quality = V.require("Quality")
 
 local Map = require("src.world.Map")
 
@@ -172,26 +179,46 @@ end
 -- ------- lightning
 --
 -- The FLASH comes first and the THUNDER follows it, by a delay that stands
--- for distance -- which is both what happens and what makes a far strike read
--- as far without anything having to say so. The flash is owned here because
--- it is a picture; the rumble is played by lib/AmbientSound, which polls
--- `thunderDue` for it. That is also why the dependency only points one way:
--- the sound module reads this file and this file reads nothing of it.
-Weather.STRIKE_ABOVE = 0.78         -- power below which it never strikes
-Weather.STRIKE_EVERY_MIN = 12
-Weather.STRIKE_EVERY_MAX = 45
-Weather.FLASH_LEN = 0.34            -- seconds the sky stays lit
+-- for distance. AmbientSound polls `thunderDue` for the rumble.
+--
+-- A strike lives in the SKY. The first version planted the bolt one to
+-- four cells off the player and painted a white plate over the whole
+-- frame, which is why it read as a 2D sticker in your face: the camera
+-- looks AT the player, so a zigzag at their feet fills the canvas. Now
+-- the default is a cloud-to-cloud sheet, high and past the player into
+-- the horizon half of the view. Cloud-to-ground is the rare far one,
+-- still many cells out. The sky shader takes the flash (a cel lift of
+-- the deck); the overlay draws thin world-space strokes, not a chain of
+-- squares and not a full-screen whiteout.
+Weather.STRIKE_ABOVE = 0.78
+Weather.STRIKE_EVERY_MIN = 10
+Weather.STRIKE_EVERY_MAX = 38
+Weather.FLASH_LEN = 0.48
+-- How close a bolt is allowed to land, in cells. Anything under this
+-- stands between the camera and the player and becomes the sticker.
+Weather.BOLT_MIN_CELLS = 9
+Weather.BOLT_MAX_CELLS = 22
+-- Cloud deck the sheet lives in (world px). Roofs top out around 28;
+-- 110+ is above the diorama proper and projects into the sky rectangle.
+Weather.BOLT_SHEET_Y = 124
+Weather.BOLT_SHEET_SPAN = 36
 
 -- After a rain shower clears: rainbow + saturated sky for a short spell of
 -- absolute (wall-clock) time, then gone with no residual flag left behind.
--- 180s is three minutes of real time -- the same clock Weather.timer rides.
 Weather.AFTER_RAIN = 180
 
-local strike = { at = 1e9, next = 20, pending = false, far = 0 }
+-- Cloud base / tip height in world pixels (same units as grass height).
+Weather.BOLT_TOP = 96
+Weather.BOLT_TOP_FAR = 110
+Weather.BOLT_GROUND = 1.2
 
--- after.untilAbs is love.timer absolute seconds; 0 means idle.
--- hadRain latches while a rain spell is (or was) in progress so a pin->OFF
--- that nils `kind` before power hits zero still arms the post-rain spell.
+-- strike.bolt: world polyline + forks + sparks. nil when idle.
+-- far 0 = near/overhead, 1 = distant horizon strike.
+local strike = {
+  at = 1e9, next = 20, pending = false, far = 0,
+  bolt = nil, sparks = nil,
+}
+
 local after = { untilAbs = 0, hadRain = false }
 
 local function absNow()
@@ -201,27 +228,200 @@ local function absNow()
   return 0
 end
 
--- Continuous 0..1 curve (for math); Weather.flash posterises it to hard steps.
-local function flashRaw()
-  local t = strike.at
-  if t >= Weather.FLASH_LEN then return 0 end
-  local shape = 1 - t / Weather.FLASH_LEN
-  -- the flicker: bright, a gap, bright again
-  if t > 0.06 and t < 0.11 then shape = shape * 0.15 end
-  return shape * (0.55 + 0.45 * (1 - strike.far))
+local function playerXZ()
+  local Game = game()
+  local ow = Game and Game.overworld
+  local p = ow and ow.player
+  if not p then return 0, 0 end
+  local px = p.px or ((p.cellX or 0) * 16)
+  local pz = p.py or ((p.cellY or 0) * 16)
+  return px + 8, pz + 8
 end
 
--- 0 / 0.5 / 1 only: a cel strike is a hard plate of light, not a soft ramp.
--- Soft alpha read as bloom-adjacent and as a screen transition.
+-- Camera look on XZ: from the eye toward the focus, which is INTO the
+-- scene and toward the sky rectangle. A bolt between eye and player sits
+-- on the lens; a bolt past the player sits in the sky.
+local function lookXZ()
+  local ok, V3 = pcall(V.require, "Voxel3D")
+  local eye = ok and V3 and V3.eye
+  local focus = ok and V3 and V3.focus
+  if type(eye) == "table" and type(focus) == "table" then
+    local dx = (focus[1] or 0) - (eye[1] or 0)
+    local dz = (focus[3] or 0) - (eye[3] or 0)
+    local len = math.sqrt(dx * dx + dz * dz)
+    if len > 1 then return dx / len, dz / len end
+  end
+  return 0, -1
+end
+
+-- Broken polyline from A to B. `keepUp` refuses to drop below minY, which
+-- is what keeps a sheet from wandering down into the street.
+local function chainTo(x0, y0, z0, x1, y1, z1, steps, wander, minY)
+  local pts = { { x0, y0, z0 } }
+  steps = math.max(3, steps or 8)
+  wander = wander or 18
+  for i = 1, steps - 1 do
+    local t = i / steps
+    local j = wander * (0.4 + 0.6 * math.sin(t * 3.1))
+    local x = x0 + (x1 - x0) * t + (rand() - 0.5) * 2 * j
+    local y = y0 + (y1 - y0) * t + (rand() - 0.5) * j * 0.45
+    local z = z0 + (z1 - z0) * t + (rand() - 0.5) * 2 * j
+    if minY and y < minY then y = minY + rand() * 6 end
+    pts[#pts + 1] = { x, y, z }
+  end
+  pts[#pts + 1] = { x1, y1, z1 }
+  return pts
+end
+
+local function skyForks(main, minY)
+  local forks = {}
+  if not main or #main < 4 then return forks end
+  local n = 2 + rand(0, 3)
+  for _ = 1, n do
+    local root = main[2 + rand(0, math.max(0, #main - 4))]
+    if not root then break end
+    local fx, fy, fz = root[1], root[2], root[3]
+    local fork = { { fx, fy, fz } }
+    local ang = rand() * 6.2831853
+    local steps = 2 + rand(0, 3)
+    for _ = 1, steps do
+      fy = fy + (rand() - 0.65) * 10
+      if minY and fy < minY then fy = minY + rand() * 4 end
+      fx = fx + math.cos(ang) * (8 + rand() * 14)
+      fz = fz + math.sin(ang) * (8 + rand() * 14)
+      ang = ang + (rand() - 0.5) * 1.4
+      fork[#fork + 1] = { fx, fy, fz }
+    end
+    if #fork >= 2 then forks[#forks + 1] = fork end
+  end
+  return forks
+end
+
+-- World-space bolt. Default is a SHEET in the cloud deck, past the player
+-- toward the horizon. Ground strikes are the far minority and still sit
+-- many cells out -- never in the camera-player corridor.
+local function genBoltWorld(far, px, pz)
+  far = tonumber(far) or 0.7
+  if far < 0 then far = 0 elseif far > 1 then far = 1 end
+  px, pz = px or 0, pz or 0
+
+  local lx, lz = lookXZ()
+  local sx, sz = lz, -lx
+  local cells = Weather.BOLT_MIN_CELLS
+                + far * (Weather.BOLT_MAX_CELLS - Weather.BOLT_MIN_CELLS)
+                + rand() * 3
+  local side = (rand() - 0.5) * (7 + far * 8) * 16
+  local cx = px + lx * cells * 16 + sx * side
+  local cz = pz + lz * cells * 16 + sz * side
+
+  -- Sheet unless this is a deliberately close probe AND a coin says ground.
+  -- Auto weather always passes far >= 0.5, so it almost never grounds.
+  local sheet = far >= 0.32 or rand() < 0.7
+  local yDeck = Weather.BOLT_SHEET_Y + far * 18 + rand() * Weather.BOLT_SHEET_SPAN
+
+  if sheet then
+    local span = (5 + far * 7 + rand() * 4) * 16
+    local ang = rand() * 6.2831853
+    local x1 = cx + math.cos(ang) * span
+    local z1 = cz + math.sin(ang) * span
+    local y1 = yDeck + (rand() - 0.5) * 22
+    local minY = Weather.BOLT_SHEET_Y - 18
+    local main = chainTo(cx, yDeck, cz, x1, y1, z1, 7 + rand(0, 3), 22, minY)
+    local channels = { main }
+    if rand() < 0.45 then
+      channels[#channels + 1] = chainTo(
+        cx + (rand() - 0.5) * 18, yDeck + (rand() - 0.5) * 10, cz + (rand() - 0.5) * 18,
+        x1 + (rand() - 0.5) * 24, y1 + (rand() - 0.5) * 10, z1 + (rand() - 0.5) * 24,
+        6, 16, minY)
+    end
+    return {
+      kind = "sheet",
+      channels = channels,
+      forks = skyForks(main, minY),
+      sparks = {},
+      beads = {},
+      ground = nil,
+      cloud = { cx, yDeck, cz },
+      far = far,
+    }
+  end
+
+  -- Distant cloud-to-ground: still past the player, still starting in
+  -- the deck. Thin, few forks, a handful of sparks at the far impact.
+  local topY = yDeck + 8
+  local gx = cx + (rand() - 0.5) * 28
+  local gz = cz + (rand() - 0.5) * 28
+  local main = chainTo(cx, topY, cz, gx, Weather.BOLT_GROUND, gz,
+                       9 + rand(0, 3), 14, nil)
+  local sparks = {}
+  for _ = 1, 5 + rand(0, 4) do
+    local a = rand() * 6.2831853
+    local sp = 12 + rand() * 28
+    sparks[#sparks + 1] = {
+      x = gx, y = 1.2, z = gz,
+      vx = math.cos(a) * sp, vy = 12 + rand() * 22, vz = math.sin(a) * sp,
+      t = 0, ttl = 0.14 + rand() * 0.16, size = 0.45 + rand() * 0.4,
+    }
+  end
+  return {
+    kind = "ground",
+    channels = { main },
+    forks = skyForks(main, 40),
+    sparks = sparks,
+    beads = {},
+    ground = { gx, Weather.BOLT_GROUND, gz },
+    cloud = { cx, topY, cz },
+    far = far,
+  }
+end
+
+local function armStrike(far)
+  local f = tonumber(far)
+  -- unset far used to be a flat rand(), which planted half the bolts
+  -- in the player's lap. The open sky is the default now.
+  if f == nil then f = 0.55 + rand() * 0.45 end
+  if f < 0 then f = 0 elseif f > 1 then f = 1 end
+  local px, pz = playerXZ()
+  strike.at, strike.pending, strike.far = 0, true, f
+  strike.bolt = genBoltWorld(f, px, pz)
+end
+
+local function flashRaw()
+  local t = strike.at
+  if t >= Weather.FLASH_LEN then
+    if strike.bolt and t > Weather.FLASH_LEN + 0.08 then
+      strike.bolt = nil
+    end
+    return 0
+  end
+  local farScale = 0.50 + 0.50 * (1 - strike.far)
+  local shape = 0
+  if t < 0.035 then
+    shape = 0.75 + 0.25 * (1 - t / 0.035)
+  elseif t < 0.070 then
+    shape = 0.08
+  elseif t < 0.130 then
+    shape = 1.0
+  elseif t < 0.175 then
+    shape = 0.12
+  elseif t < 0.240 then
+    shape = 0.70
+  elseif t < 0.300 then
+    shape = 0.10
+  else
+    local u = (t - 0.300) / math.max(0.001, Weather.FLASH_LEN - 0.300)
+    shape = (1 - u) * 0.35
+  end
+  return shape * farScale
+end
+
 function Weather.flash()
   local cont = flashRaw()
-  if cont < 0.18 then return 0 end
+  if cont < 0.14 then return 0 end
   if cont < 0.55 then return 0.5 end
   return 1
 end
 
--- Once per strike, when the sound has had time to arrive: the strike's
--- distance, 0 (overhead) to 1 (far). nil the rest of the time.
 function Weather.thunderDue()
   if not strike.pending then return nil end
   local delay = 0.15 + strike.far * 2.4
@@ -230,15 +430,11 @@ function Weather.thunderDue()
   return strike.far
 end
 
--- Heavy rain that can strike: the same gate the strike scheduler uses.
--- Ecology and AmbientSound read this; nothing writes back.
 function Weather.storming()
   local kind, power = Weather.visible()
   return kind == "rain" and (power or 0) >= Weather.STRIKE_ABOVE
 end
 
--- 0..1 remaining intensity of the post-rain spell (rainbow + sky sat).
--- Absolute time so two readers in one frame never desync on dt.
 function Weather.afterRain()
   local u = after.untilAbs
   if not u or u <= 0 then return 0 end
@@ -252,28 +448,159 @@ function Weather.afterRain()
   return n
 end
 
--- Probe / debug: arm a strike now. `far` 0 = overhead, 1 = distant.
 function Weather.forceStrike(far)
-  local f = tonumber(far)
-  if f == nil then f = 0.35 end
-  if f < 0 then f = 0 elseif f > 1 then f = 1 end
-  strike.at, strike.pending, strike.far = 0, true, f
+  armStrike(far ~= nil and far or 0.35)
 end
 
--- Probe / debug: start (or refresh) the post-rain window.
 function Weather.armAfterRain(seconds)
   local s = tonumber(seconds) or Weather.AFTER_RAIN
   if s < 0 then s = 0 end
   after.untilAbs = absNow() + s
 end
 
--- Delay seconds until thunder for a given far (or the pending strike's far).
 function Weather.thunderDelay(far)
   local f = far
   if f == nil then f = strike.far end
   f = tonumber(f) or 0
   if f < 0 then f = 0 elseif f > 1 then f = 1 end
   return 0.15 + f * 2.4
+end
+
+-- Step ground sparks every weather tick (called from update path via paint).
+local function stepSparks(dt)
+  local bolt = strike.bolt
+  if not bolt or not bolt.sparks then return end
+  for i = #bolt.sparks, 1, -1 do
+    local s = bolt.sparks[i]
+    s.t = s.t + dt
+    s.x = s.x + s.vx * dt
+    s.y = s.y + s.vy * dt
+    s.z = s.z + s.vz * dt
+    s.vy = s.vy - 120 * dt
+    s.vx = s.vx * (1 - 2.5 * dt)
+    s.vz = s.vz * (1 - 2.5 * dt)
+    if s.y < 0.3 then s.y = 0.3; s.vy = s.vy * -0.2 end
+    if s.t >= s.ttl then table.remove(bolt.sparks, i) end
+  end
+end
+
+-- Draw a world-space polyline as STROKES, not a chain of squares. A
+-- rectangle-per-pixel bolt is what made the last one look like UI. Segments
+-- that project too close (between camera and player) are dropped -- those
+-- are the ones that filled the frame.
+Weather.BOLT_PS_CAP = 1.45
+
+local function drawWorldChain(g, project, scale, pts, thickMul, r, gv, b, a)
+  if not pts or #pts < 2 or a < 0.02 then return end
+  local prev = g.getLineWidth and g.getLineWidth() or 1
+  g.setColor(r, gv, b, a)
+  for i = 1, #pts - 1 do
+    local p0, p1 = pts[i], pts[i + 1]
+    local sx0, sy0, ps0 = project(p0[1], p0[2], p0[3])
+    local sx1, sy1, ps1 = project(p1[1], p1[2], p1[3])
+    if sx0 and sx1 then
+      local ps = ((ps0 or 1) + (ps1 or 1)) * 0.5
+      if ps < Weather.BOLT_PS_CAP then
+        local thick = math.max(1, (scale or 1) * math.max(0.4, ps) * 0.7
+                                 * (thickMul or 1))
+        if g.setLineWidth then g.setLineWidth(thick) end
+        g.line(sx0, sy0, sx1, sy1)
+      end
+    end
+  end
+  if g.setLineWidth then g.setLineWidth(prev) end
+end
+
+-- Sky flash only. A full-frame plate is what made a distant strike feel
+-- like a bomb in the player's face. Bands stay in the top of the canvas
+-- (the sky rectangle) and a small hotspot sits on the cloud that threw it.
+local function paintSkyFlash(g, project, w, h, lit, bolt)
+  if not (lit and lit > 0 and w and h) then return end
+  g.setBlendMode("add")
+  local far = strike.far or 0.7
+  -- farther = more of the flash is "in the sky", none of it on the grass
+  local plate = (lit >= 1 and 0.14 or 0.06) * (0.50 + 0.50 * far)
+  local reach = h * (0.38 + 0.14 * far)
+  local bands = 6
+  for i = 0, bands - 1 do
+    local y0 = reach * (i / bands)
+    local hh = reach / bands + 1
+    local a = plate * ((1 - i / bands) ^ 1.7)
+    g.setColor(0.52, 0.60, 0.96, a)
+    g.rectangle("fill", 0, y0, w, hh)
+  end
+  if bolt and bolt.cloud and project then
+    local sx, sy, ps = project(bolt.cloud[1], bolt.cloud[2], bolt.cloud[3])
+    if sx and sy and sy < h * 0.58 and (ps or 1) < Weather.BOLT_PS_CAP then
+      local amp = (lit >= 1 and 0.20 or 0.09) * (0.6 + 0.4 * far)
+      for k = 3, 1, -1 do
+        local rw = (28 + far * 18) * k
+        local rh = (16 + far * 10) * k
+        g.setColor(0.72, 0.82, 1.0, amp / k)
+        g.rectangle("fill", sx - rw, sy - rh * 0.55, rw * 2, rh)
+      end
+    end
+  end
+end
+
+-- Soft plate for the flat 2D path (no camera, no bolt). Still sky-only.
+local function paintPlate(g, w, h, lit)
+  paintSkyFlash(g, nil, w, h, lit, nil)
+end
+
+-- World-space bolt through the camera. `project` is Voxel3D.project.
+local function paintStrike3D(project, scale, lit, w, h)
+  if not (lit and lit > 0) then return end
+  local g = love.graphics
+  local bolt = strike.bolt
+  if w and h then paintSkyFlash(g, project, w, h, lit, bolt) end
+
+  if not bolt or not project then return end
+  local raw = flashRaw()
+  if raw < 0.10 then return end
+  if lit < 0.5 and raw < 0.40 then return end
+
+  -- Sheet lightning is a sky event: keep it bright but not a white wall.
+  -- Ground strikes (the rare far ones) can be a touch hotter.
+  local sky = bolt.kind ~= "ground"
+  local amp = raw * (sky and 0.72 or 0.88)
+  local scl = scale or 1
+  g.setBlendMode("add")
+
+  for _, ch in ipairs(bolt.channels or {}) do
+    drawWorldChain(g, project, scl, ch, 2.4, 0.35, 0.48, 0.98, 0.22 * amp)
+    drawWorldChain(g, project, scl, ch, 1.15, 0.72, 0.84, 1.00, 0.50 * amp)
+    drawWorldChain(g, project, scl, ch, 0.55, 1.00, 1.00, 1.00, 0.95 * amp)
+  end
+  for _, fk in ipairs(bolt.forks or {}) do
+    drawWorldChain(g, project, scl, fk, 1.4, 0.40, 0.55, 1.00, 0.28 * amp)
+    drawWorldChain(g, project, scl, fk, 0.5, 0.95, 0.97, 1.00, 0.75 * amp)
+  end
+
+  if bolt.kind == "ground" then
+    local gr = bolt.ground
+    if gr then
+      local sx, sy, ps = project(gr[1], gr[2], gr[3])
+      if sx and (ps or 1) < Weather.BOLT_PS_CAP then
+        local d = math.max(1.5, scl * (ps or 1) * 2.0)
+        g.setColor(0.60, 0.75, 1.0, 0.28 * amp)
+        g.rectangle("fill", sx - d * 1.4, sy - d * 0.4, d * 2.8, d * 0.8)
+        g.setColor(1, 1, 1, 0.55 * amp)
+        g.rectangle("fill", sx - d * 0.35, sy - d * 0.35, d * 0.7, d * 0.7)
+      end
+    end
+    for _, s in ipairs(bolt.sparks or {}) do
+      local k = 1 - s.t / s.ttl
+      if k > 0 then
+        local sx, sy, ps = project(s.x, s.y, s.z)
+        if sx and (ps or 1) < Weather.BOLT_PS_CAP then
+          local d = math.max(1, scl * (ps or 1) * s.size * (0.5 + k))
+          g.setColor(0.75, 0.88, 1.0, 0.45 * amp * k)
+          g.rectangle("fill", sx - d, sy - d, d * 2, d * 2)
+        end
+      end
+    end
+  end
 end
 
 -- ------- what the rest of the mod asks
@@ -365,35 +692,53 @@ end
 
 -- ------- particles
 --
--- Screen-space streaks and world-space splashes and flakes, all in one list
--- with a `kind` on each, exactly like the ambient life's critters -- and for
--- the same reason: one list means one update loop and one draw loop, and the
--- caps below mean the loop is always short.
-local drops = {}                    -- screen-space rain streaks
-local motes = {}                    -- world-space splashes and snowflakes
+-- Screen-space streaks, world-space shafts, and world-space splashes /
+-- flakes. Caps keep every loop short on the UHD this was written for.
+local drops = {}                    -- screen-space near-camera mist
+local shafts = {}                   -- world-space falling rain
+local motes = {}                    -- world-space splashes, drips, flakes
 
--- Streak count at full power, per 320x288 of canvas -- so the frame is as
--- full of rain at 1/4 resolution as it is at full, instead of thinning out
--- every time the RES row is turned down.
-Weather.STREAKS = 34
-Weather.STREAKS_MAX = 240
--- Splashes and flakes are counted in the WORLD rather than on the screen, and
--- most of the ground they are scattered over is behind the camera or under
--- the frame -- so the numbers that read right on screen are roughly double
--- what a screen-space count would want. Measured off the probe's shots at
--- VOXEL 75 rather than guessed.
-Weather.SPLASHES = 24
+-- Screen-space mist only. Used to be the whole shower (52 / 360) and that
+-- is why it read as a cloth on the lens. The shafts do the work now; these
+-- are the drops between the camera and the near edge, kept few and dim.
+Weather.STREAKS = 18
+Weather.STREAKS_MAX = 80
+-- World-space shafts at full power, around the player. Quality.scale cuts
+-- this the same way it cuts WindFX -- 1/4 RES cannot afford a hundred
+-- extra projections.
+Weather.SHAFTS = 88
+Weather.SHAFTS_MAX = 140
+Weather.SHAFT_FALL = 102            -- world px / s
+Weather.SHAFT_LEN = 16              -- world px of streak above the drop
+Weather.SHAFT_REACH = 9             -- cells around the player
+-- Splashes are mostly spawned by a shaft hitting something. A small
+-- ambient floor stays so a street still ticks when the shafts are sparse.
+Weather.SPLASHES = 56
+Weather.SPLASH_FLOOR = 14
 Weather.FLAKES = 90
 
-Weather.FALL = 900                  -- streak fall speed, canvas px/second
-Weather.SLANT = 0.20                -- how far a streak leans, before wind
+Weather.FALL = 820                  -- base fall speed, canvas px/second
+Weather.SLANT = 0.16                -- lean before wind (wind adds on top)
+-- Stretch-to-velocity: streak length scales with fall speed (Unity stretch
+-- billboard analogue). Cap keeps a gale from drawing metre-long needles.
+Weather.STRETCH = 0.055
+Weather.STRETCH_MIN = 0.55
+Weather.STRETCH_MAX = 2.4
+-- Lateral turbulence (noise force) as a fraction of fall speed.
+Weather.TURB = 0.045
+-- Layer mix of the particle field (must sum ~1). Far is densest: depth cue.
+Weather.LAYER_FAR  = 0.48
+Weather.LAYER_MID  = 0.34
+Weather.LAYER_NEAR = 0.18
 
 -- The rain's own palette: two flat pale blues and a white, all on the 5-bit
 -- lattice the rest of the mod's colour lives on. No gradients anywhere in
 -- here -- a soft-edged raindrop over a cel-shaded diorama is the one thing
 -- that would make the world look like a photograph with a filter on it.
-Weather.RAIN_NEAR = { 0.78, 0.86, 0.97 }
-Weather.RAIN_FAR = { 0.55, 0.66, 0.85 }
+Weather.RAIN_NEAR = { 0.86, 0.92, 1.00 }
+Weather.RAIN_MID  = { 0.70, 0.80, 0.94 }
+Weather.RAIN_FAR  = { 0.50, 0.62, 0.82 }
+Weather.RAIN_CORE = { 0.96, 0.98, 1.00 }   -- bright tip on near streaks
 Weather.SPLASH = { 0.85, 0.92, 1.00 }
 Weather.SNOW = { 0.97, 0.98, 1.00 }
 
@@ -404,18 +749,60 @@ local function slant()
   local amount = 0
   local ok, n = pcall(Wind.amount)
   if ok then amount = n or 0 end
-  return Weather.SLANT + (Wind.DIR[1] or 1) * amount * 0.075
+  return Weather.SLANT + (Wind.DIR[1] or 1) * amount * 0.10
 end
 
--- A fresh streak somewhere above the frame (or, on the first fill, anywhere
--- in it -- otherwise a shower starts as a curtain descending from the top).
+local function windForce()
+  local amount = 0
+  local ok, n = pcall(Wind.amount)
+  if ok then amount = n or 0 end
+  if amount < 0 then amount = 0 elseif amount > 1.5 then amount = 1.5 end
+  return amount, (Wind.DIR and Wind.DIR[1]) or 1
+end
+
+-- Pick a depth layer the way a Unity rain setup uses 2–3 particle systems:
+-- far sheet (many thin), mid, near (few thick, bright).
+local function pickLayer()
+  local r = rand()
+  if r < Weather.LAYER_FAR then return "far" end
+  if r < Weather.LAYER_FAR + Weather.LAYER_MID then return "mid" end
+  return "near"
+end
+
+-- A fresh streak in the emission volume above (or across) the frame.
+-- `anywhere` prewarms the field so a shower does not start as an empty top.
 local function spawnDrop(w, h, anywhere)
+  local layer = pickLayer()
+  local speed, len, alpha, thick
+  -- Mist between the camera and the diorama: shorter, dimmer than the
+  -- old cloth. The world shafts carry the shower.
+  if layer == "near" then
+    speed = 0.95 + rand() * 0.45
+    len   = 8 + rand() * 10
+    alpha = 0.28 + rand() * 0.14
+    thick = 1.2 + rand() * 0.4
+  elseif layer == "mid" then
+    speed = 0.70 + rand() * 0.40
+    len   = 6 + rand() * 8
+    alpha = 0.14 + rand() * 0.10
+    thick = 0.85 + rand() * 0.25
+  else
+    speed = 0.50 + rand() * 0.35
+    len   = 4 + rand() * 6
+    alpha = 0.07 + rand() * 0.07
+    thick = 0.6 + rand() * 0.2
+  end
   drops[#drops + 1] = {
-    x = rand() * (w + h * 0.6) - h * 0.3,
-    y = anywhere and rand() * h or -rand() * h * 0.4,
-    len = 8 + rand() * 16,
-    speed = 0.75 + rand() * 0.5,
-    near = rand() < 0.4,
+    x = rand() * (w + h * 0.7) - h * 0.35,
+    y = anywhere and rand() * h or (-rand() * h * 0.55 - len),
+    len = len,
+    speed = speed,
+    layer = layer,
+    near = layer == "near",   -- legacy flag (probes / older draw)
+    alpha = alpha,
+    thick = thick,
+    seed = rand() * 6.2832,
+    phase = rand(),           -- 0..1 for alpha shimmer over lifetime
   }
 end
 
@@ -501,8 +888,9 @@ local function spawnSplash(ow)
                or Weather.SPLASH_LIFT
   motes[#motes + 1] = {
     kind = "splash", x = x, z = z, y = (gh or 0) + lift,
-    size = inPool and Weather.SPLASH_POOL_SIZE or 1,
-    t = 0, ttl = (inPool and 0.44 or 0.34) + rand() * 0.16,
+    size = inPool and Weather.SPLASH_POOL_SIZE or (onWater and 1.7 or 1),
+    surf = onWater and "water" or inPool and "pool" or "ground",
+    t = 0, ttl = (inPool and 0.44 or onWater and 0.52 or 0.34) + rand() * 0.16,
   }
 end
 
@@ -515,6 +903,158 @@ local function spawnFlake(ow)
     seed = rand() * 6.2831, t = 0, ttl = 30,
     fall = 7 + rand() * 6, size = rand() < 0.35 and 1.4 or 0.9,
   }
+end
+
+-- What a shaft is about to hit at (wx, wz): the LIVE water surface, a
+-- puddle, a roof / tree crown, or the walkable ground. groundAt already
+-- answers the height of a building cell as the roof, so rain stops on
+-- the Mart instead of falling through the counter.
+local function surfaceAt(ow, wx, wz)
+  local map = ow.map
+  local cx = math.floor((wx or 0) / 16)
+  local cy = math.floor((wz or 0) / 16)
+  if not map:inBounds(cx, cy) then return 0, "ground" end
+  if map:isWaterCell(cx, cy) then
+    local y = Weather.SPLASH_POND_LIFT
+    local ok, s = pcall(Water.surfaceAt, wx, wz)
+    if ok and tonumber(s) then y = s end
+    return y, "water"
+  end
+  local gh = groundAt(map, cx, cy)
+  if Weather.poolAt then
+    local ok, holds = pcall(Weather.poolAt, map, cx, cy)
+    if ok and holds then
+      return gh + Weather.SPLASH_POOL_LIFT, "pool"
+    end
+  end
+  -- a raised cell you cannot walk is a lid (roof, hedge, tree crown)
+  if gh > 6 and not map:isWalkableCell(cx, cy) then
+    return gh, "roof"
+  end
+  return gh + Weather.SPLASH_LIFT, "ground"
+end
+
+local function splashFromHit(x, z, y, surf)
+  if #motes >= Weather.SPLASHES then return end
+  local size, ttl = 1, 0.34
+  if surf == "water" then
+    size, ttl = 1.85, 0.58
+  elseif surf == "pool" then
+    size, ttl = Weather.SPLASH_POOL_SIZE, 0.46
+  elseif surf == "roof" then
+    size, ttl = 0.62, 0.20
+  end
+  motes[#motes + 1] = {
+    kind = "splash", x = x, z = z, y = y,
+    size = size, surf = surf,
+    t = 0, ttl = ttl + rand() * 0.14,
+  }
+  if surf == "pool" and Weather.notePoolHit then
+    pcall(Weather.notePoolHit, x, z)
+  end
+end
+
+-- A drop that left the roof and is looking for the street. Spawned beside
+-- the hit, not on it, so the drip falls off the eave rather than through
+-- the tiles it just landed on.
+local function spawnDrip(ow, x, z, yRoof)
+  local dir = rand(0, 3)
+  local ox = (dir == 0 and 12) or (dir == 1 and -12) or 0
+  local oz = (dir == 2 and 12) or (dir == 3 and -12) or 0
+  local nx, nz = x + ox, z + oz
+  local yLand = select(1, surfaceAt(ow, nx, nz))
+  if yLand >= (yRoof or 0) - 2 then return end
+  motes[#motes + 1] = {
+    kind = "drip", x = nx, z = nz, y = yRoof - 1,
+    yLand = yLand, fall = 70 + rand() * 30,
+    t = 0, ttl = 1.4,
+  }
+end
+
+local function shaftBudget()
+  local s = 1
+  local ok, n = pcall(Quality.scale)
+  if ok and tonumber(n) then s = n end
+  if s >= 4 then return 22 end
+  if s == 3 then return 40 end
+  if s == 2 then return Weather.SHAFTS end
+  return Weather.SHAFTS_MAX
+end
+
+local function spawnShaft(ow, anywhere)
+  local p = ow.player
+  local r = Weather.SHAFT_REACH
+  local x = (p.cellX + rand(-r, r)) * 16 + rand(0, 15)
+  local z = (p.cellY + rand(-r, r)) * 16 + rand(0, 15)
+  local ySurf = select(1, surfaceAt(ow, x, z))
+  -- always start ABOVE the lid, never inside a house
+  local air = 22 + rand() * 56
+  local y = ySurf + (anywhere and (4 + rand() * air) or air)
+  local layer = pickLayer()
+  local fall = Weather.SHAFT_FALL
+  local len = Weather.SHAFT_LEN
+  local alpha, thick
+  if layer == "near" then
+    fall = fall * (1.05 + rand() * 0.25)
+    len = len * (1.15 + rand() * 0.35)
+    alpha = 0.55 + rand() * 0.28
+    thick = 1.35 + rand() * 0.55
+  elseif layer == "mid" then
+    fall = fall * (0.88 + rand() * 0.22)
+    len = len * (0.90 + rand() * 0.25)
+    alpha = 0.32 + rand() * 0.18
+    thick = 0.95 + rand() * 0.35
+  else
+    fall = fall * (0.70 + rand() * 0.20)
+    len = len * (0.70 + rand() * 0.20)
+    alpha = 0.16 + rand() * 0.12
+    thick = 0.65 + rand() * 0.25
+  end
+  shafts[#shafts + 1] = {
+    x = x, y = y, z = z,
+    fall = fall, len = len, layer = layer,
+    alpha = alpha, thick = thick,
+    seed = rand() * 6.2832,
+  }
+end
+
+local function stepShafts(ow, dt, power)
+  local want = math.floor(shaftBudget() * (0.35 + 0.65 * power))
+  if want < 0 then want = 0 end
+  local first = #shafts == 0
+  for _ = 1, math.max(0, want - #shafts) do spawnShaft(ow, first) end
+  while #shafts > want do table.remove(shafts) end
+
+  local wAmt = 0
+  local okw, n = pcall(Wind.amount)
+  if okw then wAmt = n or 0 end
+  local wdx = (Wind.DIR and Wind.DIR[1]) or 1
+  local wdz = (Wind.DIR and Wind.DIR[2]) or 0
+  local p = ow.player
+  local px = (p.cellX or 0) * 16
+  local pz = (p.cellY or 0) * 16
+  local reach = Weather.SHAFT_REACH * 16 + 48
+
+  for i = #shafts, 1, -1 do
+    local s = shafts[i]
+    s.x = s.x + wdx * wAmt * 16 * dt
+    s.z = s.z + wdz * wAmt * 16 * dt
+    s.y = s.y - s.fall * dt
+    local yHit, surf = surfaceAt(ow, s.x, s.z)
+    local far = math.abs(s.x - px) > reach or math.abs(s.z - pz) > reach
+    if s.y <= yHit or far then
+      if (not far) and s.y <= yHit + 6 then
+        splashFromHit(s.x, s.z, yHit, surf)
+        if surf == "roof" and rand() < 0.38 then
+          spawnDrip(ow, s.x, s.z, yHit)
+        end
+      end
+      -- recycle into the air column above a fresh cell
+      local ns = #shafts
+      table.remove(shafts, i)
+      if ns <= want then spawnShaft(ow, false) end
+    end
+  end
 end
 
 -- ------- per-frame
@@ -660,13 +1200,21 @@ local function tick(dt)
 
   -- ------- lightning
   strike.at = strike.at + dt
+  if strike.bolt then
+    stepSparks(dt)
+    if strike.at > Weather.FLASH_LEN + 0.25 then
+      strike.bolt = nil
+    end
+  end
   if visible == "rain" and state.power >= Weather.STRIKE_ABOVE then
     strike.next = strike.next - dt
     if strike.next <= 0 then
       strike.next = Weather.STRIKE_EVERY_MIN
                     + rand() * (Weather.STRIKE_EVERY_MAX
                                 - Weather.STRIKE_EVERY_MIN)
-      strike.at, strike.pending, strike.far = 0, true, rand()
+      -- far / sheet by default. rand^0.55 biases HIGH, so the sky
+      -- lights up and the street in front of the player does not.
+      armStrike(0.50 + rand() ^ 0.55 * 0.50)
     end
   elseif strike.next < 5 then
     strike.next = 5
@@ -683,6 +1231,7 @@ local function tick(dt)
   if not canDraw then
     if #motes > 0 then motes = {} end
     if #drops > 0 then drops = {} end
+    if #shafts > 0 then shafts = {} end
     return
   end
 
@@ -690,9 +1239,18 @@ local function tick(dt)
   local px, pz = p.cellX * 16, p.cellY * 16
 
   if visible == "rain" then
-    local want_n = math.floor(Weather.SPLASHES * state.power)
-    for _ = 1, math.max(0, want_n - #motes) do spawnSplash(ow) end
+    stepShafts(ow, dt, state.power)
+    -- a few ambient rings so the street still ticks when shafts are
+    -- sparse (1/4 RES, the first second of a shower). The shafts do
+    -- the rest by landing.
+    local floor = math.floor(Weather.SPLASH_FLOOR * state.power)
+    local splashes = 0
+    for i = 1, #motes do
+      if motes[i].kind == "splash" then splashes = splashes + 1 end
+    end
+    for _ = 1, math.max(0, floor - splashes) do spawnSplash(ow) end
   else
+    if #shafts > 0 then shafts = {} end
     local want_n = math.floor(Weather.FLAKES * state.power)
     for _ = 1, math.min(3, math.max(0, want_n - #motes)) do spawnFlake(ow) end
   end
@@ -714,6 +1272,12 @@ local function tick(dt)
       m.z = m.z + (math.cos(m.t * 0.9 + m.seed) * 2
                    + (Wind.DIR[2] or 0) * windAmt * 2.2) * dt
       if m.y <= 0 then dead = true end
+    elseif m.kind == "drip" then
+      m.y = m.y - (m.fall or 80) * dt
+      if m.y <= (m.yLand or 0) then
+        splashFromHit(m.x, m.z, m.yLand or 0, "ground")
+        dead = true
+      end
     end
     if not dead and (math.abs(m.x - px) > 200 or math.abs(m.z - pz) > 200) then
       dead = true
@@ -732,7 +1296,7 @@ function Weather.update(dt)
   DayNight.overcast, Water.wet, Water.snow = 0, 0, 0
   if Wind then Wind.weatherDrive, Wind.grassWet = 0, 0 end
   if Water.freeze then Water.freeze = 0 end
-  drops, motes = {}, {}
+  drops, motes, shafts = {}, {}, {}
   if V.mod and V.mod.log then
     V.mod.log:warn("weather failed: %s -- the sky is clear for this session",
                    tostring(err))
@@ -745,60 +1309,252 @@ end
 -- the flat 2D world are the same rain and must not be two different effects.
 -- `w`,`h` are whatever surface is being drawn into: the scene canvas at its
 -- rasterised size in voxel mode, the window in flat mode.
+--
+-- Motion model (Unity particle rain, cel port):
+--   velocity = fall * layerSpeed * powerCurve + wind force on X
+--   stretch  = length scales with |velocity| (motion-blur streak)
+--   turb     = small lateral sine so paths are not parallel rulers
+--   recycle  = volume re-emit above the frame (continuous rate-over-time)
 local function stepDrops(w, h, dt, power)
-  local want = math.floor(Weather.STREAKS * power * (w * h) / (320 * 288))
+  -- Heavier than linear at low power so a drizzle still reads; soft-caps
+  -- density at full so the max stays a downpour not a whiteout.
+  local dens = power * (0.55 + 0.45 * power)
+  local want = math.floor(Weather.STREAKS * dens * (w * h) / (320 * 288))
   if want > Weather.STREAKS_MAX then want = Weather.STREAKS_MAX end
   local first = #drops == 0
   for _ = 1, math.max(0, want - #drops) do spawnDrop(w, h, first) end
   while #drops > want do table.remove(drops) end
 
   local lean = slant()
+  local wAmt, wDx = windForce()
   local scale = math.max(1, h / 288)
+  local t = 0
+  if love.timer and love.timer.getTime then t = love.timer.getTime() end
   for _, d in ipairs(drops) do
-    local v = Weather.FALL * d.speed * scale * (0.6 + 0.4 * power)
+    -- legacy drops (pre-layer) keep working
+    local spd = d.speed or 1
+    local v = Weather.FALL * spd * scale * (0.55 + 0.45 * power)
+    -- near layer falls a touch faster (closer = higher terminal feel)
+    if d.layer == "near" then
+      v = v * 1.12
+    elseif d.layer == "far" then
+      v = v * 0.78
+    end
+    -- wind force over lifetime (Unity Force module): adds to horizontal
+    local vx = v * lean + wDx * wAmt * v * 0.12
+    local seed = d.seed or 0
+    local turb = math.sin(t * (2.1 + spd) + seed) * v * Weather.TURB
+    d.x = d.x + (vx + turb) * dt
     d.y = d.y + v * dt
-    d.x = d.x + v * lean * dt
-    if d.y > h then
-      d.y = -d.len * scale - rand() * h * 0.2
-      d.x = rand() * (w + h * 0.6) - h * 0.3
+    d.phase = ((d.phase or 0) + dt * (0.7 + spd * 0.4)) % 1
+    -- cache velocity for stretch draw
+    d._vx, d._vy = vx + turb, v
+    if d.y > h + 8 then
+      -- re-emit in the box above the frame (continuous particle recycle)
+      d.y = -d.len * scale - rand() * h * 0.35
+      d.x = rand() * (w + h * 0.7) - h * 0.35
+      d.phase = rand()
+      d.seed = rand() * 6.2832
     end
   end
 end
 
--- The streaks themselves: flat lines, two shades, no soft edges. NEAR drops
--- are brighter, longer and thicker; FAR ones are dimmer and thinner, and the
--- two together are the only depth cue rain in front of the world can have.
+-- Depth order: far → mid → near so nearer streaks overdraw farther ones
+-- (two particle systems stacked, same idea as Unity camera-sorted layers).
+local LAYER_ORDER = { far = 1, mid = 2, near = 3 }
+local function layerRank(d)
+  return LAYER_ORDER[d.layer or (d.near and "near" or "far")] or 2
+end
+
 local function drawDrops(h, power)
+  if power <= 0.01 or #drops == 0 then return end
   local g = love.graphics
-  local lean = slant()
   local scale = math.max(1, h / 288)
   local prevWidth = g.getLineWidth and g.getLineWidth() or 1
-  for _, d in ipairs(drops) do
-    local c = d.near and Weather.RAIN_NEAR or Weather.RAIN_FAR
-    local len = d.len * scale * (0.7 + 0.5 * power)
-    g.setLineWidth((d.near and 1.6 or 1) * scale)
-    g.setColor(c[1], c[2], c[3], (d.near and 0.55 or 0.34) * power)
-    g.line(d.x, d.y, d.x + len * lean, d.y + len)
+
+  -- cheap insertion order: partition into three buckets (no full sort)
+  local buckets = { {}, {}, {} }
+  for i = 1, #drops do
+    local d = drops[i]
+    local b = buckets[layerRank(d)]
+    b[#b + 1] = d
+  end
+
+  for bi = 1, 3 do
+    local list = buckets[bi]
+    for i = 1, #list do
+      local d = list[i]
+      local c
+      if d.layer == "near" or d.near then
+        c = Weather.RAIN_NEAR
+      elseif d.layer == "mid" then
+        c = Weather.RAIN_MID
+      else
+        c = Weather.RAIN_FAR
+      end
+      local vx = d._vx or 0
+      local vy = d._vy or (Weather.FALL * (d.speed or 1) * scale)
+      local speed = math.sqrt(vx * vx + vy * vy)
+      -- stretch-to-velocity: faster drops leave a longer streak
+      local stretch = speed * Weather.STRETCH / math.max(1, scale)
+      if stretch < Weather.STRETCH_MIN then stretch = Weather.STRETCH_MIN end
+      if stretch > Weather.STRETCH_MAX then stretch = Weather.STRETCH_MAX end
+      local baseLen = (d.len or 10) * scale * (0.65 + 0.55 * power)
+      local len = baseLen * stretch
+      -- direction of travel (align streak to velocity, not a fixed lean)
+      local inv = 1 / math.max(1e-3, speed)
+      local dx = vx * inv * len
+      local dy = vy * inv * len
+      -- alpha shimmer (colour-over-lifetime analogue, hard steps)
+      local shim = 0.82 + 0.18 * math.sin((d.phase or 0) * 6.2832)
+      local a = (d.alpha or 0.4) * power * shim
+      local thick = (d.thick or 1) * scale
+      if g.setLineWidth then g.setLineWidth(thick) end
+      g.setColor(c[1], c[2], c[3], a)
+      g.line(d.x, d.y, d.x + dx, d.y + dy)
+      -- bright core tip on near drops (the "head" of a stretch particle)
+      if (d.layer == "near" or d.near) and a > 0.2 then
+        local tip = 0.28
+        local core = Weather.RAIN_CORE
+        if g.setLineWidth then g.setLineWidth(thick * 0.55) end
+        g.setColor(core[1], core[2], core[3], a * 0.85)
+        g.line(d.x + dx * (1 - tip), d.y + dy * (1 - tip),
+               d.x + dx, d.y + dy)
+      end
+    end
   end
   if g.setLineWidth then g.setLineWidth(prevWidth) end
+end
+
+-- World-space shafts: project the drop and a point `len` above it (upwind
+-- of the wind), draw a cel line between them. Far / mid / near by the
+-- layer the spawn picked, so a near drop overdraws a far one without a
+-- full sort. No depth test -- this is the overlay -- so the collision
+-- against the roof is what stops a shaft falling through the Mart.
+local function drawShafts(project, scale, power)
+  if power <= 0.01 or #shafts == 0 then return end
+  local g = love.graphics
+  local prevWidth = g.getLineWidth and g.getLineWidth() or 1
+  local wAmt = 0
+  local okw, n = pcall(Wind.amount)
+  if okw then wAmt = n or 0 end
+  local wdx = (Wind.DIR and Wind.DIR[1]) or 1
+  local wdz = (Wind.DIR and Wind.DIR[2]) or 0
+
+  local buckets = { {}, {}, {} }
+  for i = 1, #shafts do
+    local s = shafts[i]
+    local b = buckets[layerRank(s)]
+    b[#b + 1] = s
+  end
+
+  for bi = 1, 3 do
+    local list = buckets[bi]
+    for i = 1, #list do
+      local s = list[i]
+      local hx, hy, hps = project(s.x, s.y, s.z)
+      if hx then
+        local tx = s.x - wdx * wAmt * 0.35
+        local ty = s.y + s.len
+        local tz = s.z - wdz * wAmt * 0.35
+        local ux, uy, ups = project(tx, ty, tz)
+        if not ux then ux, uy, ups = hx, hy - (s.len * (hps or 1)), hps end
+        local c
+        if s.layer == "near" then
+          c = Weather.RAIN_NEAR
+        elseif s.layer == "mid" then
+          c = Weather.RAIN_MID
+        else
+          c = Weather.RAIN_FAR
+        end
+        local ps = hps or 1
+        local a = (s.alpha or 0.35) * power
+        -- perspective: nearer shafts read brighter and thicker
+        if ps > 1 then a = a * math.min(1.25, 0.75 + ps * 0.25) end
+        local thick = math.max(1, (s.thick or 1) * scale * math.max(0.7, ps))
+        if g.setLineWidth then g.setLineWidth(thick) end
+        g.setColor(c[1], c[2], c[3], a)
+        g.line(ux, uy, hx, hy)
+        if s.layer == "near" and a > 0.22 then
+          local core = Weather.RAIN_CORE
+          local d = math.max(1.2, scale * ps * 1.15)
+          g.setColor(core[1], core[2], core[3], a * 0.95)
+          g.rectangle("fill", hx - d * 0.45, hy - d * 0.45, d * 0.9, d * 0.9)
+        end
+      end
+    end
+  end
+  if g.setLineWidth then g.setLineWidth(prevWidth) end
+end
+
+local function drawSplash(g, sx, sy, s, m, power)
+  local k = m.t / m.ttl
+  local size = m.size or 1
+  local surf = m.surf
+  local r = s * (0.55 + k * 2.8) * size
+  local a = (1 - k) * (1 - k) * 0.95 * power
+  local c = Weather.SPLASH
+  local t = math.max(1, s * 0.7)
+  g.setColor(c[1], c[2], c[3], a)
+  -- four cardinal ticks (the ring)
+  g.rectangle("fill", sx - r, sy - t * 0.5, r * 0.55, t)
+  g.rectangle("fill", sx + r * 0.45, sy - t * 0.5, r * 0.55, t)
+  g.rectangle("fill", sx - t * 0.5, sy - r * 0.5, t, r * 0.3)
+  g.rectangle("fill", sx - t * 0.5, sy + r * 0.2, t, r * 0.25)
+  -- water / puddle: a second wider ring so a hit on standing water
+  -- reads from across the street, which is how rain on a pond looks
+  if (surf == "water" or surf == "pool") and k < 0.85 then
+    local r2 = r * (1.35 + k * 0.4)
+    local a2 = a * 0.45
+    local t2 = math.max(1, t * 0.55)
+    g.setColor(c[1], c[2], c[3], a2)
+    g.rectangle("fill", sx - r2, sy - t2 * 0.5, r2 * 0.4, t2)
+    g.rectangle("fill", sx + r2 * 0.6, sy - t2 * 0.5, r2 * 0.4, t2)
+    g.rectangle("fill", sx - t2 * 0.5, sy - r2 * 0.35, t2, r2 * 0.22)
+  end
+  -- secondary flecks on the diagonals (particle burst)
+  if k < 0.75 then
+    local fr = r * (0.55 + k * 0.9)
+    local fa = a * 0.7
+    local ft = math.max(1, t * 0.55)
+    g.setColor(c[1], c[2], c[3], fa)
+    g.rectangle("fill", sx - fr * 0.75, sy - fr * 0.55, ft, ft)
+    g.rectangle("fill", sx + fr * 0.55, sy - fr * 0.5, ft, ft)
+    g.rectangle("fill", sx - fr * 0.65, sy + fr * 0.35, ft, ft)
+    g.rectangle("fill", sx + fr * 0.5, sy + fr * 0.4, ft, ft)
+  end
+  -- rebound droplet (collision bounce-up, dies fast)
+  if k < 0.40 and surf ~= "roof" then
+    local up = s * (1.6 - k * 3.2)
+    g.setColor(c[1], c[2], c[3], (1 - k / 0.40) * 0.8 * power)
+    g.rectangle("fill", sx - t * 0.35, sy - up - s * 0.4, t * 0.7, s * 1.4)
+  end
 end
 
 -- ------- the draw
 --
 -- Inside the voxel overlay pass (main.lua's drawWorld), with the same project
--- function the field FX and the ambient life anchor through. Splashes and
--- flakes go down FIRST, so the screen-space rain falls in front of them --
--- which is the correct order, because a streak is by definition nearer than
--- the ground it is about to hit.
+-- function the field FX and the ambient life anchor through. Splashes land
+-- FIRST (they are on the ground), shafts through the volume next, then the
+-- thin screen-space mist in front of everything -- rain between the camera
+-- and the near edge of the diorama has no world position.
 function Weather.draw(project, scale, w, h)
   -- visible, NOT falling: indoors and under a canopy this draws nothing at
-  -- all -- no splashes, no flakes, no streaks and no lightning. See
-  -- Weather.visible for why those are two different questions.
+  -- all -- no splashes, no flakes, no streaks. A mid-flash bolt may still
+  -- draw if one was armed (storm / probe), because the strike is already
+  -- in world space and does not need rain power to project.
   local kind, power = Weather.visible()
   if not kind then
-    -- and the streak field goes with it, so walking back out does not open
-    -- on a screenful of rain that was accumulating behind the ceiling
     if #drops > 0 then drops = {} end
+    if #shafts > 0 then shafts = {} end
+    local lit = Weather.flash()
+    if lit > 0 and project then
+      local g = love.graphics
+      local prevBlend, prevAlpha = g.getBlendMode()
+      paintStrike3D(project, scale, lit, w, h)
+      g.setBlendMode(prevBlend or "alpha", prevAlpha)
+      g.setColor(1, 1, 1, 1)
+    end
     return
   end
   local g = love.graphics
@@ -810,23 +1566,14 @@ function Weather.draw(project, scale, w, h)
     if sx then
       local s = math.max(1, scale * (ps or 1))
       if m.kind == "splash" then
-        -- a ring that opens and goes: four flat ticks on the cardinals rather
-        -- than a circle, which is what a two-colour drawing of a splash is
-        local k = m.t / m.ttl
-        local r = s * (0.6 + k * 2.4) * (m.size or 1)
-        local a = (1 - k) * 0.95 * power
-        local c = Weather.SPLASH
-        g.setColor(c[1], c[2], c[3], a)
+        drawSplash(g, sx, sy, s, m, power)
+      elseif m.kind == "drip" then
+        local c = Weather.RAIN_NEAR
+        local a = 0.7 * power
         local t = math.max(1, s * 0.7)
-        g.rectangle("fill", sx - r, sy - t * 0.5, r * 0.55, t)
-        g.rectangle("fill", sx + r * 0.45, sy - t * 0.5, r * 0.55, t)
-        g.rectangle("fill", sx - t * 0.5, sy - r * 0.5, t, r * 0.3)
-        -- and the drop that made it, standing up out of the middle while the
-        -- ring is young
-        if k < 0.45 then
-          g.setColor(c[1], c[2], c[3], (1 - k / 0.45) * 0.7 * power)
-          g.rectangle("fill", sx - t * 0.4, sy - s * 2.2, t * 0.8, s * 2)
-        end
+        local h = s * 2.4
+        g.setColor(c[1], c[2], c[3], a)
+        g.rectangle("fill", sx - t * 0.4, sy - h, t * 0.8, h)
       else
         local c = Weather.SNOW
         local fade = math.min(1, m.t * 3, m.y / 6)
@@ -837,21 +1584,16 @@ function Weather.draw(project, scale, w, h)
     end
   end
 
-  if kind == "rain" and w and h then
-    stepDrops(w, h, love.timer and love.timer.getDelta() or 0, power)
-    drawDrops(h, power)
+  if kind == "rain" then
+    drawShafts(project, scale, power)
+    if w and h then
+      stepDrops(w, h, love.timer and love.timer.getDelta() or 0, power)
+      drawDrops(h, power)
+    end
   end
 
-  -- the strike, over everything: the sky lighting the whole diorama at once,
-  -- which is what it does
-  -- hard plate: lit is already 0 / 0.5 / 1; alpha is a fixed step, not a fade
-  local lit = Weather.flash()
-  if lit > 0 and w and h then
-    g.setBlendMode("add")
-    local a = lit >= 1 and 0.72 or 0.40
-    g.setColor(0.62, 0.66, 0.82, a)
-    g.rectangle("fill", 0, 0, w, h)
-  end
+  -- World-space bolt through the same camera as splashes (not a HUD PNG).
+  paintStrike3D(project, scale, Weather.flash(), w, h)
 
   g.setBlendMode(prevBlend or "alpha", prevAlpha)
   g.setColor(1, 1, 1, 1)
@@ -893,13 +1635,8 @@ function Weather.paintFlat()
     stepDrops(w, h, love.timer and love.timer.getDelta() or 0, power)
     drawDrops(h, power)
   end
-  local lit = Weather.flash()
-  if lit > 0 then
-    g.setBlendMode("add")
-    local a = lit >= 1 and 0.72 or 0.40
-    g.setColor(0.62, 0.66, 0.82, a)
-    g.rectangle("fill", 0, 0, w, h)
-  end
+  -- No camera on the flat path: ambient plate only (bolt needs project).
+  paintPlate(g, w, h, Weather.flash())
   g.setBlendMode(prevBlend or "alpha", prevAlpha)
   g.setColor(1, 1, 1, 1)
 end

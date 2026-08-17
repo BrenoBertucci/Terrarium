@@ -90,7 +90,96 @@ Sky.cloudSetting = ModSetting.new("clouds", "CLOUDS",
 -- close as the deck crosses, so it is never the same shape twice. Slower than
 -- the drift by design -- cloud that boils reads as steam.
 Sky.CLOUD_PARALLAX = 0.0016   -- noise units per world pixel of camera
-Sky.CLOUD_EVOLVE = 0.035      -- shape change per second, independent of wind
+-- ------- natural cloud motion (integrated clocks, not wall-clock * big rate)
+--
+-- Raw `time * rate` with a storm multiplier made the deck race across the
+-- sky -- wallpaper on fast-forward. Real high cloud crawls: several minutes
+-- to cross the frame on a calm day, only a little faster under a gale, and
+-- shape change is slower still (boiling reads as steam, not weather).
+--
+-- Two INTEGRATED clocks (drift / evolve) step each frame from a smoothed
+-- climate so wind and rain ease in instead of snapping the sample point.
+-- Rates are noise-units per second; keep them small.
+Sky.CLOUD_DRIFT_BASE = 0.026      -- calm travel (was ~0.12 -- much too fast)
+Sky.CLOUD_DRIFT_WIND = 0.40       -- +40% at full Wind.amount (not +240%)
+Sky.CLOUD_DRIFT_WET  = 0.18       -- +18% under full rain
+Sky.CLOUD_DRIFT_STORM = 0.22      -- +22% when the sky is bruised enough to strike
+Sky.CLOUD_EVOLVE_BASE = 0.010     -- calm shape change (was 0.035)
+Sky.CLOUD_EVOLVE_WET  = 0.50      -- modest boil in rain
+Sky.CLOUD_EVOLVE_WIND = 0.22
+Sky.CLOUD_EVOLVE_STORM = 0.30
+-- How fast climate eases toward the live wind/rain (higher = snappier).
+-- ~1.2 /s ≈ half-second lag: gusts feel fluid, not stepped.
+Sky.CLOUD_CLIMATE_TAU = 1.2
+-- Stretch of the wind sample vector (streak under gale). Tiny on purpose --
+-- large push + high drift was the other half of the "racing sky" bug.
+Sky.CLOUD_PUSH_WIND = 0.18
+-- Legacy aliases (older probes / notes); map to the new base evolve.
+Sky.CLOUD_EVOLVE = Sky.CLOUD_EVOLVE_BASE
+Sky.CLOUD_WIND_DRIVE = Sky.CLOUD_DRIFT_WIND
+Sky.CLOUD_WET_EVOLVE = Sky.CLOUD_EVOLVE_WET
+Sky.CLOUD_WIND_EVOLVE = Sky.CLOUD_EVOLVE_WIND
+
+-- Integrated motion state. Never read wall-clock directly into the shader
+-- for travel -- only these accumulators, so a hitch cannot fling the deck.
+local cloudMotion = {
+  drift = 0,
+  evolve = 0,
+  wind = 0,
+  wet = 0,
+  storm = 0,
+  lastT = nil,
+}
+
+-- One frame of natural motion. Returns drift, evolve, smoothed wind/wet/storm.
+local function stepCloudMotion()
+  local t = 0
+  if love.timer and love.timer.getTime then t = love.timer.getTime() end
+  local dt = 0
+  if cloudMotion.lastT then dt = t - cloudMotion.lastT end
+  cloudMotion.lastT = t
+  if dt < 0 then dt = 0 elseif dt > 0.08 then dt = 0.08 end
+
+  local windT, wetT, stormT = 0, 0, 0
+  if Wind and Wind.amount then
+    local okw, wa = pcall(Wind.amount)
+    if okw then windT = tonumber(wa) or 0 end
+  end
+  if windT < 0 then windT = 0 elseif windT > 1.2 then windT = 1.2 end
+  do
+    local okv, kind, power = pcall(Weather.visible)
+    if okv and kind and power then wetT = tonumber(power) or 0 end
+  end
+  if wetT < 0 then wetT = 0 elseif wetT > 1 then wetT = 1 end
+  stormT = tonumber(DayNight.storm) or 0
+  if stormT < 0 then stormT = 0 elseif stormT > 1 then stormT = 1 end
+
+  -- Exponential ease toward live climate (frame-rate independent).
+  local k = 0
+  if dt > 0 then
+    k = 1 - math.exp(-dt * Sky.CLOUD_CLIMATE_TAU)
+  end
+  cloudMotion.wind  = cloudMotion.wind  + (windT  - cloudMotion.wind)  * k
+  cloudMotion.wet   = cloudMotion.wet   + (wetT   - cloudMotion.wet)   * k
+  cloudMotion.storm = cloudMotion.storm + (stormT - cloudMotion.storm) * k
+
+  local w = cloudMotion.wind
+  local wet = cloudMotion.wet
+  local storm = cloudMotion.storm
+  local driftRate = Sky.CLOUD_DRIFT_BASE
+                    * (1 + w * Sky.CLOUD_DRIFT_WIND
+                         + wet * Sky.CLOUD_DRIFT_WET
+                         + storm * Sky.CLOUD_DRIFT_STORM)
+  local evolveRate = Sky.CLOUD_EVOLVE_BASE
+                     * (1 + wet * Sky.CLOUD_EVOLVE_WET
+                          + w * Sky.CLOUD_EVOLVE_WIND
+                          + storm * Sky.CLOUD_EVOLVE_STORM)
+  cloudMotion.drift  = cloudMotion.drift  + dt * driftRate
+  cloudMotion.evolve = cloudMotion.evolve + dt * evolveRate
+  return cloudMotion.drift, cloudMotion.evolve, w, wet, storm
+end
+
+Sky._stepCloudMotion = stepCloudMotion   -- named for probes
 
 -- Coastal outdoor maps: denser low fog at dawn/dusk (cheap id table, not
 -- a tile scan). Extends the same idea as DayNight.CANOPY for forests.
@@ -258,13 +347,28 @@ function Sky.cloudAmount()
   if okv and kind and power then wet = tonumber(power) or 0 end
   if wet < 0 then wet = 0 elseif wet > 1 then wet = 1 end
 
+  -- Wind alone pulls a little extra mass across the sky so a gale without
+  -- rain still densifies the deck (streaky high cloud) rather than only
+  -- sliding the same puffs faster.
+  local windPull = 0
+  if Wind and Wind.amount then
+    local okw, wa = pcall(Wind.amount)
+    if okw then windPull = math.min(1, tonumber(wa) or 0) * 0.22 end
+  end
+  local climate = math.max(overcast, wet * 0.95, windPull)
+
   local amt
   if mode >= 2 then
     -- THICK: showcase deck; weather can only make it heavier
-    amt = 0.62 + 0.38 * math.max(overcast, wet)
+    amt = 0.62 + 0.38 * math.max(climate, wet)
   else
     -- ON: sparse fair-weather puffs that thicken with the front
-    amt = 0.18 + 0.82 * math.max(overcast, wet * 0.95)
+    amt = 0.16 + 0.84 * climate
+  end
+  -- Storm bruise (heavy rain that can strike) fills gaps almost solid
+  local storm = tonumber(DayNight.storm) or 0
+  if storm > 0 then
+    amt = amt + (1 - amt) * storm * 0.45
   end
 
   -- night still has clouds, but fewer of them (stars need room)
@@ -415,6 +519,9 @@ uniform float rayAmt;      // 0..1 (Weather.afterRain, sun only -- not a moon)
 uniform vec2  rayPos;      // the disc, in canvas pixels
 uniform float rayInvR;     // 1 / the fan's reach
 uniform vec3  rayColor;
+// Lightning flash: a cel lift of the deck, stronger overhead. 0 / ~0.5 / 1
+// from Weather.flash -- the bolt itself is world-space in Weather.lua.
+uniform float flashAmt;
 
 // Band `i`, read from its own texel centre. The index is clamped rather than
 // trusted: `pos` below can land exactly on `count` when the arithmetic is
@@ -466,8 +573,13 @@ float cloudDensity(vec2 xz, float h, float thr, float ev) {
   // is never the same shape twice. Two constants, zero extra work -- it is
   // the same texture-free noise call, sampled somewhere else.
   float carve = cloudNoise(xz * 2.4 + vec2(h * 3.1 + ev * 2.3, 11.0 - ev * 1.7));
-  n = n - carve * 0.18;
-  return max(n - thr, 0.0) * envelope;
+  // thr drops as cloudAmt rises (see march). Map that back to a 0..1 "how
+  // stormy" weight so a front is torn and layered, fair weather stays soft.
+  float dense = clamp((0.58 - thr) / 0.36, 0.0, 1.0);
+  n = n - carve * mix(0.16, 0.34, dense);
+  // Slight extra mass mid-slab under a heavy deck (towering cells).
+  float tower = mix(1.0, 1.10, dense * smoothstep(0.25, 0.70, h));
+  return max(n - thr, 0.0) * envelope * tower;
 }
 
 vec4 effect(vec4 color, Image tex, vec2 tc, vec2 sc) {
@@ -627,15 +739,33 @@ vec4 effect(vec4 color, Image tex, vec2 tc, vec2 sc) {
     vec2 d = cc - rayPos;
     float reach = clamp(1.0 - length(d) * rayInvR, 0.0, 1.0);
     if (reach > 0.01) {
-      // wedges around the disc, turning very slowly on the same clock the
-      // cloud shape uses -- a fan welded to the sky reads as a decal
-      float fan = 0.5 + 0.5 * sin(atan(d.y, d.x) * 9.0 + cloudEvolve * 0.7);
-      fan = smoothstep(0.30, 0.92, fan);
-      float a = rayAmt * reach * reach * fan * (1.0 - cloudDens);
+      // Primary fan + a slower secondary set of wedges so shafts read as
+      // broken deck gaps rather than a single radial decal.
+      float ang = atan(d.y, d.x);
+      float fan = 0.5 + 0.5 * sin(ang * 8.0 + cloudEvolve * 0.7);
+      float fan2 = 0.5 + 0.5 * sin(ang * 5.0 - cloudEvolve * 0.35 + 1.7);
+      fan = smoothstep(0.28, 0.90, fan) * 0.72
+          + smoothstep(0.40, 0.95, fan2) * 0.38;
+      // Gaps in the deck open the shafts; solid cloud kills them. Soften
+      // the kill so thin mist still lets light through.
+      float gap = 1.0 - cloudDens * 0.88;
+      float a = rayAmt * reach * reach * fan * gap;
       float lvl = floor(a * 3.0);
       if (a * 3.0 - lvl > 0.5 && parity < 0.5) lvl += 1.0;
-      c = mix(c, rayColor, min(lvl / 3.0, 1.0) * 0.5);
+      c = mix(c, rayColor, min(lvl / 3.0, 1.0) * 0.68);
     }
+  }
+  // Lightning: lift the SKY, not the grass. Stronger at the zenith, gone
+  // by the haze, and the cloud tops catch a harder white. Cel-stepped so
+  // it does not become a bloom filter.
+  if (flashAmt > 0.05) {
+    vec2 fc = (floor(sc / cell) + 0.5) * cell;
+    float y01 = clamp(fc.y / max(edge, 1.0), 0.0, 1.0);
+    float lift = flashAmt * (1.0 - smoothstep(0.12, 0.70, y01));
+    float fl = floor(lift * 3.0 + 0.001);
+    if (lift * 3.0 - fl > 0.45 && parity < 0.5) fl += 1.0;
+    c = mix(c, vec3(0.80, 0.86, 1.0), min(fl / 3.0, 1.0) * 0.50);
+    c = mix(c, vec3(0.93, 0.96, 1.0), cloudDens * flashAmt * 0.42);
   }
   return vec4(c, alpha);
 }
@@ -1130,14 +1260,15 @@ Sky._paintRainbow = paintRainbow
 local function paintCloudsCPU(w, edge, cell, amount)
   if amount <= 0 or edge < cell * 4 then return end
   local g = love.graphics
-  local t = 0
-  if love.timer and love.timer.getTime then t = love.timer.getTime() end
+  -- Same integrated drift as the shader path so fallback puffs crawl too.
+  local driftT = stepCloudMotion()
   local wx, wz = 0.94, 0.34
   if Wind and Wind.DIR then
     wx = tonumber(Wind.DIR[1]) or wx
     wz = tonumber(Wind.DIR[2]) or wz
   end
-  local drift = t * 12
+  -- noise units -> a few pixels per second, not a screen every few seconds
+  local drift = driftT * 28
   local n = 5 + math.floor(amount * 7)
   local litA = 0.35 + 0.40 * amount
   for i = 1, n do
@@ -1243,9 +1374,10 @@ function Sky.paint(w, h, sky, horizonY, cell, body, camX, camY)
       sh:send("cloudSteps", cloudSteps)
       sh:send("cloudNight", Sky.cloudNight())
       sh:send("frameW", w)
-      local t = 0
-      if love.timer and love.timer.getTime then t = love.timer.getTime() end
-      sh:send("cloudTime", t * 0.12)
+      -- Integrated, climate-smoothed clocks (see stepCloudMotion). Never
+      -- `wallClock * bigRate` -- that is what made the deck race.
+      local driftT, evolveT, windAmt, wet, storm = stepCloudMotion()
+      sh:send("cloudTime", driftT)
       local wx, wz = 0.94, 0.34
       if Wind and Wind.DIR then
         wx = tonumber(Wind.DIR[1]) or wx
@@ -1253,24 +1385,28 @@ function Sky.paint(w, h, sky, horizonY, cell, body, camX, camY)
       end
       local len = math.sqrt(wx * wx + wz * wz)
       if len > 1e-4 then wx, wz = wx / len, wz / len end
-      sh:send("cloudWind", { wx, wz })
-      -- overcast cools the deck toward DayNight's grey; clear day is white
+      -- Gentle streak under a gale; the travel speed is already in driftT.
+      local push = 1.0 + windAmt * Sky.CLOUD_PUSH_WIND
+      sh:send("cloudWind", { wx * push, wz * push })
+      -- overcast cools the deck; rain + storm bruise it further so a front
+      -- reads as weather mass, not a lighter grey of the same puffs
       local over = tonumber(DayNight.overcast) or 0
       if over < 0 then over = 0 elseif over > 1 then over = 1 end
+      local grey = math.max(over, wet * 0.92)
+      local bruise = storm * 0.55 + wet * 0.25
       local lit = {
-        0.96 - 0.18 * over,
-        0.97 - 0.16 * over,
-        0.99 - 0.10 * over,
+        0.96 - 0.22 * grey - 0.18 * bruise,
+        0.97 - 0.20 * grey - 0.16 * bruise,
+        0.99 - 0.12 * grey - 0.05 * bruise,
       }
       local shade = {
-        0.55 - 0.08 * over,
-        0.58 - 0.06 * over,
-        0.68 - 0.02 * over,
+        0.55 - 0.12 * grey - 0.14 * bruise,
+        0.58 - 0.10 * grey - 0.12 * bruise,
+        0.68 - 0.06 * grey - 0.04 * bruise,
       }
       sh:send("cloudLit", lit)
       sh:send("cloudShade", shade)
-      -- the deck's own two clocks: one carries it, one changes it
-      sh:send("cloudEvolve", t * Sky.CLOUD_EVOLVE)
+      sh:send("cloudEvolve", evolveT)
       local px = Sky.CLOUD_PARALLAX
       -- y at a fraction of x: in this camera the vertical axis is depth, and
       -- walking INTO the scene should shift the sky less than walking across
@@ -1289,6 +1425,12 @@ function Sky.paint(w, h, sky, horizonY, cell, body, camX, camY)
       sh:send("curtainCol", { hz[1] * 0.45 + 0.16,
                               hz[2] * 0.45 + 0.17,
                               hz[3] * 0.45 + 0.21 })
+
+      local flash = 0
+      local okf, fv = pcall(Weather.flash)
+      if okf then flash = tonumber(fv) or 0 end
+      if flash < 0 then flash = 0 elseif flash > 1 then flash = 1 end
+      sh:send("flashAmt", flash)
 
       -- god rays: the post-rain spell, gated on there being a SUN up to throw
       -- them. A moon does not, and afterRain alone would have lit a fan off

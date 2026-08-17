@@ -15,7 +15,12 @@ Adobe Stock and the YouTube Audio Library were also passed over -- they are
 "royalty free" under their own terms, not CC0.
 
 Verified on each asset's own page (not a search-filter result). Check date
-for the added Tier-1 beds: 2026-08-09.
+for the added Tier-1 beds: 2026-08-09. Check date for the Tier-2 beds
+(`cicadas.ogg`, `fire.ogg`): 2026-08-14. Check date for `grass.ogg`:
+2026-08-14, on Fantozzi's own OGA page (author named, licence CC0 — the
+page also points at Freesound pack 10338, also CC0). The OGA note says
+the "Sand" steps read as grass; `Fantozzi-SandL1` was re-encoded to mono
+Vorbis ~q5, 44.1 kHz, 0.44 s (one-shot, no loop seam).
 
 | file | source | author | licence |
 | --- | --- | --- | --- |
@@ -30,6 +35,9 @@ for the added Tier-1 beds: 2026-08-09.
 | `waves.ogg` | [Sea and river wave sounds](https://opengameart.org/content/sea-and-river-wave-sounds) | RandomMind | CC0 1.0 |
 | `town.ogg` | [S13-05 Light cafe background walla](https://freesound.org/people/craigsmith/sounds/675073/) | craigsmith | CC0 1.0 |
 | `indoor.ogg` | [Room white noise - Room Ambience](https://freesound.org/people/Littleboot/sounds/147300/) | Littleboot | CC0 1.0 |
+| `cicadas.ogg` | [Chorus Cicada singing](https://commons.wikimedia.org/wiki/File:Chorus_Cicada_singing.ogg) | Siobhan Leachman (Ambrosia10) | CC0 1.0 |
+| `fire.ogg` | [Fireplace Sound loop](https://opengameart.org/content/fireplace-sound-loop) | PagDev | CC0 1.0 |
+| `grass.ogg` | [Fantozzi's Footsteps (Grass/Sand & Stone)](https://opengameart.org/content/fantozzis-footsteps-grasssand-stone) (`Fantozzi-SandL1`, mono Vorbis ~q5) | Fantozzi (submitted by qubodup) | CC0 1.0 |
 
 `rain.ogg` is track 2 of the four in that pack; `water.ogg` is
 `sfx100v2_loop_water_02.ogg` and `thunder.ogg` is `sfx100v2_thunder_01.ogg`,
@@ -47,6 +55,58 @@ from Littleboot's room-tone recording.
 All six added beds were re-encoded to mono Ogg Vorbis (~q5, 44.1 kHz),
 level-matched, and given a short crossfade seam so a looping Source does not
 click on the wrap.
+
+`cicadas.ogg` is a mono loop cut from Siobhan Leachman's 24 s recording of
+*Amphipsalta zelandica* (Chorus Cicada) on Wikimedia Commons, page verified
+CC0 1.0 Universal on 2026-08-14. `fire.ogg` is a mono loop cut from PagDev's
+`fire.wav` fireplace recording (29 s, titled "Feuer" in the file metadata).
+Both were re-encoded the same way as the Tier-1 beds (mono Vorbis ~q5,
+44.1 kHz, loudness matched, crossfade seam).
+
+Tier-2 keys that were searched and **not** shipped, because no CC0 file of
+acceptable length and quality was on the asset's own page:
+
+- `stream` — rubberduck `water_flowing.ogg` is 1.9 s (too short to loop as a
+  bed). Freesound CC0 creek recordings (easy_thunder 264180 and others) are
+  the right licence, but the preview CDN did not finish transferring a
+  complete file this session. Wikimedia "Mountain Flowing Stream" /
+  "Smooth Mountain Stream" were **deleted** in June 2026 for a copyright
+  claim. Skipped rather than loop a 2 s sample.
+- `waterfall` — Gen 1 has no waterfall clock or tile the mod already
+  measures. No bed without a rule.
+- `frogs` — several CC0 candidates (yaanick 570306, felix.blume 135561,
+  gtjuks 348160) verified on their Freesound pages; Wikimedia
+  `Frogs croak calling chorus at night.ogg` is **CC-BY-SA 4.0** and was
+  discarded. Same CDN transfer problem as `stream`. Skipped.
+- `owl` — Extx 277323 is a hunting call, not a bird; Wikimedia `Kcg-a̱kuluu
+  (owl).ogg` is a spoken word. simongray's Ruru is CC0 but the file did not
+  arrive complete. Skipped.
+- `snow_wind` — craigsmith G56-21 Winter Wind is CC0 (44 s) and was the
+  pick; file did not arrive complete. Snow already reuses the rain bed
+  pitched down and boosts `wind`, so the gap is covered rather than silent.
+- `shop` — no CC0 indoor-commercial walla that is unintelligible and
+  distinct from the cafe walla already used as `town.ogg`. Skipped.
+
+Also discarded on licence, even when the sound itself was good:
+
+- qubodup [Fire Loop](https://opengameart.org/content/fire-loop) — **CC-BY 3.0**
+- AntumDeluge [Fire Crackling](https://opengameart.org/content/fire-crackling) — CC0, but 2.9 s (one-shot, not a bed)
+- Wikimedia `Frogs croak calling chorus at night.ogg` — **CC-BY-SA 4.0**
+
+Tall-grass rustle search (2026-08-14), discarded rather than shipped:
+
+- Pixabay / ZapSplat / Sonniss / Envato / Adobe Stock / YouTube Audio
+  Library — rejected by name ("royalty free" is not CC0).
+- Kenney Impact Sounds and similar packs — not a grass-in-meadow rustle
+  (impacts / UI), skipped on fitness, not licence.
+- [20 Rustles of dry leaves](https://opengameart.org/content/20-rustles-dry-leaves)
+  — considered; the asset page fetch this session did not return a named
+  author + CC0 line I could quote, so it was not used. Collection-page
+  claims are not a licence.
+- rubberduck `100 CC0 SFX #2` footsteps — already trusted CC0 (water /
+  thunder came from it) but they are hard-surface steps, not meadow.
+- Fantozzi Stone* files from the same pack — CC0, kept as unused siblings
+  of the Sand step that shipped.
 
 ## Replacing one
 
@@ -77,7 +137,7 @@ on the frame that bed first comes up.
 
 The original five also have a **synthesized fallback** -- a Game Boy channel
 program in `lib/AmbientSound.lua` -- used when a file here is missing or will
-not decode. The six beds added later have **no chip fallback** (`chip = nil`):
+not decode. The beds added later have **no chip fallback** (`chip = nil`):
 if their file is missing they stay silent. Degrade quiet is the house default
 for anything that never had a synth version. So deleting this folder costs the
 quality of the original ambience and removes the new layers entirely, never

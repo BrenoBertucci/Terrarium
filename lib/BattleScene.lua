@@ -49,6 +49,16 @@ local Map = require("src.world.Map")
 
 local BattleScene = {}
 
+-- Landing / contact splats: one shot per arena token, one shot per flash
+-- edge. The arena itself is laid on bare ground (BattleArena.openCell
+-- refuses tall grass), so these flatten the tufts AROUND the pair -- the
+-- apron the comment at BattleArena:124-138 is about -- not a dent under
+-- a mon that is standing on paving.
+local lastArenaTok = nil
+local didLand = false
+local lastFlash = false
+local lastGrassAt = nil
+
 -- The GB frame the battle screen is drawn in, and the frame BattleCam's rig
 -- is solved against.
 BattleScene.GB_W = 160
@@ -461,10 +471,50 @@ function BattleScene.render(state, arena, textures, token)
     -- moment a battle started would say so
     local sway = Wind.amount()
     local grassTex = atlasFor(host)
+    local GrassMod = nil
     do
       local ok, G = pcall(V.require, "Grass3D")
-      if ok and G and G.available and G.available() and G.texture() then
-        grassTex = G.texture()
+      if ok and G then
+        GrassMod = G
+        if G.available and G.available() and G.texture() then
+          grassTex = G.texture()
+        end
+      end
+    end
+    -- Foot-crush through a fight: landing splat once, contact splat on
+    -- the hit-flash edge, and a live disc under each mon so the meadow
+    -- around the apron stays parted for the length of the battle.
+    if GrassMod then
+      local tok = token or (arena.x .. ":" .. arena.y)
+      if tok ~= lastArenaTok then
+        lastArenaTok, didLand, lastFlash = tok, false, false
+      end
+      pcall(GrassMod.bindMap, host)
+      pcall(GrassMod.setFocus, arena.mid[1], arena.mid[2])
+      if not didLand then
+        pcall(GrassMod.splat, arena.player[1], arena.player[2], 22, 1.35)
+        pcall(GrassMod.splat, arena.enemy[1], arena.enemy[2], 22, 1.35)
+        didLand = true
+      end
+      if flashing and not lastFlash then
+        pcall(GrassMod.splat, arena.player[1], arena.player[2], 20, 1.2)
+        pcall(GrassMod.splat, arena.enemy[1], arena.enemy[2], 20, 1.2)
+      end
+      lastFlash = flashing and true or false
+      local now = (love.timer and love.timer.getTime and love.timer.getTime())
+                  or 0
+      local dt = (lastGrassAt and (now - lastGrassAt)) or 0
+      lastGrassAt = now
+      if dt < 0 then dt = 0 elseif dt > 0.1 then dt = 0.1 end
+      local feet = {
+        { arena.player[1], arena.player[2], 20, 1.15, 0, 0 },
+        { arena.enemy[1], arena.enemy[2], 20, 1.15, 0, 0 },
+      }
+      local okc, c = pcall(GrassMod.crushFrame, feet, dt)
+      if okc then Voxel3D.crush = c end
+      if GrassMod.mapState then
+        local okm, ms = pcall(GrassMod.mapState)
+        if okm then Voxel3D.crushMap = ms end
       end
     end
     Voxel3D.draw(ChunkMesher.grass(host), grassTex, nil, pull, nil, sway)

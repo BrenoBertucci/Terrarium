@@ -222,11 +222,20 @@ end
 -- standing in it -- eight is worth it on a desktop and is most of the
 -- regression on a phone. Three still holds the player plus two, and the
 -- trail simply keeps fewer crumbs (see Grass3D.crushFrame).
+-- When the crush map is on (detail >= 1), these slots are live feet only
+-- -- the trail has left the array. The numbers stay so a driver that
+-- cannot make the image still degrades to the old packed trail.
 function Quality.crushSlots()
   local d = Quality.grassDetail()
   if d <= 0 then return 3 end
   if d == 1 then return 5 end
   return 8
+end
+
+-- Whether the walked trail lives on the world-space field rather than in
+-- leftover crush[] slots. Detail 0 is the uniform path, unchanged.
+function Quality.crushMap()
+  return Quality.grassDetail() >= 1
 end
 
 -- Streaks in the air (lib/WindFX). A draw-call budget like starCount: each
@@ -235,9 +244,9 @@ end
 function Quality.windStreaks()
   local s = Quality.scale()
   if s >= 4 then return 0 end
-  if s == 3 then return 8 end
-  if s == 2 then return 14 end
-  return 30
+  if s == 3 then return 22 end
+  if s == 2 then return 48 end
+  return 110
 end
 
 -- Whether the neighbouring maps cast into the shadow map. They are drawn

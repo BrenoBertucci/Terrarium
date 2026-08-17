@@ -584,6 +584,13 @@ local function posesOf(state, spriteColors)
                              Roamer.WATERLINE)
       wl = (okc and cut) or Roamer.WATERLINE
     end
+    do
+      local okg, G = pcall(V.require, "Grass3D")
+      if okg and G and G.grassCut then
+        local okc, cut = pcall(G.grassCut, gpx + 8, gpy + 8, G.GRASS_CUT)
+        if okc and cut and cut > wl then wl = cut end
+      end
+    end
     if onWater then
       local okl, lift = pcall(Water.standAnimLift, gpx + 8, gpy + 8)
       hop = (okl and lift) or 0
@@ -595,6 +602,13 @@ local function posesOf(state, spriteColors)
       lift = onWater and 0 or (g.npc.py - vy),
       waterline = wl,
       colors = spriteColors(g.map or state.map),
+      -- A ghost stands on a NEIGHBOUR map, and the persistent wear field
+      -- bound this frame belongs to the map underfoot. Its world position
+      -- can land inside that field's extent and on a grass cell there, so
+      -- letting it write would print the neighbour's traffic onto this
+      -- map at the wrong place. "ghost" is the one kind that writes
+      -- nothing.
+      wearKind = "ghost",
     }
   end
   for _, e in ipairs(state.entities or {}) do
@@ -627,12 +641,24 @@ local function posesOf(state, spriteColors)
                                Roamer.WATERLINE)
         wl = (okc and cut) or Roamer.WATERLINE
       end
+      -- Tall grass hides the low body. Same cut field as the waterline --
+      -- SpriteBillboards already crops the card from the feet up. Origin
+      -- stays on the ground (unlike a swimmer, whose origin sits on the
+      -- water), so the walker stands IN the meadow rather than on it.
+      do
+        local okg, G = pcall(V.require, "Grass3D")
+        if okg and G and G.grassCut then
+          local okc, cut = pcall(G.grassCut, drawPx + 8, drawPy + 8,
+                                 G.GRASS_CUT)
+          if okc and cut and cut > wl then wl = cut end
+        end
+      end
       if onWater then
         local okl, lift = pcall(Water.standAnimLift, drawPx + 8, drawPy + 8)
         hop = (okl and lift) or 0
       end
-      -- Player mid-Surf also gets the freeze/thaw hop + full body on ice
-      -- (no waterline cut on the player card, but hop still reads).
+      -- Player mid-Surf also gets the freeze/thaw hop + full body on ice.
+      -- Grass cut above does apply to the player card: that is the point.
       posed[#posed + 1] = {
         sprite = sprite, px = drawPx, py = drawPy,
         facing = facing, phase = phase, flip = flip,
@@ -640,6 +666,12 @@ local function posesOf(state, spriteColors)
         lift = onWater and 0 or (drawPy - vy),
         waterline = wl,
         colors = colors,
+        -- Who is doing the walking, for the persistent wear field. Taken
+        -- from the entity here rather than guessed at the write site: the
+        -- `feet` list is built player-first and is not in `posed` order,
+        -- so an index there says nothing about what kind of thing it is.
+        wearKind = (e == state.player) and "player"
+                   or (e.roamer and "mon" or "npc"),
       }
       if e == state.player then me = posed[#posed] end
     end
@@ -840,10 +872,14 @@ local function castShadows(state, terrain, nbMesh, posed, cx, cy, vw, vh,
     end
   end
   -- town street lamps cast from their poles (heads are small and would
-  -- speck the pavement).  Neighbour-map lamps are skipped: their sites are
-  -- in the neighbour's own coordinates and a wrong offset lands the shadow
-  -- on the wrong block.
+  -- speck the pavement). Neighbour posts use the same (ox, oy) the
+  -- terrain already applied, or their shadow lands a map away.
   pcall(StreetLamps.castShadows, state.map)
+  if Quality.neighbourShadows() then
+    for _, nb in ipairs(state.neighbors or {}) do
+      pcall(StreetLamps.castShadows, nb.map, nb.ox, nb.oy)
+    end
+  end
 
   ShadowMap.finish(sig)
 end
@@ -855,6 +891,9 @@ function VoxelScene.render(state, w, h, vw, vh, paletteFor)
   -- invisibly instead of freezing or tilting an empty stage.
   local terrain, nbMesh = VoxelScene.prefetch(state)
   if not terrain then return nil end
+  pcall(function()
+    V.require("Grass3D").bindMap(state.map)
+  end)
 
   local cam = state.camera
   local cx, cy = cam.x + vw / 2, cam.y + vh / 2
@@ -908,7 +947,7 @@ function VoxelScene.render(state, w, h, vw, vh, paletteFor)
   -- half-streamed map simply gets no local pools for that frame and retries
   -- on the next one; the post meshes and the rest of the renderer stay live.
   if outdoor then
-    local ok, lamps = pcall(StreetLamps.lights, state.map, cx, cy)
+    local ok, lamps = pcall(StreetLamps.lightsAround, state, cx, cy)
     Voxel3D.lampLights = ok and lamps or nil
     -- The flame's height belongs to whichever post is shipping, not to a
     -- number the renderer assumes: the authored bake measures its own lantern
@@ -1166,15 +1205,35 @@ function VoxelScene.render(state, w, h, vw, vh, paletteFor)
     -- yours -- silently drops out. Measured: a walk down Route 1 laid two
     -- crumbs instead of five, all of them a Rattata's.
     local feet = {}
+    -- Facing -> unit walk bearing in world XZ (px = X, py = Z). Used so the
+    -- meadow peels OPEN along the path rather than only sinking under the boot.
+    local function faceDir(facing)
+      if facing == "right" then return 1, 0 end
+      if facing == "left"  then return -1, 0 end
+      if facing == "down"  then return 0, 1 end
+      if facing == "up"    then return 0, -1 end
+      return 0, 0
+    end
     local function foot(p)
-      if not p or #feet >= 4 then return end
+      if not p then return end
       local lift = p.lift or 0
-      local moving = math.abs(lift) > 0.15
+      -- Walk cycle (phase 1) or hop lift = actively stepping. Idle still
+      -- faces a way so blades part slightly ahead of the gaze.
+      local moving = math.abs(lift) > 0.15 or p.phase == 1
+      local pdx, pdz = faceDir(p.facing)
+      -- Wider, harder disc while walking so the corridor reads at a glance;
+      -- standing keeps a softer pocket so idle does not carve a permanent hole.
       feet[#feet + 1] = {
         (p.px or 0) + 8,
         (p.py or 0) + 8,
-        moving and 12 or 10,
-        moving and 1.0 or 0.6,
+        moving and 17 or 12,
+        moving and 1.25 or 0.72,
+        pdx, pdz,
+        -- 7th slot: who this is, for the persistent field. Grass3D's
+        -- crushFrame reads 1..6 and ignores the rest, so this rides along
+        -- rather than needing a second parallel list that could fall out
+        -- of step with this one.
+        p.wearKind or "npc",
       }
     end
     foot(me)
@@ -1194,8 +1253,53 @@ function VoxelScene.render(state, w, h, vw, vh, paletteFor)
     if dt < 0 then dt = 0 elseif dt > 0.1 then dt = 0.1 end
     local crush = nil
     if GrassMod and GrassMod.crushFrame then
+      if me and GrassMod.setFocus then
+        pcall(GrassMod.setFocus, (me.px or 0) + 8, (me.py or 0) + 8)
+      end
       local okc, c = pcall(GrassMod.crushFrame, feet, dt)
       if okc then crush = c end
+      if GrassMod.mapState then
+        local okm, ms = pcall(GrassMod.mapState)
+        if okm then Voxel3D.crushMap = ms end
+      end
+    end
+    -- ------- and the SLOW half of the same information
+    --
+    -- `feet` is who is standing where this frame, which is exactly what
+    -- the persistent field wants too -- so it is written from the same
+    -- list rather than gathered a second time. The difference is the
+    -- clock: crushFrame integrates springs over a sixtieth of a second,
+    -- GrassWear integrates contact over in-game days.
+    --
+    -- The player is `me` and everybody else is the world. The weights are
+    -- not equal (see GrassWear's W_* constants): there are far more
+    -- roamers and NPCs walking far more often, and if they wrote as hard
+    -- as the player the routes would belong to the Rattatas.
+    do
+      local okw, GW = pcall(V.require, "GrassWear")
+      if okw and GW then
+        pcall(GW.bind, state.map, state.map.id)
+        local WEIGHT = {
+          player = GW.W_PLAYER,
+          npc = GW.W_NPC,
+          mon = GW.W_MON,
+          ghost = 0,
+        }
+        for i = 1, #feet do
+          local f = feet[i]
+          -- Only a walker actually IN MOTION lays anything down.
+          -- `moving and 1.25 or 0.72` is the strength foot() wrote, so
+          -- anything at the idle value is somebody standing still -- and
+          -- standing in one spot for an in-game hour must not drill a
+          -- hole through the meadow.
+          local weight = WEIGHT[f[7] or "npc"] or GW.W_NPC
+          if (f[4] or 0) > 1.0 and weight > 0 then
+            pcall(GW.add, f[1], f[2], weight * dt, GW.CAUSE_TRAMPLE)
+          end
+        end
+        pcall(GW.step, dt)
+        pcall(function() Voxel3D.wearMap = GW.state(0, 0) end)
+      end
     end
     if not crush then
       -- springs unavailable: the old per-frame list, which is still right,
@@ -1206,6 +1310,18 @@ function VoxelScene.render(state, w, h, vw, vh, paletteFor)
   end
   Voxel3D.draw(ChunkMesher.grass(state.map), grassTex, nil, pull,
                nil, sway)
+  -- ------- and the neighbour maps get NO wear, on purpose
+  --
+  -- Wear is per map and lives in ONE uploaded Image, because a second
+  -- 128x128 upload per visible neighbour is three more images and three
+  -- more replacePixels a frame on a GPU this whole design is built to
+  -- spare. So the field is bound for the map underfoot and dropped here.
+  --
+  -- What that costs: a neighbour map's paths do not show until you walk
+  -- onto it. That edge is at the screen border under a top-down camera,
+  -- behind the map transition, and the alternative is paying for four
+  -- fields to decorate the strip you are about to leave.
+  Voxel3D.wearMap = nil
   for _, nb in ipairs(state.neighbors or {}) do
     local ntex = grassTex
     if not Grass3D then ntex = atlasFor(nb.map) end
@@ -1245,13 +1361,22 @@ function VoxelScene.render(state, w, h, vw, vh, paletteFor)
                  ShadowMap.snug(Mat4.translate(nb.ox, 0, nb.oy)), fsway)
   end
   Voxel3D.crush = nil
+  Voxel3D.crushMap = nil
   Voxel3D.grassLoad = nil
 
   -- Street lamps last among the world props: poles take the hour's light,
   -- heads flatten to lampColor after dusk so a DEEP night still has light
   -- on the street.  Seams off -- these are not voxel-grid props.
+  -- Glass off: lamppost.png is not the tileset atlas, and the mask would
+  -- stripe the shaft with window-light at night (same contract as sprites).
   Voxel3D.seams(false)
+  Voxel3D.glass(false)
   pcall(StreetLamps.draw, state.map, outdoor)
+  for _, nb in ipairs(state.neighbors or {}) do
+    local nOut = nb.map and nb.map.def and Map.isOutdoor(nb.map.def)
+    pcall(StreetLamps.draw, nb.map, nOut, nb.ox, nb.oy)
+  end
+  Voxel3D.glass(true)
   -- and, underground, the corridor itself: slab, walls, the fittings the
   -- lamps are supposed to be coming out of, and the LED run along the foot
   -- of each wall. Props rather than terrain, so they belong here with the

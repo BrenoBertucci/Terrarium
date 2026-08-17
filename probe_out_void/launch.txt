@@ -1,0 +1,3 @@
+DRIVER=C:\Users\breno\Downloads\GBA\Quiver-Windows-x64\Apps\PokemonRedBlueYellow-Gen1RecompProject-Recomp\tests\void_rung_probe.lua 
+starting 14/08/2026 14:54:40,94 
+exited 0 14/08/2026 14:55:20,32 

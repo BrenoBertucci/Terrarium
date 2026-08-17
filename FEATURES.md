@@ -274,9 +274,16 @@ ever visible *as* a shower: from far enough away to see the shape of it.
 It is **not a forecast**. Nothing in this mod knows the future, and building a
 lookahead would have meant leaking the next spell's roll to every reader for
 one picture's sake. It reads as *coming* because it **leads** the near field:
-`Weather.curtain` is full at a power where the streaks are still a drop here
-and there, so the wall is drawn and finished with thirteen seconds of approach
-still to run. That ordering is the whole effect.
+`Weather.curtain` is full at a power where the near field is still a drop
+here and there, so the wall is drawn and finished with thirteen seconds of
+approach still to run. That ordering is the whole effect.
+
+The rain itself is no longer a sheet on the lens. World-space **shafts** fall
+through the diorama and stop on whatever `VoxelScene.groundAt` says is there
+— the street, a puddle, a pond, a roof — and spawn a splash of the right
+kind (a crown on water, a tick and a drip off an eave). A thin screen-space
+mist stays between the camera and the near edge, because that air has no
+world position. Indoors and under a canopy, none of it draws.
 
 Snow gets a thinner one. A squall coming in reads as the horizon going soft,
 not as shafts — shafts are what falling water does, and snow does not fall in
@@ -418,6 +425,50 @@ grass bows under it. The two are one event seen twice.
 Below a floor of wind, indoors, under a canopy, or with the row OFF, it
 draws nothing at all: a calm day is calm, and motes drifting through a still
 meadow would be the effect announcing itself.
+
+## What the meadow remembers — the wear field
+
+Everything above is *reactive*. The wind pushes and the tuft leans back; a boot
+folds a blade over and a spring stands it up; a trail crumb fades in six
+seconds. Walk away and come back and the meadow is exactly as it was. Nothing
+in it had a memory longer than a breath.
+
+So every grass cell now carries a **wear** value that goes up when something
+walks on it and comes back down over in-game **days**. It rides the save file,
+next to what time it is in Kanto — because which paths this journey has worn
+into a route is a fact about the journey.
+
+And the player is not the only one writing it. The wild Pokemon wandering their
+patch and the civilians walking their routines deposit too, at their own
+weight, off the same list of feet the foot-crush springs already build. A route
+therefore grows **desire paths** along the traffic that actually crosses it,
+including corners the player has never stood in. Trample tops out short of bare
+earth, though: the game only lets you walk where it lets you walk, so given
+enough hours the walkable set *is* the trampled set, and a ceiling below bare is
+what keeps a well-used path reading as a path instead of as a bald route.
+
+A worn cell **thins** rather than shrinks. Individual tufts fold back to their
+own root and drop out — the cell loses plants — because scaling every tuft down
+together reads as the meadow deflating, which is what a level-of-detail pop
+looks like rather than what a path looks like. Underneath, the earth shows
+through as trodden dirt, since sparse tufts standing on vivid green would read
+as a rendering fault.
+
+Two things reach that value besides feet. **Cut** clears a cell outright, and a
+cut cell has no wild encounter until it grows back — so a corridor through a
+forest is something you can make and something that expires. And a **ground
+lightning strike** burns the grass where it lands, leaving a char scar that
+outlives a footpath by a good part of the journey.
+
+The same texel carries one more thing, for free: how **sheltered** that cell
+is, baked once per map out of the walls already in it. The wind goes around a
+house instead of through it, so a meadow in a building's lee stands still while
+the open field waves — and the edge of the calm moves with nothing at all,
+because buildings do not move.
+
+On the cheap quality rungs the tufts stop thinning and the earth still shows:
+the ground is drawn on the processor, so the world keeps remembering even where
+the grass has stopped commenting on it.
 
 ## What the rain leaves behind — the GROUND row
 

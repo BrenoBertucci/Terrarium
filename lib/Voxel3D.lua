@@ -245,6 +245,39 @@ local SHADER = [[
   // lot instead of eight, which is what makes the extra slots free.
   uniform vec4 crush[8];
   uniform float crushN;
+  // Per-slot walk bearing (unit XZ). Zero when idle. Opens a corridor along
+  // the path instead of a pure radial dent -- blades peel to the sides and
+  // lean with the walker's travel (see FOOT CRUSH block below).
+  uniform vec2 crushPush[8];
+  // World-space trail field. Live feet stay on crush[] (the spring lives
+  // there); this is the walked path, one tap instead of N distance tests.
+  // Same vertex-texture contract as waterField: GLES2 with zero vertex
+  // texture units reads vec4(0), which is "no trail", which is the build
+  // this replaced. Unbound is a crash, crushMapOn is the switch.
+  uniform Image crushMap;
+  uniform float crushMapOn;
+  uniform vec2 crushOrigin;   // world XZ of the field's corner
+  uniform vec2 crushInv;      // 1 / its extent in world pixels
+  // ------- the WEAR field: what this meadow remembers
+  //
+  // crushMap is seconds of memory in a window that follows the player.
+  // This is the other clock entirely -- one texel per 16px overworld cell,
+  // covering a whole map, persisted in the save, decaying over in-game
+  // DAYS. It is how a route you have crossed forty times looks crossed.
+  //
+  //   R  wear     0..1  how laid/bare this cell is
+  //   G  shelter  0..1  1 = open sky, 0 = deep in a building's lee. STATIC,
+  //                     baked once per map, and the whole of "local wind".
+  //   B  cause    0 trample / 0.5 cut / 1 burn
+  //
+  // Same always-bound rule as crushMap and waterField: unbound is a crash,
+  // wearOn is the switch. The blank stand-in is R=0 G=1 -- and the GREEN
+  // matters, because a field of zeroes would multiply the wind amplitude
+  // by nothing and stop every meadow in the world dead.
+  uniform Image wearMap;
+  uniform float wearOn;
+  uniform vec2 wearOrigin;    // world XZ of this map's corner
+  uniform float wearInv;      // 1 / extent in world px (square, so scalar)
   uniform vec2 windDir;       // its bearing in world XZ, unit length
   uniform vec2 windFreq;      // phase gained per world pixel, per axis
   uniform float windPhase;    // advanced by the clock
@@ -331,6 +364,23 @@ local SHADER = [[
       float hN = clamp(vertex_position.y / H, 0.0, 1.0);
       float bend = hN * hN;
 
+      // Where this tuft's ROOT is, and where its axis stands, both taken
+      // before anything below moves the vertex. The wear collapse at the
+      // bottom of this block folds a blade back to exactly these two, and
+      // it can only do that if it captured them while they were still
+      // true. Every grass model matrix here is a translate (the map's own
+      // offset, see the neighbour draws in VoxelScene), so subtracting the
+      // model-space height is the world-space ground under this blade.
+      float baseY = w.y - vertex_position.y;
+      vec2 tuftC = (floor(vWorld.xz * 0.125) + 0.5) * 8.0;
+
+      // Field defaults are "untouched, open sky", so tier 0 -- which never
+      // reads the texel -- behaves exactly as it did before this existed.
+      // That equality is pinned: tests/grass_crush_offline.lua's
+      // PINNED_HASH is the canary for wear leaking into the map-off path.
+      float wear = 0.0;
+      float shelter = 1.0;
+
       // ------- which tuft this is
       //
       // Taken off vWorld, which is the position BEFORE any of this moves
@@ -363,6 +413,19 @@ local SHADER = [[
         // animation from weather no matter how good the wave is.
         front = 0.72 + 0.28 * sin(dot(w.xz, windFreq * 0.21)
                                   - windPhase * 0.37);
+        // ------- the one tap, and it carries two things
+        //
+        // Sampled on vWorld rather than w.xz for the same reason `id` is:
+        // a cell name that moved as the blade bent would make the blade's
+        // own wear flicker as it leaned across a texel boundary.
+        if (wearOn > 0.5) {
+          vec2 wuv = (vWorld.xz - wearOrigin) * wearInv;
+          if (wuv.x > 0.0 && wuv.x < 1.0 && wuv.y > 0.0 && wuv.y < 1.0) {
+            vec4 ws = Texel(wearMap, wuv);
+            wear = ws.r;
+            shelter = ws.g;
+          }
+        }
       }
 
       float wet  = clamp(grassLoad.x, 0.0, 1.0);
@@ -370,7 +433,12 @@ local SHADER = [[
       float gust = clamp(grassLoad.z, 0.0, 1.0);
 
       float p = dot(w.xz, windFreq) - windPhase + ph * 0.35;
-      float amp = sway * (0.55 + 0.45 * front) * (1.0 + 0.55 * gust) / stiff;
+      // `shelter` rides in here and nowhere else: a building blocks WIND,
+      // not feet. Putting it on the crush instead would make the grass
+      // behind a house refuse to lie down under a boot, which is the seam
+      // showing in the most visible place there is.
+      float amp = sway * (0.55 + 0.45 * front) * (1.0 + 0.55 * gust)
+                * shelter / stiff;
       // Rain is water on a blade: heavier, so it damps -- a wet meadow
       // moves less, not more. Settled snow is worse, and it also freezes
       // the stems it is sitting on, so it takes most of the give away.
@@ -464,21 +532,66 @@ local SHADER = [[
           float d2 = dot(d, d);
           if (d2 < rad * rad) {
             float dist = sqrt(d2);
-            float t = 1.0 - dist / rad;
-            t = t * t * cr.w;
-            vec2 dir = (dist > 0.05) ? (d / dist) : windDir;
-            // outward part + a little with the wind so a step reads as a wake
-            w.xz += dir * (t * bend * H * 0.62)
-                  + windDir * (t * bend * H * 0.16);
-            // and DOWN with it: this is the difference between a blade that
-            // has been folded over and one that has been made shorter
-            w.y -= t * bend * vertex_position.y * 0.78;
+            // Soft ring: strongest just off the foot (parting), not at the
+            // exact centre (a stem under the boot is already gone).
+            float u = dist / rad;
+            float ring = u * (1.0 - u) * 4.0;   // 0 at centre/edge, 1 at mid
+            float t = (1.0 - u);
+            t = t * t * (0.55 + 0.45 * ring) * cr.w;
+            vec2 radial = (dist > 0.05) ? (d / dist) : windDir;
+            vec2 push = crushPush[ci];
+            float pLen = length(push);
+            // Mix radial REPEL with the walk wake: blades peel away from the
+            // foot and open a side corridor along the walker's bearing.
+            vec2 dir = radial;
+            if (pLen > 0.05) {
+              push /= pLen;
+              // side: perpendicular to travel, signed by which side of the
+              // path this blade sits on -- that is what "parts the grass"
+              vec2 side = vec2(-push.y, push.x);
+              float sideSign = sign(dot(radial, side));
+              if (abs(sideSign) < 0.01) sideSign = 1.0;
+              // Heavy side weight so the meadow reads as a V-shaped wake
+              // rather than a soft radial crater under the boot.
+              dir = normalize(radial * 0.40
+                            + side * sideSign * 0.90
+                            + push * 0.45);
+            }
+            // Strong lay-over: a step shoves the meadow aside into a wake,
+            // not a shorter tuft. Wind is only a hint so the corridor reads
+            // as the walker's path, not weather.
+            w.xz += dir * (t * bend * H * 1.22)
+                  + windDir * (t * bend * H * 0.06);
+            w.y -= t * bend * vertex_position.y * 0.92;
             // A NEGATIVE strength is Grass3D's spring-back overshoot -- the
             // blade passing upright on its way back -- so the flatten runs
             // the other way and the tuft stands a shade proud for a moment.
-            // Clamped both ends: a full crush may not fold a blade through
-            // its own root, and a kick may not shoot it into the sky.
-            w.y *= clamp(1.0 - t * (0.10 + 0.22 * hN), 0.72, 1.08);
+            w.y *= clamp(1.0 - t * (0.10 + 0.26 * hN), 0.62, 1.14);
+          }
+        }
+      }
+
+      // ------- TRAIL FIELD (the path behind the live feet)
+      //
+      // One tap. The value already has the crumb's ring and its squared
+      // recovery baked in on the CPU, so this is "how laid is this tuft"
+      // rather than another disc test. Direction rides G/B when a crumb
+      // wrote one; otherwise the wind, which is a hint not a corridor --
+      // the live-foot uniforms still open the wake under the walker.
+      if (crushMapOn > 0.5) {
+        vec2 uv = (w.xz - crushOrigin) * crushInv;
+        if (uv.x > 0.0 && uv.x < 1.0 && uv.y > 0.0 && uv.y < 1.0) {
+          vec4 sm = Texel(crushMap, uv);
+          float tm = sm.r;
+          if (tm > 0.008) {
+            float t = tm * bend;
+            vec2 dir = sm.gb * 2.0 - 1.0;
+            if (dot(dir, dir) < 0.0025) dir = windDir;
+            else dir = normalize(dir);
+            w.xz += dir * (t * H * 1.22)
+                  + windDir * (t * H * 0.06);
+            w.y -= t * vertex_position.y * 0.92;
+            w.y *= clamp(1.0 - t * (0.10 + 0.26 * hN), 0.62, 1.14);
           }
         }
       }
@@ -494,6 +607,43 @@ local SHADER = [[
       // per vertex of every meadow in the world.
       if (snow > 0.0) {
         vGrassCap = snow * smoothstep(0.30, 0.95, hN);
+      }
+
+      // ------- and WEAR, which does not bend a blade -- it removes it
+      //
+      // A trampled patch is not short grass, it is LESS grass: some stems
+      // are gone and the ones left are the ones that were tough enough to
+      // still be there. The first version of this scaled every tuft in the
+      // cell down together, and it read as the meadow deflating -- each
+      // tuft stayed a perfectly formed tuft, just smaller, which is what a
+      // LOD pop looks like, not what a path looks like.
+      //
+      // So the cell THINS instead. `id` is the per-tuft hash that already
+      // scatters stiffness, and it is stable across frames and independent
+      // of the bend, so comparing it against wear picks a fixed, arbitrary
+      // subset of tufts to retire -- and retires more of them as wear
+      // climbs. No new hash, no per-instance attribute, no remesh.
+      //
+      // The comparison is a smoothstep rather than a step on purpose: a
+      // hard threshold makes tufts vanish one whole tuft at a time as the
+      // player walks, which pops. Folding them down over a band of wear
+      // means a path DEEPENS continuously.
+      //
+      // A retired tuft is folded to its own root, not scaled about the
+      // origin: every one of its triangles becomes degenerate at a single
+      // point on the ground, which the rasteriser drops for free. That is
+      // cheaper than any alpha route and it cannot leave a sliver behind.
+      if (wear > 0.0) {
+        // survivors keep most of their height -- the residual is what
+        // stops the boundary between a worn cell and its neighbour being
+        // a step
+        float keep = 1.0 - 0.25 * wear;
+        w.y = baseY + (w.y - baseY) * keep;
+        float gone = smoothstep(0.0, 0.35, wear - id);
+        if (gone > 0.0) {
+          w.xz = mix(w.xz, tuftC, gone);
+          w.y = mix(w.y, baseY, gone);
+        }
       }
     }
     // THE WATER SURFACE, which is the only geometry in this world that
@@ -1717,7 +1867,11 @@ local IDENTITY = Mat4.identity()
 -- draw is a dent in the grass where nobody is standing.
 Voxel3D.CRUSH_SLOTS = 8
 local crushScratch = {}
-for i = 1, 8 do crushScratch[i] = { 0, 0, 0, 0 } end
+local crushPushScratch = {}
+for i = 1, 8 do
+  crushScratch[i] = { 0, 0, 0, 0 }
+  crushPushScratch[i] = { 0, 0 }
+end
 
 local function sendCrush(sh, c)
   local n = 0
@@ -1738,11 +1892,14 @@ local function sendCrush(sh, c)
   end
   for i = 1, 8 do
     local s = crushScratch[i]
+    local d = crushPushScratch[i]
     local p = (i <= n) and c.p and c.p[i] or nil
     if p then
       s[1], s[2], s[3], s[4] = p[1] or 0, p[2] or 0, p[3] or 0, p[4] or 0
+      d[1], d[2] = p[5] or 0, p[6] or 0
     else
       s[1], s[2], s[3], s[4] = 0, 0, 0, 0
+      d[1], d[2] = 0, 0
     end
   end
   -- An array uniform is one send with one value per element, and it either
@@ -1756,8 +1913,83 @@ local function sendCrush(sh, c)
                    crushScratch[3], crushScratch[4],
                    crushScratch[5], crushScratch[6],
                    crushScratch[7], crushScratch[8])
-  Voxel3D.crushSendOk = ok
+  -- Same shape as crush: whole array every draw so a leftover bearing from
+  -- the last foot does not open a phantom corridor where nobody is walking.
+  local okP = pcall(sh.send, sh, "crushPush",
+                    crushPushScratch[1], crushPushScratch[2],
+                    crushPushScratch[3], crushPushScratch[4],
+                    crushPushScratch[5], crushPushScratch[6],
+                    crushPushScratch[7], crushPushScratch[8])
+  Voxel3D.crushSendOk = ok and okP
   return n
+end
+
+-- Always-bound stand-in for crushMap. Same rule as waterField: unbound is
+-- a crash, crushMapOn is the switch. Black is "no trail".
+local crushMapBlank = nil
+local function crushMapBlankImg()
+  if crushMapBlank == nil then
+    local ok, img = pcall(function()
+      local d = love.image.newImageData(1, 1)
+      d:setPixel(0, 0, 0, 0.5, 0.5, 1)
+      local i = love.graphics.newImage(d)
+      pcall(i.setFilter, i, "nearest", "nearest")
+      return i
+    end)
+    crushMapBlank = (ok and img) or false
+  end
+  return crushMapBlank or nil
+end
+
+local function sendCrushMap(sh, m)
+  local img, on, ox, oz, ix, iz = nil, 0, 0, 0, 0, 0
+  if m and m.img then
+    img = m.img
+    on = tonumber(m.on) or 1
+    ox, oz = tonumber(m.ox) or 0, tonumber(m.oz) or 0
+    ix, iz = tonumber(m.ix) or 0, tonumber(m.iz) or 0
+  end
+  if not img then img = crushMapBlankImg() end
+  if img then pcall(sh.send, sh, "crushMap", img) end
+  pcall(sh.send, sh, "crushMapOn", on)
+  pcall(sh.send, sh, "crushOrigin", { ox, oz })
+  pcall(sh.send, sh, "crushInv", { ix, iz })
+end
+
+-- Always-bound stand-in for wearMap. Same rule as crushMap, with one
+-- difference that matters: the neutral texel is NOT black. Green carries
+-- shelter, and shelter multiplies the wind amplitude -- so a blank field
+-- of zeroes would report every meadow in the world as being in a
+-- building's lee and stop the wind dead. Neutral here is "no wear, open
+-- sky": R=0, G=1.
+local wearMapBlank = nil
+local function wearMapBlankImg()
+  if wearMapBlank == nil then
+    local ok, img = pcall(function()
+      local d = love.image.newImageData(1, 1)
+      d:setPixel(0, 0, 0, 1, 0, 1)
+      local i = love.graphics.newImage(d)
+      pcall(i.setFilter, i, "nearest", "nearest")
+      return i
+    end)
+    wearMapBlank = (ok and img) or false
+  end
+  return wearMapBlank or nil
+end
+
+local function sendWearMap(sh, m)
+  local img, on, ox, oz, inv = nil, 0, 0, 0, 0
+  if m and m.img then
+    img = m.img
+    on = tonumber(m.on) or 1
+    ox, oz = tonumber(m.ox) or 0, tonumber(m.oz) or 0
+    inv = tonumber(m.inv) or 0
+  end
+  if not img then img = wearMapBlankImg() end
+  if img then pcall(sh.send, sh, "wearMap", img) end
+  pcall(sh.send, sh, "wearOn", on)
+  pcall(sh.send, sh, "wearOrigin", { ox, oz })
+  pcall(sh.send, sh, "wearInv", inv)
 end
 
 -- Whether the driver admits to supporting derivatives. Only a hint --
@@ -2362,8 +2594,16 @@ function Voxel3D.beginScene(w, h, cx, cy, vw, vh, sky, slot)
   end
   -- crush off until the grass pass fills Voxel3D.crush
   Voxel3D.crush = nil
+  Voxel3D.crushMap = nil
   pcall(sh.send, sh, "crushN", 0)
   sendCrush(sh, nil)
+  sendCrushMap(sh, nil)
+  -- and the wear field, reset here for the same reason as the rest: a
+  -- uniform left over from the previous frame is a worn patch on a wall.
+  -- The blank stand-in this binds reports open sky, so a scene that never
+  -- reaches the grass pass keeps its wind.
+  Voxel3D.wearMap = nil
+  sendWearMap(sh, nil)
   -- the curved world bends about the camera's focus, so the horizon keeps
   -- a fixed distance ahead of the player rather than sitting on the map.
   -- A placed camera may decline it outright (Voxel3D.camera.curve = 0).
@@ -2581,6 +2821,10 @@ Voxel3D.GRASS_H = 10
 Voxel3D.grassH = nil
 -- { rain on the blades, settled snow on them, gust envelope }, each 0..1.
 Voxel3D.grassLoad = nil
+-- The persistent wear/shelter field for the map about to be drawn, as
+-- GrassWear.state returns it: { img, on, ox, oz, inv }. Set per DRAW, not
+-- per pass -- see the note at the sendWearMap call.
+Voxel3D.wearMap = nil
 
 Voxel3D.SHADOW_EPS = 0.25     -- float above the ground to dodge z-fighting
 Voxel3D.SHADOW_ALPHA = 0.40   -- how far into black a shadowed surface goes
@@ -2822,6 +3066,14 @@ function Voxel3D.draw(mesh, texture, model, pull, sunModel, sway)
     local c = Voxel3D.crush
     local live = (sway and sway > 0 and c and c.n and c.n > 0) and c or nil
     pcall(sh.send, sh, "crushN", sendCrush(sh, live))
+    sendCrushMap(sh, (sway and sway > 0) and Voxel3D.crushMap or nil)
+    -- Wear rides the same gate: it is a fact about grass, and terrain must
+    -- never thin under it. The caller sets Voxel3D.wearMap per DRAW rather
+    -- than per pass, because each map carries its OWN field and a
+    -- neighbour map is drawn with its own world offset -- one field for
+    -- the whole pass would sample this map's paths at the neighbour's
+    -- coordinates and print Route 1's trails onto Viridian Forest.
+    sendWearMap(sh, (sway and sway > 0) and Voxel3D.wearMap or nil)
   end
   -- the snow lying on this mesh's up-faces, read from the field the caller
   -- set rather than passed as an argument: every existing call site would

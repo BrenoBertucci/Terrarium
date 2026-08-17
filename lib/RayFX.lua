@@ -382,6 +382,30 @@ RayFX.RAIN_RING_FREQ = 0.62   -- and its wavelength, ~10px: one crest per ring
 RayFX.RAIN_RING_REACH = 6.5   -- world pixels a ring travels before it dies
 RayFX.RAIN_RATE = 1.9         -- impacts per cell per second at full power
 
+-- Foot / rain-hit rings on puddles. Pushed from GroundFX (a step through
+-- a pool) and Weather (a shaft landing in one). Four is enough: you watch
+-- the one you just made, not a history of the street.
+RayFX.FOOT_MAX = 4
+RayFX.FOOT_TTL = 0.62
+local feet = {}
+
+function RayFX.ripple(wx, wz)
+  feet[#feet + 1] = {
+    x = tonumber(wx) or 0,
+    z = tonumber(wz) or 0,
+    t = 0,
+  }
+  while #feet > RayFX.FOOT_MAX do table.remove(feet, 1) end
+end
+
+function RayFX.stepRipples(dt)
+  dt = dt or 0
+  for i = #feet, 1, -1 do
+    feet[i].t = feet[i].t + dt
+    if feet[i].t >= RayFX.FOOT_TTL then table.remove(feet, i) end
+  end
+end
+
 local SHADER = [[
   uniform Image depthTex;
   uniform mat4 invVP;       // clip -> world: the camera matrix run backwards
@@ -648,6 +672,11 @@ local SHADER = [[
   uniform float rainRingFreq;
   uniform float rainReach;      // world px a ring travels before it is gone
   uniform float rainRate;       // impacts per cell per second
+  // Walk / hit rings. xyz = (world x, world z, life 1..0). life 0 = unused.
+  uniform vec3 foot0;
+  uniform vec3 foot1;
+  uniform vec3 foot2;
+  uniform vec3 foot3;
 
   // How far the V-CURVE dropped this column. The same expression the vertex
   // shader applies, read here so it can be taken back off: everything the
@@ -746,6 +775,19 @@ local SHADER = [[
     return g;
   }
 
+  // A ring that came from a FOOT or a rain shaft, not the cell's hashed
+  // clock. Wider than the rain rings -- you made this one, it should read.
+  void addFoot(inout vec2 g, vec2 xz, vec3 f) {
+    if (f.z <= 0.001) return;
+    vec2 d = xz - f.xy;
+    float r = length(d);
+    if (r < 0.001 || r > 16.0) return;
+    float life = f.z;
+    float R = (1.0 - life) * 13.0;
+    float env = exp(-abs(r - R) * 0.32) * life;
+    g += (d / r) * (-sin((r - R) * 0.70) * 0.70 * env * 0.85);
+  }
+
   // The swell's own normal, recomputed rather than passed. The height is
   // two sines of world XZ (see Water.lua and the scene's vertex shader), so
   // its gradient is two cosines -- the exact analytic slope of the surface
@@ -779,6 +821,14 @@ local SHADER = [[
     // rung is FLAT, and a player who does not want the sea to heave has not
     // asked for the rain to stop falling into the puddles.
     if (rainy > 0.0) g += rainSlope(xz);
+    // Foot rings live on the puddle even after the shower: walking through
+    // still water is the whole of the aftermath feeling like water.
+    if (rainy > 0.0) {
+      addFoot(g, xz, foot0);
+      addFoot(g, xz, foot1);
+      addFoot(g, xz, foot2);
+      addFoot(g, xz, foot3);
+    }
     if (curveK.z > 0.0) g -= 2.0 * curveK.z * (xz - curveK.xy);
     if (g == vec2(0.0)) return vec3(0.0, 1.0, 0.0);
     return normalize(vec3(-g.x, 1.0, -g.y));
@@ -1246,6 +1296,17 @@ function RayFX.apply(o)
     send("rainRingFreq", RayFX.RAIN_RING_FREQ)
     send("rainReach", RayFX.RAIN_RING_REACH)
     send("rainRate", RayFX.RAIN_RATE)
+    local function footU(i)
+      local f = feet[i]
+      if not f then return { 0, 0, 0 } end
+      local life = 1 - f.t / RayFX.FOOT_TTL
+      if life < 0 then life = 0 end
+      return { f.x, f.z, life }
+    end
+    send("foot0", footU(1))
+    send("foot1", footU(2))
+    send("foot2", footU(3))
+    send("foot3", footU(4))
     -- and the bend, so the classification and the surface normal can both
     -- ask about the world the heights were authored in. Handed over by the
     -- caller rather than read from Voxel3D: this file is loaded BY that one,

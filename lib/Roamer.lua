@@ -249,22 +249,31 @@ end
 
 function Roamer:draw(camX, camY)
   local sprite, px, py, facing, phase, flip = self:pose()
-  if self.kind ~= "water" or not love or not love.graphics then
+  if not love or not love.graphics then
     sprite:draw(px, py, camX, camY, facing, phase, flip)
     return
   end
   -- Waterline respects ice + freeze/thaw blend (Water.waterlineCut).
-  local cut = Roamer.WATERLINE
-  do
+  -- Grass cut is the same seam: hide the low body in tall grass.
+  local cut = 0
+  if self.kind == "water" then
+    cut = Roamer.WATERLINE
     local ok, c = pcall(Water.waterlineCut, px + 8, py + 8, Roamer.WATERLINE)
     if ok and c then cut = c end
+  end
+  do
+    local okg, G = pcall(V.require, "Grass3D")
+    if okg and G and G.grassCut then
+      local ok, c = pcall(G.grassCut, px + 8, py + 8, G.GRASS_CUT)
+      if ok and c and c > cut then cut = c end
+    end
   end
   if cut <= 0 then
     sprite:draw(px, py, camX, camY, facing, phase, flip)
     return
   end
-  -- 2D waterline: hide the bottom cut pixels of the 16x16 blit so the mon
-  -- is cut at the water the same way the 3D card is.  Scissor is in screen
+  -- 2D cut: hide the bottom pixels of the 16x16 blit so a swimmer sits
+  -- in the pond and a grass mon sits in the meadow. Scissor is in screen
   -- pixels of the current canvas; if anything about the camera scale
   -- disagrees, fall back to the full draw rather than a wrong crop.
   local g = love.graphics

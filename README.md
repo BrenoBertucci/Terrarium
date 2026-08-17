@@ -363,9 +363,9 @@ Dramatic Shape first.** If a licence lands upstream, this fork will adopt it.
   the pack's files are named by content hash and none of that was written
   down anywhere.
 - **Ambient audio** — CC0 recordings by Wolfgang_, isaiah658, Ylmir,
-  rubberduck, Luke.RUSTLTD, TinyWorlds, JaggedStone, RandomMind, craigsmith
-  and Littleboot, from OpenGameArt and Freesound. Per-file sources, authors
-  and licences are in
+  rubberduck, Luke.RUSTLTD, TinyWorlds, JaggedStone, RandomMind, craigsmith,
+  Littleboot, PagDev and Siobhan Leachman, from OpenGameArt, Freesound and
+  Wikimedia Commons. Per-file sources, authors and licences are in
   [`assets/audio/CREDITS.md`](assets/audio/CREDITS.md). Everything is CC0 1.0;
   nothing here is CC-BY or CC-BY-SA, deliberately.
 - **Overworld wild / town Pokémon sprites** — optional Gen 2-style walker

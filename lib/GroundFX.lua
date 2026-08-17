@@ -118,7 +118,13 @@ GroundFX.MELT = 430           -- and to melt off
 -- Where each layer starts showing. Below these the ground has taken the
 -- weather but has nothing to show for it yet, which is the first half of
 -- every shower.
-GroundFX.PUDDLE_FROM = 0.30
+--
+-- Basins (true low spots, gutters) fill first and dry last. Films on
+-- flatter paving wait until the ground is properly soaked, then vanish
+-- first on the way back -- that is the physics of a street, not a
+-- global fade on every decal at once.
+GroundFX.PUDDLE_FROM = 0.16
+GroundFX.FILM_FROM = 0.48
 GroundFX.DRIFT_FROM = 0.10
 GroundFX.PRINT_FROM = 0.22    -- cover below which a step leaves no mark
 
@@ -140,10 +146,18 @@ function GroundFX.cover() return state.cover end
 GroundFX.SNOW_TINT = 0.88
 
 -- 0..1: how much of the puddle layer is showing, and of the drifts.
-local function puddleAmount()
-  local w = (state.wet - GroundFX.PUDDLE_FROM) / (1 - GroundFX.PUDDLE_FROM)
+local function amountFrom(from)
+  local w = (state.wet - from) / (1 - from)
   if w <= 0 then return 0 end
   return w > 1 and 1 or w
+end
+
+local function puddleAmount()
+  return amountFrom(GroundFX.PUDDLE_FROM)
+end
+
+local function filmAmount()
+  return amountFrom(GroundFX.FILM_FROM)
 end
 
 local function driftAmount()
@@ -217,6 +231,7 @@ local atlases = {}
 -- would be a snowball sitting on a shrub.
 local ASSET_FILE = {
   puddle = "puddle",
+  basin = "puddle",
   print_ = "print",
   drift1 = "snow-ground-1",     -- a dusting caught in the seams
   drift2 = "snow-ground-2",     -- patches
@@ -225,6 +240,12 @@ local ASSET_FILE = {
   crust2 = "snow-crust-2",          -- most of it
   crust3 = "snow-crust-3",          -- buried
   drift = "snow-ground-2",      -- the plain name, for the generated fallback
+  -- Bare earth showing through a worn meadow. ONE drawing at three sizes,
+  -- like a puddle rather than like snow: a path does not change its
+  -- character as it deepens, it just covers more of the cell. The strip
+  -- carries both causes -- trodden dirt and lightning char -- and the cell's
+  -- cause picks which half (see buildBare).
+  bare = "bare",
 }
 
 local function shippedAtlas(name)
@@ -255,35 +276,54 @@ local function finish(data)
   return img
 end
 
--- One ellipse per variant, each a different shape and each nudged off
--- centre, so four puddles in a row do not read as four copies of one.
+-- Two or three overlapping blobs per variant, not a single oval. Water
+-- finds a shape; a drawn ellipse is a sticker. Dark body, one-pixel rim,
+-- a small highlight offset toward the "sky" so it reads as a surface.
 local function buildPuddles()
   local data = newStrip(GroundFX.VARIANTS)
   if not data then return nil end
   for v = 0, GroundFX.VARIANTS - 1 do
     local h = hash("puddle" .. v)
-    local rx = 4.4 + unit(h) * 2.6
-    local ry = 3.0 + unit(h * 7 + 13) * 2.2
-    local ox = 8 + (unit(h * 3 + 5) - 0.5) * 3
-    local oy = 8 + (unit(h * 11 + 1) - 0.5) * 3
-    local wob = unit(h * 17 + 3) * 6.2831
+    local n = 2 + (h % 2)
+    local blobs = {}
+    for i = 1, n do
+      local hh = hash("puddle" .. v .. ":" .. i)
+      blobs[i] = {
+        ox = 8 + (unit(hh) - 0.5) * 5.2,
+        oy = 8 + (unit(hh * 7 + 3) - 0.5) * 4.6,
+        rx = 4.8 + unit(hh * 3 + 5) * 2.8,
+        ry = 3.4 + unit(hh * 11 + 1) * 2.4,
+        wob = unit(hh * 17 + 9) * 6.2831,
+      }
+    end
+    local hx = 6.2 + unit(h * 19) * 3.5
+    local hy = 5.4 + unit(h * 23) * 3.0
+    local function field(x, y)
+      local px, py = x + 0.5, y + 0.5
+      local f = 0
+      for i = 1, n do
+        local b = blobs[i]
+        local dx, dy = px - b.ox, py - b.oy
+        local ang = math.atan2(dy, dx)
+        local k = 1 + 0.22 * math.sin(ang * 2 + b.wob)
+                 + 0.08 * math.sin(ang * 5 + b.wob * 1.7)
+        local d = (dx * dx) / (b.rx * b.rx * k * k)
+                + (dy * dy) / (b.ry * b.ry * k * k)
+        if d < 1.15 then f = f + (1.15 - d) end
+      end
+      return f
+    end
     local function inside(x, y)
-      local dx, dy = x + 0.5 - ox, y + 0.5 - oy
-      local ang = math.atan2(dy, dx)
-      -- the wobble is what stops it being a drawn oval: the radius breathes
-      -- twice around the rim, so the outline reads as a shape water found
-      local k = 1 + 0.16 * math.sin(ang * 2 + wob)
-      return (dx * dx) / (rx * rx * k * k) + (dy * dy) / (ry * ry * k * k) <= 1
+      return field(x, y) >= 0.55
     end
     for y = 0, 15 do
       for x = 0, 15 do
         if inside(x, y) then
-          -- the rim is any body pixel with open air next to it: one pixel
-          -- of bright edge, which is the whole of what a cel-shaded
-          -- reflection needs to read as a surface rather than a stain
           local rim = not (inside(x - 1, y) and inside(x + 1, y)
                            and inside(x, y - 1) and inside(x, y + 1))
-          local tone = rim and 1.0 or 0.34
+          local dx, dy = x + 0.5 - hx, y + 0.5 - hy
+          local spec = (dx * dx + dy * dy) < 5.5
+          local tone = rim and 1.0 or (spec and 0.62 or 0.22)
           data:setPixel(v * 16 + x, y, tone, tone, tone, 1)
         else
           data:setPixel(v * 16 + x, y, 0, 0, 0, 0)
@@ -356,6 +396,108 @@ local function buildPrint()
   return finish(data)
 end
 
+-- ------- bare earth: what is under the grass that is no longer there
+--
+-- Two halves in one strip. Frames 0..VARIANTS-1 are TRODDEN DIRT and
+-- VARIANTS..2*VARIANTS-1 are LIGHTNING CHAR, so a cell picks its look from
+-- the cause already stored in the wear field and neither needs its own
+-- layer, its own mesh or its own draw.
+--
+-- The edge is FEATHERED and that is the whole difference between a path and
+-- a sticker. A hard-edged brown shape on green grass reads as a decal no
+-- matter how good the shape is; earth showing between thinning tufts has no
+-- outline at all, because what bounds it is the grass, not the dirt. So the
+-- alpha ramps out over the last couple of pixels and the body darkens as it
+-- goes, which is also what real trodden ground does -- the middle is packed
+-- and pale, the rim is still shaded by what is left standing over it.
+-- ------- and the dirt is WARM and fairly LIGHT, which took a screenshot
+--
+-- The first values here were a mid brown body (0.44) over a much darker rim
+-- (0.28), on the reasoning that a rim wants contrast -- which is right for a
+-- footprint in snow (see PRINT_COLOR, a hole in a white surface) and wrong
+-- for this. A patch of earth is not a hole in the grass; it is a surface in
+-- its own right, lit by the same sun. Rendered, those values read as
+-- near-black spots scattered through the meadow: the shape was right and it
+-- looked like damage rather than like a trodden path.
+--
+-- So the body is dry sunlit earth, the rim is only a little darker than it
+-- (shading from what tufts are still standing over the edge, not an
+-- outline), and the grit barely separates from the body -- it is texture,
+-- not speckle.
+GroundFX.DIRT_BODY = { 0.58, 0.45, 0.30 }
+GroundFX.DIRT_RIM = { 0.44, 0.34, 0.22 }
+GroundFX.DIRT_GRIT = { 0.64, 0.52, 0.36 }
+-- Char keeps its contrast, because a lightning scar SHOULD read as damage.
+-- Still lifted off pure black so it is charred ground and not a hole in the
+-- world, and its ash rim is what says "burnt" rather than "shadowed".
+GroundFX.CHAR_BODY = { 0.17, 0.15, 0.14 }
+GroundFX.CHAR_RIM = { 0.34, 0.32, 0.29 }
+GroundFX.CHAR_GRIT = { 0.10, 0.09, 0.09 }
+
+local function buildBare()
+  local n = GroundFX.VARIANTS * 2
+  local data = newStrip(n)
+  if not data then return nil end
+  for v = 0, n - 1 do
+    local char = v >= GroundFX.VARIANTS
+    local body = char and GroundFX.CHAR_BODY or GroundFX.DIRT_BODY
+    local rim = char and GroundFX.CHAR_RIM or GroundFX.DIRT_RIM
+    local grit = char and GroundFX.CHAR_GRIT or GroundFX.DIRT_GRIT
+    local h = hash("bare" .. v)
+    -- Char is tighter and rounder than a trodden patch: a strike burns
+    -- where it lands, while feet spread a scuff along the way they went.
+    local blobs = {}
+    local count = char and (2 + (h % 2)) or (3 + (h % 2))
+    for i = 1, count do
+      local hh = hash("bare" .. v .. ":" .. i)
+      local spread = char and 3.4 or 5.6
+      blobs[i] = {
+        ox = 8 + (unit(hh) - 0.5) * spread,
+        oy = 8 + (unit(hh * 7 + 3) - 0.5) * spread,
+        rx = (char and 4.4 or 4.0) + unit(hh * 3 + 5) * (char and 2.0 or 3.2),
+        ry = (char and 4.0 or 3.2) + unit(hh * 11 + 1) * (char and 2.0 or 2.8),
+      }
+    end
+    for y = 0, 15 do
+      for x = 0, 15 do
+        -- The union of the blobs as a FIELD rather than a mask: `f` is how
+        -- far inside the shape this pixel is, which is what lets the rim
+        -- fade instead of ending.
+        local f = -1
+        for i = 1, #blobs do
+          local bl = blobs[i]
+          local dx, dy = x + 0.5 - bl.ox, y + 0.5 - bl.oy
+          local e = 1 - ((dx * dx) / (bl.rx * bl.rx)
+                         + (dy * dy) / (bl.ry * bl.ry))
+          if e > f then f = e end
+        end
+        if f <= 0 then
+          data:setPixel(x, y, 0, 0, 0, 0)
+        else
+          -- f is 0 at the boundary and 1 at a blob centre. Alpha climbs
+          -- fast so the middle is solid, and the last stretch is the
+          -- feather.
+          local a = f * 3.2
+          if a > 1 then a = 1 end
+          local t = f * 1.8
+          if t > 1 then t = 1 end
+          local r = rim[1] + (body[1] - rim[1]) * t
+          local g = rim[2] + (body[2] - rim[2]) * t
+          local b = rim[3] + (body[3] - rim[3]) * t
+          -- a little grit so a big patch is not one flat colour. Hashed on
+          -- the pixel, so it is stable and does not crawl.
+          local gh = hash("g" .. v .. "," .. x .. "," .. y)
+          if unit(gh) < 0.09 and f > 0.25 then
+            r, g, b = grit[1], grit[2], grit[3]
+          end
+          data:setPixel(x, y, r, g, b, a)
+        end
+      end
+    end
+  end
+  return finish(data)
+end
+
 -- The strip for one layer: the artist's file if there is one, the generated
 -- shapes otherwise. Returns { img, n } so the caller knows how many frames
 -- it got -- an override is allowed to carry a different number from the
@@ -373,12 +515,16 @@ local function atlas(name)
       atlases[name] = false
     else
       local builder = name == "puddle" and buildPuddles
+                      or name == "bare" and buildBare
                       or name:find("^drift") and buildDrifts or buildPrint
       local ok, img = pcall(builder)
-      atlases[name] = (ok and img)
-                      and { img = img, n = name == "print_"
-                                          and 1 or GroundFX.VARIANTS }
-                      or false
+      -- bare carries BOTH causes in one strip, so it is twice as wide as
+      -- the others -- and the frame count is what buildChunk indexes with
+      local frames = GroundFX.VARIANTS
+      if name == "print_" then frames = 1
+      elseif name == "bare" then frames = GroundFX.VARIANTS * 2
+      end
+      atlases[name] = (ok and img) and { img = img, n = frames } or false
     end
   end
   return atlases[name] or nil
@@ -607,7 +753,9 @@ GroundFX.DRIFT_DENSITY = { 0.55, 0.82, 1.0 }
 -- World pixels across, per step. Both end WIDER than the 16-pixel cell --
 -- the drifts so they merge into a field, the puddles so a pool reads as a
 -- pool. Varied a little per cell so a street is not a stencil.
-GroundFX.PUDDLE_SIZE = { 14, 21, 28 }
+GroundFX.PUDDLE_SIZE = { 13, 20, 28 }
+-- Basins (gutters, true low spots) are the pools you would walk around.
+GroundFX.BASIN_SIZE = { 18, 28, 38 }
 GroundFX.DRIFT_SIZE = { 13, 20, 28 }
 -- A cap is worn by a thing rather than spread over the ground, so it stays
 -- near the size of what it is sitting on: a dusting on the crown, then most
@@ -625,6 +773,24 @@ GroundFX.DRIFT_SIZE = { 13, 20, 28 }
 -- because they are the cells, and none of them ever leaves the thing it is
 -- lying on.
 GroundFX.CRUST_SIZE = { 16, 16, 16 }
+
+-- ------- and how big a worn patch is at each of its three steps
+--
+-- Smaller than a puddle at the shallow end and nearly the whole cell at the
+-- deep end: a path that has been walked a few times is a SCUFF, and one
+-- that carries every NPC on the route is bare ground. Never the full 16,
+-- because a decal that fills its cell edge to edge tiles into a
+-- continuous brown carpet across neighbouring cells and the eye reads a
+-- grid -- the gaps between patches are what make a trail look walked
+-- rather than paved.
+GroundFX.BARE_SIZE = { 9, 13, 15 }
+-- Flush with the ground like a drift: bare earth IS the ground, it is not
+-- lying on it.
+GroundFX.BARE = GroundFX.DRIFT
+-- Not quite opaque. Some of what the tufts used to hide is still shaded by
+-- the ones left standing, and a fully opaque patch under a thinned cell
+-- reads as a hole rather than as earth.
+GroundFX.BARE_ALPHA = 0.88
 
 -- ------- and how far above its cell a crust sits: FLUSH, always
 --
@@ -715,6 +881,44 @@ end
 GroundFX.PUDDLE_BLOCK = 3
 GroundFX.PUDDLE_FILL = 0.80
 
+GroundFX.PUDDLE_SCORE_MIN = 0.22
+GroundFX.BASIN_SCORE = 0.46
+
+function GroundFX.puddleScore(map, cx, cy)
+  if not puddleCell(map, cx, cy) then return -1 end
+  local h = groundAt(map, cx, cy)
+  local higher, lower, walls, waterN, slope = 0, 0, 0, 0, 0
+  for dy = -1, 1 do
+    for dx = -1, 1 do
+      if dx ~= 0 or dy ~= 0 then
+        local nx, ny = cx + dx, cy + dy
+        if map:inBounds(nx, ny) then
+          if map:isWaterCell(nx, ny) then
+            waterN = waterN + 1
+          elseif not map:isWalkableCell(nx, ny) then
+            if groundAt(map, nx, ny) > h + 3 then walls = walls + 1 end
+          else
+            local nh = groundAt(map, nx, ny)
+            if nh > h + 0.8 then
+              higher = higher + 1
+            elseif nh < h - 0.8 then
+              lower = lower + 1
+            end
+            local dh = nh - h
+            if dh < 0 then dh = -dh end
+            if dh > slope then slope = dh end
+          end
+        end
+      end
+    end
+  end
+  local score = 0.32 + (higher - lower) * 0.11 + walls * 0.16 + waterN * 0.14
+  if slope > 3 then score = score - math.min(0.45, (slope - 3) * 0.05) end
+  if score < 0 then return 0 end
+  if score > 1 then return 1 end
+  return score
+end
+
 function GroundFX.holdsPuddle(map, cx, cy)
   if not puddleCell(map, cx, cy) then return false end
   local B = GroundFX.PUDDLE_BLOCK
@@ -722,18 +926,25 @@ function GroundFX.holdsPuddle(map, cx, cy)
   local by = math.floor(cy / B)
   local h = cellHash(map, "pblock", bx, by)
   if unit(h) >= GroundFX.PUDDLE_FILL then return false end
-  -- the block's own cells, started at a hashed corner and walked in order:
-  -- the first one that can hold water is the one that does
-  local start = h % (B * B)
+  local bestX, bestY, bestS, bestH = nil, nil, -1, -1
   for i = 0, B * B - 1 do
-    local k = (start + i) % (B * B)
-    local px = bx * B + (k % B)
-    local py = by * B + math.floor(k / B)
+    local px = bx * B + (i % B)
+    local py = by * B + math.floor(i / B)
     if puddleCell(map, px, py) then
-      return px == cx and py == cy
+      local s = GroundFX.puddleScore(map, px, py)
+      local hh = cellHash(map, "pcell", px, py)
+      if s > bestS + 1e-4 or (s >= bestS - 1e-4 and hh > bestH) then
+        bestX, bestY, bestS, bestH = px, py, s, hh
+      end
     end
   end
-  return false
+  if not bestX or bestS < GroundFX.PUDDLE_SCORE_MIN then return false end
+  return bestX == cx and bestY == cy
+end
+
+function GroundFX.holdsBasin(map, cx, cy)
+  return GroundFX.holdsPuddle(map, cx, cy)
+         and GroundFX.puddleScore(map, cx, cy) >= GroundFX.BASIN_SCORE
 end
 
 local function buildChunk(map, layer, chunkX, chunkY)
@@ -744,18 +955,23 @@ local function buildChunk(map, layer, chunkX, chunkY)
   -- nine frames wide with nothing here changed
   -- the art is per STEP for the snow (three different drawings) and per BASE
   -- for the rest (one drawing at three sizes) -- see ASSET_FILE
-  local sheet = atlas(base == "puddle" and "puddle" or layer)
+  local bare = base == "bare"
+  local sheet = atlas((base == "puddle" or base == "basin") and "puddle"
+                      or bare and "bare" or layer)
   local strip = (sheet and sheet.n) or GroundFX.VARIANTS
-  local puddle = base == "puddle"
+  local puddle = (base == "puddle" or base == "basin")
   local crust = base == "crust"
-  local sizes = puddle and GroundFX.PUDDLE_SIZE
-                or crust and GroundFX.CRUST_SIZE or GroundFX.DRIFT_SIZE
+  local sizes = base == "basin" and GroundFX.BASIN_SIZE
+                or puddle and GroundFX.PUDDLE_SIZE
+                or crust and GroundFX.CRUST_SIZE
+                or bare and GroundFX.BARE_SIZE or GroundFX.DRIFT_SIZE
   -- one number per layer, because every cell a layer lands on is flat now:
   -- the drifts and pools lie on walkable ground, and the crusts only on lids
   -- (crustCell). The rounded crowns are painted in the shader instead of
   -- being covered by a quad, so nothing here has anything to float over.
   local lift = puddle and GroundFX.PUDDLE
                or crust and GroundFX.CRUST_LIFT
+               or bare and GroundFX.BARE
                or GroundFX.DRIFT
   local x0, y0 = chunkX * CHUNK, chunkY * CHUNK
 
@@ -763,8 +979,43 @@ local function buildChunk(map, layer, chunkX, chunkY)
     for cx = x0, x0 + CHUNK - 1 do
       local h = cellHash(map, base, cx, cy)
       local want
+      -- set by the bare branch only: which frame of the two-cause strip
+      -- this cell wants, which is not a free choice off the hash
+      local bareFrame = nil
       if puddle then
-        want = GroundFX.holdsPuddle(map, cx, cy)
+        local hold = GroundFX.holdsPuddle(map, cx, cy)
+        if not hold then
+          want = false
+        elseif base == "basin" then
+          want = GroundFX.puddleScore(map, cx, cy) >= GroundFX.BASIN_SCORE
+        else
+          want = GroundFX.puddleScore(map, cx, cy) < GroundFX.BASIN_SCORE
+        end
+      elseif bare then
+        -- ------- and this is the only layer whose cells are not a rule
+        --
+        -- Every other layer here decides from the MAP: is this cell flat,
+        -- walkable, low-lying, a lid. Those are facts about Kanto and they
+        -- are the same on every save. A worn patch is a fact about THIS
+        -- JOURNEY -- it is wherever this player and this route's traffic
+        -- happened to walk -- so the cells come from the wear field and
+        -- from nowhere else.
+        --
+        -- Which is also why this layer's meshes need dropping when a cell
+        -- crosses a step, and why the field keeps a queue of exactly that
+        -- (GrassWear.takeBucketChanges, drained in GroundFX.update).
+        want = false
+        local okw, GW = pcall(V.require, "GrassWear")
+        if okw and GW and GW.atCell then
+          local v, cause = GW.atCell(cx, cy)
+          if GW.bucketOf(v) == step then want = true end
+          if want then
+            -- Cause picks which half of the strip: trodden dirt in the
+            -- first VARIANTS frames, lightning char in the second.
+            local half = (cause == GW.CAUSE_BURN) and GroundFX.VARIANTS or 0
+            bareFrame = half + (h % GroundFX.VARIANTS)
+          end
+        end
       elseif crust then
         -- every eligible cell, at every step: a bush either has snow on it
         -- or does not, and half the hedge white is not a lighter snowfall,
@@ -775,7 +1026,7 @@ local function buildChunk(map, layer, chunkX, chunkY)
                  and driftCell(map, cx, cy)
       end
       if want then
-        local v = h % strip
+        local v = bareFrame or (h % strip)
         -- a pool sits nearly where its cell is; snow scatters a little more,
         -- which is what stops a full field reading as a grid.
         --
@@ -790,7 +1041,11 @@ local function buildChunk(map, layer, chunkX, chunkY)
         -- The variation is still there -- it is the STRIP, a different
         -- drawing per cell, which is where variation belongs for a thing
         -- whose outline has to stay inside a 16px lid.
-        local spread = crust and 0 or (puddle and 3 or 5)
+        -- Bare earth jitters least of the lot. A drift is weather landing
+        -- wherever it lands and wants scatter; a worn patch is where feet
+        -- actually went, and wandering it off its cell breaks the LINE that
+        -- makes a row of them read as a path somebody walked.
+        local spread = crust and 0 or bare and 2 or (puddle and 3 or 5)
         local jx = (unit(h * 5 + 7) - 0.5) * spread
         local jz = (unit(h * 13 + 3) - 0.5) * spread
         local size = sizes[step] or sizes[1]
@@ -830,6 +1085,58 @@ function GroundFX.invalidate()
   chunks = {}
 end
 
+-- ------- and the targeted version, for the one layer that changes in play
+--
+-- Every other layer here is a function of the map, so the wholesale
+-- invalidate above is the right and only tool: the map changed, drop
+-- everything. The bare layer is a function of the WEAR FIELD, which moves
+-- while you walk -- and dropping every chunk of every layer each time
+-- somebody's path deepened would rebuild the town's puddles to move a patch
+-- of dirt.
+--
+-- So this drops the bare meshes of one chunk, at every step, and nothing
+-- else. All three steps because a cell that left step 1 arrived in step 2:
+-- rebuilding only the one it landed in would leave it drawn twice.
+local function invalidateBareChunk(map, cx, cy)
+  if not (map and map.id) then return end
+  local chunkX = math.floor(cx / CHUNK)
+  local chunkY = math.floor(cy / CHUNK)
+  for step = 1, GroundFX.STEPS do
+    chunks[map.id .. "#bare" .. step .. "#" .. chunkX .. "#" .. chunkY] = nil
+  end
+end
+
+-- Drain the wear field's queue of cells whose step changed. Called from
+-- update, so it costs nothing on a frame where nobody wore anything down --
+-- which is almost every frame.
+local function drainBareChanges()
+  local okw, GW = pcall(V.require, "GrassWear")
+  if not (okw and GW and GW.takeBucketChanges) then return 0 end
+  local q = GW.takeBucketChanges()
+  if not q then return 0 end
+  local g = game()
+  local map = g and g.overworld and g.overworld.map
+  if not map then return 0 end
+  -- Several cells in one chunk collapse to one drop, which is the common
+  -- case: a walker crosses a few adjacent cells and they share a chunk.
+  local seen = {}
+  local n = 0
+  for i = 1, #q - 1, 2 do
+    local cx, cy = q[i], q[i + 1]
+    local key = math.floor(cx / CHUNK) .. "," .. math.floor(cy / CHUNK)
+    if not seen[key] then
+      seen[key] = true
+      invalidateBareChunk(map, cx, cy)
+      n = n + 1
+    end
+  end
+  return n
+end
+
+-- How many bare chunks the last update dropped. Zero on a quiet frame is
+-- the claim a probe checks: a rebuild per footstep would be the bug.
+GroundFX.lastBareRebuilds = 0
+
 -- ------- footprints
 --
 -- A ring of recent marks, and a note of where every walker was last frame
@@ -839,6 +1146,10 @@ end
 GroundFX.PRINT_TTL = 34           -- seconds a print lasts in still air
 GroundFX.PRINT_FILL = 3.2         -- how much faster it fills while snowing
 GroundFX.MAX_PRINTS = 80
+GroundFX.WET_TTL = 7.5            -- a wet print dries fast
+GroundFX.MAX_WETS = 28
+
+local wets = {}
 
 local prints = {}
 local wasAt = setmetatable({}, { __mode = "k" })
@@ -870,16 +1181,40 @@ local function dropPrint(cx, cy, facing, mine)
   end
 end
 
+local function noteRipple(wx, wz)
+  local ok, RayFX = pcall(V.require, "RayFX")
+  if ok and RayFX and RayFX.ripple then pcall(RayFX.ripple, wx, wz) end
+end
+
+local function dropWet(cx, cy, facing)
+  wets[#wets + 1] = { cx = cx, cy = cy, t = 0,
+                      angle = FACE_ANGLE[facing] or 0 }
+  while #wets > GroundFX.MAX_WETS do table.remove(wets, 1) end
+end
+
 local function trackSteps(ow)
   local map = ow.map
+  local snowed = state.cover >= GroundFX.PRINT_FROM
+  local wetK = puddleAmount()
   for _, e in ipairs(ow.entities or {}) do
     local cx, cy = e.cellX, e.cellY
     if cx and cy then
       local last = wasAt[e]
       if last and (last[1] ~= cx or last[2] ~= cy) then
         -- the cell they LEFT, which is where the foot actually was
-        if driftCell(map, last[1], last[2]) then
+        if snowed and driftCell(map, last[1], last[2]) then
           dropPrint(last[1], last[2], e.facing, e == ow.player)
+        end
+        -- walking THROUGH a puddle: ring on the water, wet print on the
+        -- dry cell they stepped onto. That is the physics a decal cannot
+        -- fake by sitting still.
+        if wetK > 0.02 and GroundFX.holdsPuddle(map, last[1], last[2]) then
+          noteRipple(last[1] * 16 + 8, last[2] * 16 + 8)
+          if GroundFX.holdsPuddle(map, cx, cy) then
+            noteRipple(cx * 16 + 8, cy * 16 + 8)
+          else
+            dropWet(cx, cy, e.facing)
+          end
         end
         last[1], last[2] = cx, cy
       elseif not last then
@@ -942,7 +1277,11 @@ local function tick(dt)
     state.mapId = ow.map.id
     GroundFX.invalidate()
     prints = {}
+    wets = {}
   end
+
+  -- Cells whose worn step changed since last frame. Almost always none.
+  GroundFX.lastBareRebuilds = drainBareChanges()
 
   -- the marks age wherever the walkers are, but only get MADE where there
   -- is snow lying to make one in
@@ -953,7 +1292,17 @@ local function tick(dt)
     if pr.t >= GroundFX.PRINT_TTL then table.remove(prints, i) end
   end
 
-  if GroundFX.enabled() and state.cover >= GroundFX.PRINT_FROM
+  for i = #wets, 1, -1 do
+    wets[i].t = wets[i].t + dt
+    if wets[i].t >= GroundFX.WET_TTL then table.remove(wets, i) end
+  end
+  do
+    local ok, RayFX = pcall(V.require, "RayFX")
+    if ok and RayFX and RayFX.stepRipples then pcall(RayFX.stepRipples, dt) end
+  end
+
+  if GroundFX.enabled()
+     and (state.cover >= GroundFX.PRINT_FROM or puddleAmount() > 0.02)
      and Game.stack and Game.stack:top() == ow and not ow.transitioning then
     trackSteps(ow)
   end
@@ -967,6 +1316,7 @@ function GroundFX.update(dt)
   state.wet, state.cover = 0, 0
   Wind.grassSnow = 0
   prints = {}
+  wets = {}
   chunks = {}
   if V.mod and V.mod.log then
     V.mod.log:warn("ground fx failed: %s -- the ground is dry for this session",
@@ -1032,8 +1382,10 @@ end
 -- the body lands at about a third of the street's value while the art's own
 -- highlight stays bright -- which is the dark pool with a lit edge every
 -- reference of wet ground has.
-GroundFX.PUDDLE_TONE = 0.42
-GroundFX.PUDDLE_ALPHA = 0.90
+GroundFX.PUDDLE_TONE = 0.34
+GroundFX.PUDDLE_ALPHA = 0.94
+GroundFX.WET_ALPHA = 0.55
+GroundFX.WET_COLOR = { 0.16, 0.20, 0.28 }
 GroundFX.DRIFT_ALPHA = 1.0
 -- A print is a HOLE in the snow, and a hole reads by being a good deal
 -- darker than what it is in -- at half this contrast the trail was there in
@@ -1043,7 +1395,15 @@ GroundFX.PRINT_ALPHA = 0.78
 GroundFX.PRINT_COLOR = { 0.28, 0.34, 0.48 }
 
 local function drawLayer(map, layer, px, py, offX, offZ, alpha, r, g, b)
-  local sheet = atlas(layer:find("^puddle") and "puddle" or layer)
+  -- The layers whose art is ONE drawing at several sizes are asked for by
+  -- their base name; the snow layers have a different drawing per step and
+  -- are asked for by the full name. Getting this wrong is not a wrong
+  -- picture, it is a nil concat inside shippedAtlas -- ASSET_FILE has no
+  -- entry for "bare1", only for "bare".
+  local sheet = atlas((layer:find("^puddle") or layer:find("^basin"))
+                      and "puddle"
+                      or layer:find("^bare") and "bare"
+                      or layer)
   if not sheet then return 0 end
   local tex = sheet.img
   local model = (offX ~= 0 or offZ ~= 0)
@@ -1114,7 +1474,6 @@ function GroundFX.draw3D(scene)
 
   local wetK = puddleAmount()
   local snowK = driftAmount()
-  if wetK <= 0.01 and snowK <= 0.01 then return end
 
   Voxel3D.beginDecals()
   local px, py = player.cellX, player.cellY
@@ -1127,6 +1486,34 @@ function GroundFX.draw3D(scene)
   for _, nb in ipairs(scene.neighbors or {}) do
     if nb.map then places[#places + 1] = { map = nb.map, ox = nb.ox, oy = nb.oy }
     end
+  end
+
+  -- ------- BARE EARTH, and it draws on a clear dry day
+  --
+  -- Everything else in this function is weather, and the early-out that
+  -- used to sit above -- "not raining and not snowing, nothing to do" --
+  -- was correct for all of it. Worn ground is not weather. It is the only
+  -- thing this file draws that is there BECAUSE of the journey rather than
+  -- because of the sky, and a clear afternoon is exactly when a player
+  -- looks at a path and sees that it is a path.
+  --
+  -- Only the map underfoot: the wear field is bound one map at a time (see
+  -- the note on neighbour fields in VoxelScene), so a neighbour's dirt is
+  -- not knowable here and drawing this map's field at the neighbour's
+  -- offset would print this route's paths onto the next one.
+  do
+    local okw, GW = pcall(V.require, "GrassWear")
+    if okw and GW then
+      for step = 1, GroundFX.STEPS do
+        drawn = drawn + drawLayer(map, "bare" .. step, px, py, 0, 0,
+                                  GroundFX.BARE_ALPHA, 1, 1, 1)
+      end
+    end
+  end
+
+  if wetK <= 0.01 and snowK <= 0.01 then
+    GroundFX.lastDraws = drawn
+    return
   end
 
   -- Exactly ONE size step per layer is drawn: the meshes are the same set of
@@ -1148,21 +1535,31 @@ function GroundFX.draw3D(scene)
     end
   end
 
+  local filmK = filmAmount()
   if wetK > 0.01 then
     local r, g, b = skyHue()
-    local a = GroundFX.PUDDLE_ALPHA * wetK
-    local rank = "puddle" .. GroundFX.step(wetK)
+    -- Basins first (low spots, gutters): they are already showing while
+    -- the rest of the street is only damp. Films wait for a real soak.
     -- the one layer that WRITES depth, and the only reason is that the RTX
     -- row reads the depth buffer to find where a puddle's own plane is: a
     -- puddle that is not in there reflects off the road it lies on
     -- (Voxel3D.beginDecals)
     Voxel3D.beginDecals(true)
-    for _, place in ipairs(places) do
-      local lx = px - math.floor((place.ox or 0) / 16)
-      local ly = py - math.floor((place.oy or 0) / 16)
-      drawn = drawn + drawLayer(place.map, rank, lx, ly,
-                                place.ox or 0, place.oy or 0, a, r, g, b)
+    local function paintRank(name, amount)
+      if amount <= 0.01 then return 0 end
+      local a = GroundFX.PUDDLE_ALPHA * amount
+      local rank = name .. GroundFX.step(amount)
+      local n = 0
+      for _, place in ipairs(places) do
+        local lx = px - math.floor((place.ox or 0) / 16)
+        local ly = py - math.floor((place.oy or 0) / 16)
+        n = n + drawLayer(place.map, rank, lx, ly,
+                          place.ox or 0, place.oy or 0, a, r, g, b)
+      end
+      return n
     end
+    drawn = drawn + paintRank("basin", wetK)
+    drawn = drawn + paintRank("puddle", filmK)
 
     -- ------- and the MARK, which is the whole of how the reflection pass
     -- knows these pixels from a person standing on them
@@ -1184,13 +1581,20 @@ function GroundFX.draw3D(scene)
     -- refuses to open without a depth buffer to prove somebody will read it.
     local stamped = 0
     if Voxel3D.beginAlphaStamp(Voxel3D.PUDDLE_TAG) then
-      for _, place in ipairs(places) do
-        local lx = px - math.floor((place.ox or 0) / 16)
-        local ly = py - math.floor((place.oy or 0) / 16)
-        stamped = stamped + drawLayer(place.map, rank, lx, ly,
-                                      place.ox or 0, place.oy or 0,
-                                      Voxel3D.PUDDLE_TAG, 0, 0, 0)
+      local function stampRank(name, amount)
+        if amount <= 0.01 then return 0 end
+        local rank = name .. GroundFX.step(amount)
+        local n = 0
+        for _, place in ipairs(places) do
+          local lx = px - math.floor((place.ox or 0) / 16)
+          local ly = py - math.floor((place.oy or 0) / 16)
+          n = n + drawLayer(place.map, rank, lx, ly,
+                            place.ox or 0, place.oy or 0,
+                            Voxel3D.PUDDLE_TAG, 0, 0, 0)
+        end
+        return n
       end
+      stamped = stampRank("basin", wetK) + stampRank("puddle", filmK)
       Voxel3D.endAlphaStamp()
     end
     drawn = drawn + stamped
@@ -1216,6 +1620,35 @@ function GroundFX.draw3D(scene)
               local m = Mat4.mul(
                 Mat4.translate(pr.cx * 16 + 8,
                                groundAt(map, pr.cx, pr.cy) + GroundFX.PRINT,
+                               pr.cy * 16 + 8),
+                Mat4.rotateY(pr.angle))
+              Voxel3D.draw(quad, tex, m)
+              drawn = drawn + 1
+            end
+          end
+        end
+      end
+    end
+  end
+
+  -- wet footprints leaving a puddle onto dry paving -- short, dark, gone
+  if wetK > 0.02 and #wets > 0 then
+    local sheet = atlas("print_")
+    if sheet then
+      local tex = sheet.img
+      local c = GroundFX.WET_COLOR
+      local quad = GroundFX.printQuad()
+      if quad then
+        for _, pr in ipairs(wets) do
+          if math.abs(pr.cx - px) <= GroundFX.REACH
+             and math.abs(pr.cy - py) <= GroundFX.REACH then
+            local fade = 1 - pr.t / GroundFX.WET_TTL
+            if fade > 0 then
+              love.graphics.setColor(c[1], c[2], c[3],
+                                     GroundFX.WET_ALPHA * fade * wetK)
+              local m = Mat4.mul(
+                Mat4.translate(pr.cx * 16 + 8,
+                               groundAt(map, pr.cx, pr.cy) + GroundFX.PUDDLE,
                                pr.cy * 16 + 8),
                 Mat4.rotateY(pr.angle))
               Voxel3D.draw(quad, tex, m)
@@ -1285,6 +1718,12 @@ Weather.poolAt = function(map, cx, cy)
   if failed or not GroundFX.enabled() then return false end
   if puddleAmount() <= 0.01 then return false end
   return GroundFX.holdsPuddle(map, cx, cy)
+end
+
+Weather.notePoolHit = function(x, z)
+  if failed then return end
+  local ok, RayFX = pcall(V.require, "RayFX")
+  if ok and RayFX and RayFX.ripple then pcall(RayFX.ripple, x, z) end
 end
 
 return GroundFX
