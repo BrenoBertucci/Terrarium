@@ -19,11 +19,48 @@ MAJOR.MINOR.PATCH[-CHANNEL]
 
 Tags and packages:
 
-- Git tag: `v1.22.0-mobile`
-- Zip asset: `TERRARIUM-1.22.0-mobile.zip`
-- `manifest.json` / catalog `version` field: `1.22.0-mobile`
+- Git tag: `v1.23.0-mobile`
+- Zip asset: `TERRARIUM-1.23.0-mobile.zip`
+- `manifest.json` / catalog `version` field: `1.23.0-mobile`
 
 ## Unreleased
+
+## 1.23.0-mobile
+
+The battle UI at the window's own size, birds that are the right size,
+and townsfolk who have somewhere to be.
+
+### Battle UI at window resolution
+
+The command menu no longer covers the frame. The prompt stays in the left
+of the box; the X/Y buttons float on the right with a landing pop on the
+cursor. The player's capsule holds still.
+
+The move list is drawn at the window's resolution -- one row per move in
+the move's type colour, type icon, PP that ambers below half, and a card
+for POWER / STATUS / PP. Party and bag leave their white 160x144 pages
+and sit on the diorama (`lib/BattleScreenXY.lua`). The bag gets DS
+pockets (ITENS / CURA / BOLAS / TM/HM) with a remembered cursor per
+pocket.
+
+The stray blue EXP bar mid-battle was the quality_of_life XP BAR; its
+draw now skips battles marked `terrariumXYBox`. Reinstalling that mod
+resurrects the bar -- see the note in `lib/BattleHudXY.lua`.
+
+### Flock birds
+
+The flock no longer draws every species at one multiplier. Base scale
+3.0 → 4.5, then each bird sizes off `mon.frontSize` -- the same field a
+ground roamer already uses. Towns with no flyer table get PIDGEY instead
+of three grey rectangles.
+
+### Townsfolk agenda
+
+`npc.wanders` (about 28 people on maps with a sky) take a post by day and
+a doorway after dark. Nobody is teleported while the player can see them:
+both ends of the walk have to be off the renderer's view box. A posted
+body is passable so a doorway does not lock the player out overnight.
+New AGENDA row: OFF / DAY / FULL. Shelter still outranks the clock.
 
 ## 1.22.0-mobile
 
