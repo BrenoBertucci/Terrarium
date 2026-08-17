@@ -554,6 +554,14 @@ function Shelter.doorsFor(map)
   return doorsOf(map)
 end
 
+-- Shared with Routines' agenda, which walks the same bodies to a destination
+-- for a different reason. Exposed rather than copied: the ordering (longer
+-- gap first), the refusal handling and the patience counter are the parts
+-- that took the tuning, and a second copy would drift from this one quietly.
+function Shelter.stepToward(map, entities, walker, tx, ty)
+  return stepToward(map, entities, walker, tx, ty)
+end
+
 function Shelter.invalidate()
   doorCache = {}
 end

@@ -76,6 +76,14 @@ end
 -- `Water.wet` already use.
 CityLife.holdSpawns = false
 
+-- The same brake, owned by Routines' night agenda instead of by Shelter.
+--
+-- Deliberately a SECOND flag rather than a second writer on the first one.
+-- Shelter clears `holdSpawns` when the shower ends, and if the agenda shared
+-- it then rain stopping at two in the morning would refill the streets for
+-- the rest of the night. Two owners, two flags, one reader -- which is here.
+CityLife.holdNight = false
+
 -- ------- who is out today
 --
 -- Companion species only -- things that read as pets, strays and partners
@@ -255,7 +263,7 @@ local function pass(ow, seeding)
   -- Pruning still runs while the town is sheltering -- a pet the player has
   -- walked away from should still be dropped -- but nothing new is placed:
   -- see CityLife.holdSpawns.
-  if CityLife.holdSpawns then return end
+  if CityLife.holdSpawns or CityLife.holdNight then return end
   if kept >= WANT then return end
   local attempts = seeding and SEED_TRIES or 1
   for _ = 1, attempts do
