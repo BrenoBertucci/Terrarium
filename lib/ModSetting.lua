@@ -47,6 +47,42 @@ local function indexOf(self, value)
   return 1
 end
 
+-- ------- rungs that are not always there
+--
+-- A ladder may carry a rung that cannot be selected right now -- STADIUM
+-- needs models built out of a ROM the player supplies, and until that has
+-- happened there is nothing behind the option. `gate` is asked per rung and
+-- decides whether it exists at all this frame.
+--
+-- Skipped rather than shown-and-refused, deliberately. A row that can be
+-- cycled onto and then does nothing is indistinguishable from a broken mod;
+-- a row that simply has fewer stops reads as the mod not offering something,
+-- which is the truth. What the player is missing, and how to get it, is said
+-- once in the row's help text instead of implied by a dead setting.
+--
+-- values[1] is never gated: it is the default and the fallback, so there is
+-- always at least one rung to land on.
+function ModSetting:setGate(gate)
+  self.gate = gate
+  return self
+end
+
+function ModSetting:allows(i)
+  if i == 1 or not self.gate then return true end
+  local ok, allowed = pcall(self.gate, self.values[i], i)
+  return (not ok) or allowed and true or false
+end
+
+-- How many rungs are live, for a caller that wants to know whether a row is
+-- worth showing at all.
+function ModSetting:rungs()
+  local n = 0
+  for i = 1, #self.values do
+    if self:allows(i) then n = n + 1 end
+  end
+  return n
+end
+
 -- What the player left it at last session. Read lazily rather than at load
 -- time: the loader fills modOptions before a mod runs, but reading through
 -- the API keeps this honest about where the value lives.
@@ -63,7 +99,13 @@ function ModSetting:read()
 end
 
 function ModSetting:get()
-  return self.values[self:read()]
+  local i = self:read()
+  -- a rung that was live when it was stored and is not now -- the player
+  -- moved the ROM, or opened the same save on another machine -- reads as
+  -- the default rather than as a mode with nothing behind it. The stored
+  -- value is left alone, so putting the ROM back restores their choice.
+  if not self:allows(i) then return self.values[1] end
+  return self.values[i]
 end
 
 function ModSetting:level()
@@ -91,8 +133,32 @@ function ModSetting:setIndex(i, game)
   return value
 end
 
+-- Set by the STORED VALUE rather than by its place on the ladder, for a
+-- caller that knows which setting it wants and not where it sits -- a
+-- preset, or an assertion. An unrecognised value lands on values[1], the
+-- same default indexOf answers everywhere else, so this can never leave a
+-- setting holding something the row cannot display.
+--
+-- Worth having as its own entry point because a ladder's ORDER is not a
+-- promise: 3D-BTL grew a third rung in the middle of itself (see
+-- OverworldBattle), and every caller that had counted to two would have
+-- silently meant something else afterwards.
+function ModSetting:setValue(value, game)
+  return self:setIndex(indexOf(self, value), game)
+end
+
+-- Step to the next rung that is actually live, in `dir`. Bounded by the
+-- ladder's length so a gate that refuses everything still terminates on
+-- values[1], which allows() never gates.
 function ModSetting:cycle(game, dir)
-  return self:setIndex(self:read() + (dir or 1), game)
+  dir = dir or 1
+  local n = #self.values
+  local i = self:read()
+  for _ = 1, n do
+    i = ((i + dir - 1) % n + n) % n + 1
+    if self:allows(i) then break end
+  end
+  return self:setIndex(i, game)
 end
 
 -- Adopt a value set from somewhere else (the mod manager's settings page,
@@ -102,6 +168,15 @@ function ModSetting:sync(value)
   self.index = indexOf(self, value)
 end
 
+-- The label of the rung actually in force, which is not the stored one when
+-- that rung has been gated away (see get). Its own entry point because a
+-- caller can want the label without wanting a row: SettingsMenu puts one
+-- setting's rung on the second line of the CATEGORY that contains it.
+function ModSetting:valueLabel()
+  local i = self:read()
+  return self.labels[self:allows(i) and i or 1]
+end
+
 -- The descriptor src/ui/OptionRows.lua renders, in the shape the
 -- ui.options.rows hook appends.
 function ModSetting:row()
@@ -109,7 +184,7 @@ function ModSetting:row()
   return {
     id = modId() .. ":" .. self.key,
     label = self.label,
-    value = function() return self_.labels[self_:read()] end,
+    value = function() return self_:valueLabel() end,
     step = function(game, dir)
       self_:cycle(game, dir)
       return true
@@ -120,7 +195,11 @@ end
 -- The row the mod manager's own settings page builds for this mod.
 function ModSetting:schema(help)
   local choices = {}
-  for i, v in ipairs(self.values) do choices[i] = { self.labels[i], v } end
+  -- gated rungs are left off the manager's page too, so the two rows agree
+  -- about what can be chosen
+  for i, v in ipairs(self.values) do
+    if self:allows(i) then choices[#choices + 1] = { self.labels[i], v } end
+  end
   if #self.values == 2 and self.values[1] == false then
     return { key = self.key, type = "toggle", label = self.label,
              default = self.values[1], help = help }

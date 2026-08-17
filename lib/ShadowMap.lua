@@ -158,6 +158,7 @@ local drawing = false
 local ready = false
 local lastSig = nil
 local prevBlend, prevAlphaMode = nil, nil
+local spriteCasters = false
 
 local IDENTITY = Mat4.identity()
 
@@ -590,6 +591,17 @@ function ShadowMap.invalidate()
   canvas, canvasRes, blank = nil, 0, nil
   drawing, ready, lastSig = false, false, nil
   deferred = 0
+end
+
+-- Mark whether subsequent casters are sprites (so water can decline them).
+-- When true, casters are marked as sprite casters; when false, they are not.
+function ShadowMap.sprites(enabled)
+  spriteCasters = enabled or false
+end
+
+-- Query whether sprite casters are currently being marked.
+function ShadowMap.isSpriteCasters()
+  return spriteCasters
 end
 
 return ShadowMap

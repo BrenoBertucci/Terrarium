@@ -41,8 +41,6 @@ local Quality = V.require("Quality")
 local Anime = V.require("Anime")
 local Wind = V.require("Wind")
 local Water = V.require("Water")
-local WaterBody = V.require("WaterBody")
-local FloorArt = V.require("FloorArt")
 local Light = V.require("Light")
 -- Last, and it has to be: RayFX pulls in Sky and DayNight, and DayNight
 -- reaches back here for the shadow rig. Everything it wants is already
@@ -127,94 +125,28 @@ local SHADER = [[
   uniform highp vec2 swellB;        // mid cross    (Water.WAVE_B)
   uniform highp vec2 swellC;        // short chop   (Water.WAVE_C)
   uniform highp float swellPhase;
+  // Spatial body-size knobs (Water.BODY_KX/KZ) -- vertex height AND fragment
+  // bands must share them so paint and feet stay on one field.
+  uniform highp float bodyKx;
+  uniform highp float bodyKz;
+  uniform highp float waterLevel;   // Water.BASE -- the recessed height water sits at
+  // Set per-draw (see Voxel3D.draw's `waterBody` argument): 1 for a mesh
+  // that is ALLOWED to have real submerged geometry of its own -- a
+  // water-type Pokemon's stadium rig, modeled with part of its body below
+  // its own y=0 -- so the open "anything below zero" test is safe again:
+  // unlike terrain, a rig's draw call never shares a mesh with a stairwell
+  // or a backdrop, so there is nothing else in it to catch by mistake.
+  // 0 (the default -- see Voxel3D.draw / drawGroup, which always send it,
+  // never leaving a previous draw's value bleeding onto this one) keeps
+  // the narrow band around `waterLevel`, which is what terrain, the
+  // horizon backdrop, and every land creature's incidental low vertex
+  // need instead.
+  uniform highp float waterBody;
   uniform highp float waterSteep;   // crest steepening (energy * STEEP), heightField twin
   uniform highp vec2  waterCurrent; // unit XZ wind/current for advection + foam streaks
   uniform highp float waterAdvect;  // phase drag along current
   uniform highp float waterEnergy;  // lagged chop energy 0..1
   uniform highp float waterTherm;   // 0 cold .. 1 warm
-  // Dispersion (Water.DISPERSE): how far toward `omega ~ sqrt(k)` each train's
-  // own clock runs. 0 puts all three back on one tempo. Applied to the wave
-  // phases ONLY and never to the advection term beside them -- that one grows
-  // without bound with world position, so anything multiplying it has to be
-  // the same number everywhere. See the note on Water.DISPERSE.
-  uniform highp float waterDisperse;
-  // The row's own amplitude, in world pixels; 0 = flat. Shared rather than
-  // vertex-only because the fragment's glint window is scaled by it.
-  uniform highp float swell;
-  // Tempo of each train relative to the long one (Water.RATE_LONG/MID/SHORT).
-  // Constants, the same at every point on the map -- which is the property
-  // that lets dispersion exist here without entering any gradient.
-  uniform highp vec3 waveRate;
-  // |k| of each live train, long / mid / short (Water.WAVE_K). The glint
-  // window is sized against `dot(weights, waveK)`: every cosine allowed to
-  // peak at once, which is the largest slope this particular water can make.
-  uniform highp vec3 waveK;
-  // The spectrum's mix (Water.MIX_LONG / MID / SHORT) and its shape:
-  // x = the long train's floor on a puddle, y = the short train's floor at
-  // sea (zero on purpose -- see Water.MIX_FLOOR_SHORT), z = the crossfade
-  // knee across the size ramp.
-  uniform highp vec3 waveMix;
-  uniform highp vec3 mixShape;
-  // ------- HOW BIG THE WATER UNDER THIS POINT IS (lib/WaterBody.lua)
-  //
-  // One texel per 2D cell over the drawn neighbourhood, sampled in world XZ.
-  // RED holds the COMPLEMENT of the size -- 1 on the smallest puddle, 0 on
-  // open water -- and that inversion is the whole reason this is safe to read
-  // from the VERTEX stage. GLES2 is allowed to expose zero vertex texture
-  // units; a fetch that cannot happen reads vec4(0, 0, 0, 1). Red therefore
-  // comes back 0, which is open water, which is the build this replaced.
-  // Stored the other way up, every ocean in the game would collapse to a
-  // puddle on those devices and nothing would say so.
-  //
-  // The sampler is ALWAYS bound (a 1x1 blank when nothing is baked) -- an
-  // unbound sampler is a driver-dependent crash, the same rule waterArt and
-  // glassMask already follow. `waterFieldOn` is the real switch.
-  uniform Image waterField;
-  uniform highp float waterFieldOn;
-  uniform highp vec2 waterFieldOrigin;  // world XZ of the field's corner
-  uniform highp vec2 waterFieldInv;     // 1 / its extent in world pixels
-  // (sizeFreqSmall / sizeFreqBig used to live here. They scaled the wave
-  // VECTOR by the field and that is exactly what the spectrum removed -- the
-  // size of the water now moves waveMix, not any wavelength.)
-  uniform highp float sizeAmpMin;       // amplitude share the smallest puddle keeps
-  uniform highp float sizeAmpGamma;
-
-  // xyz = how loud the LONG, MID and SHORT trains are here, summing to 1.
-  // w   = the share of the row's swell this body of water carries.
-  //
-  // Both stages call this and both must agree: the vertex displaces the mesh
-  // with it and the fragment re-derives the height to place its cel bands, so
-  // a disagreement here is a band edge sliding off the crest it belongs to.
-  //
-  // WHAT IT NO LONGER RETURNS is a scale on the wave vector. That is the
-  // whole change: the size of the water moves how LOUD each of three fixed
-  // trains is, and never how long any of them is, because a wave vector that
-  // is a function of position puts `(k . x) * grad(that function)` into the
-  // gradient of the phase -- a term carrying world position, unbounded, and
-  // measured at 28x the wave it perturbs four thousand pixels from the
-  // origin. A weight multiplies a sine and contributes only `h * grad w`,
-  // which the ramp itself bounds. See the spectrum note in lib/Water.lua.
-  //
-  // Lua twin: Water.bodyWeights / Water.bodyAmp.
-  vec4 waterShape(vec2 xz) {
-    float size = 1.0;    // no field baked -> open water, as the Lua side does
-    float amp = 1.0;
-    if (waterFieldOn > 0.5) {
-      vec2 uv = clamp((xz - waterFieldOrigin) * waterFieldInv, 0.0, 1.0);
-      size = 1.0 - Texel(waterField, uv).r;
-      // max() rather than the bare value: pow(0, k) is undefined in GLSL ES
-      // and a driver is free to hand back a NaN, which would take the whole
-      // vertex with it -- a hole in the lake rather than a flat one.
-      amp = sizeAmpMin
-          + (1.0 - sizeAmpMin) * pow(max(size, 1e-4), sizeAmpGamma);
-    }
-    float hi = clamp(mixShape.z * size - (mixShape.z - 1.0), 0.0, 1.0);
-    float lo = clamp(1.0 - mixShape.z * size, 0.0, 1.0);
-    vec3 w = vec3(waveMix.x * (mixShape.x + (1.0 - mixShape.x) * hi),
-                  waveMix.y,
-                  waveMix.z * (mixShape.y + (1.0 - mixShape.y) * lo));
-    return vec4(w / max(w.x + w.y + w.z, 1e-6), amp);
-  }
 #ifdef VOXEL_GRID
   // model space, one unit per voxel -- see VoxelGrid. Precision matters
   // here in a way it does not for a colour: the seam is the FRACTIONAL
@@ -260,10 +192,7 @@ local SHADER = [[
   //   y  settled snow on them   weight that stays, and stiffens what is left
   //   z  gust envelope 0..1     how far into a squall this instant is
   uniform highp vec3 grassLoad;
-  // `swell` used to be declared here. It is now up with the shared water
-  // uniforms, because the fragment stage needs it too: the glint window is
-  // sized against the slope this water can reach and the row's amplitude is
-  // half of that product. Nothing else moved -- iceLift is vertex-only.
+  uniform highp float swell;        // water's rise at the crest, world px; 0 = flat
   uniform highp float iceLift;      // freeze raises the surface a little (still y<-1 id)
   attribute float VertexShade;
   // One number per TUFT, from the 8x8 cell it stands in. The grass mesh is
@@ -519,50 +448,46 @@ local SHADER = [[
     vWater = 0.0;
     // Always mark recessed water geometry so optional surface art
     // (assets/water/water.png) can replace the tileset tile even under FLAT.
-    vWaterSurf = (vertex_position.y < -1.0) ? 1.0 : 0.0;
+    //
+    // A NARROW band around the real water height (waterLevel, sent from
+    // Water.BASE) for anything that did not explicitly ask for the wide
+    // test -- that used to be "anything below y=-1", which caught any
+    // other geometry that also dips below zero: a sunken stairwell digs
+    // to y=-16, the painted horizon backdrop skirts to y=-120, and a land
+    // creature's rig can dip a vertex below zero for reasons that have
+    // nothing to do with water. All of those were getting wave-displaced
+    // and water-tinted by mistake. `waterBody` (see Voxel3D.draw) is the
+    // escape hatch: a mesh that is KNOWN to model real submerged geometry
+    // of its own -- a water-type Pokemon's stadium rig -- opts back into
+    // the open test, because unlike terrain it never shares a draw call
+    // with anything that isn't meant to be wet.
+    bool isWaterHeight = (waterBody > 0.5)
+      ? (vertex_position.y < -0.05)
+      : (abs(vertex_position.y - waterLevel) < 0.5);
+    vWaterSurf = isWaterHeight ? 1.0 : 0.0;
     vWave = vec3(0.0, 1.0, 0.0);
     vSwellH = 0.0;
-    if (vertex_position.y < -1.0 && (swell > 0.0 || iceLift > 0.0)) {
+    if (isWaterHeight && (swell > 0.0 || iceLift > 0.0)) {
       vWater = 1.0;
       // Body size + wind advection + crest steepening -- byte for byte with
       // Water.heightField / phaseAt (feet and mesh share one ocean).
-      //
-      // `shape` is the size of the water here: x shortens the wave on small
-      // bodies, y is how much of the row's swell this body can carry. Both
-      // are functions of XZ ALONE, which is what keeps the surface
-      // watertight -- two quads meeting at a corner are shortened and damped
-      // by the same amount, so the unindexed mesh still cannot open a seam.
-      vec4 shape = waterShape(w.xz);
-      vec3 wmix = shape.xyz;         // long / mid / short, summing to 1
-      float amp = swell * shape.w;
+      float bf = 0.90 + 0.35 * sin(w.x * bodyKx) * cos(w.z * bodyKz);
       float adv = waterAdvect * waterEnergy * dot(w.xz, waterCurrent);
-      // Each train's clock runs at its own tempo (omega ~ sqrt(k)); the
-      // current's drag runs at one speed for the whole ocean and is added
-      // after, undispersed. Both stages and Water.heightField.
-      vec3 ph = swellPhase * mix(vec3(1.0), waveRate, waterDisperse) + adv;
-      float aL = dot(w.xz, swellA) - ph.x;
-      float aM = dot(w.xz, swellB) + ph.y;
-      float aS = dot(w.xz, swellC) - ph.z;
-      float h = sin(aL) * wmix.x + sin(aM) * wmix.y + sin(aS) * wmix.z;
+      float ph = swellPhase + adv;
+      float a = dot(w.xz, swellA) * bf - ph;
+      float b = dot(w.xz, swellB) * bf + ph * 0.7;
+      float h = sin(a) * 0.55 + sin(b) * 0.45;
       // Gerstner-ish Y steepening: sharpens crests under chop energy
       float ah = abs(h);
       h = h + waterSteep * h * ah;
-      w.y += amp * h + iceLift;
+      w.y += swell * h + iceLift;
       vSwellH = h;
-      if (amp > 0.001) {
-        // d/dx of sin(k·x - p) is exactly k cos, now that no k is a function
-        // of x. The steep term adds the (1+2*steep*|h|) chain.
-        //
-        // The grad(amp) and grad(wmix) terms are left out -- see
-        // Water.bodyAmp for the measurement of what the first costs. The
-        // second is the same shape and the same size, and unlike the wave
-        // vector it used to replace, it is BOUNDED by the ramp itself.
+      if (swell > 0.001) {
+        // d/dx of sin(k·x*bf - p) and of steep term ≈ (1+2*steep*|h|)*cos chain
         float chain = 1.0 + 2.0 * waterSteep * ah;
-        vec2 g = swellA * (cos(aL) * wmix.x)
-               + swellB * (cos(aM) * wmix.y)
-               + swellC * (cos(aS) * wmix.z);
+        vec2 g = swellA * (bf * cos(a) * 0.55) + swellB * (bf * cos(b) * 0.45);
         g *= chain;
-        vWave = normalize(vec3(-g.x * amp, 1.0, -g.y * amp));
+        vWave = normalize(vec3(-g.x * swell, 1.0, -g.y * swell));
       }
     }
     // The shadow lookup runs off `sunModel`, not `model`. For terrain the
@@ -836,33 +761,10 @@ local SHADER = [[
   uniform highp float waterArtOn;   // 0 = tileset tile, 1 = sample waterArt
   uniform highp float waterArtScale;// world pixels per one full UV cycle
   uniform highp float waterArtMix;  // how far toward it, 0..1 -- see Water.ART_MIX
-  // Optional world-XZ paving art (assets/floor/floor.png). Same always-bound
-  // rule; floorArtOn is the switch. See lib/FloorArt.lua for why the class is
-  // recognised from a colour box plus vUp plus a height rather than from a
-  // tile id -- there is no tile id down here.
-  uniform Image floorArt;
-  uniform highp float floorArtOn;
-  uniform highp float floorArtScale;
-  uniform highp float floorArtMix;
-  uniform highp float floorYMax;
-  // TWO boxes: the field and the lattice ruled over it are far apart in
-  // colour, and one box wide enough for both swallows most of the sheet.
-  uniform highp vec3 floorKeyLo;
-  uniform highp vec3 floorKeyHi;
-  uniform highp vec3 floorKey2Lo;
-  uniform highp vec3 floorKey2Hi;
-
-  bool inBox(vec3 c, vec3 lo, vec3 hi) {
-    return all(greaterThanEqual(c, lo)) && all(lessThanEqual(c, hi));
-  }
-  // The deck over this water, as a COLOUR and a COVERAGE and never a shape
-  // (Sky.deckColor / Sky.waterReflect).
-  uniform highp vec3 cloudReflCol;
-  uniform highp float cloudRefl;
-  // iceLift lives with the vertex swell uniforms
+  // iceLift / bodyKx / bodyKz live with the vertex swell uniforms
   uniform Image glassMask;    // opaque where the atlas texel is window glass
   uniform highp vec2 glassSize;     // the mask's dimensions: tc -> atlas texels
-  uniform highp float glassNight;   // 0 = daylight .. 1 the lamps are on
+  uniform highp float glassNight;   // 0 = daylight .. 1 = the lamps are on
   uniform highp vec3 lampColor;     // what the lamps BURN (DayNight.lampColor)
   uniform highp float glassPhase;   // the glint's phase: advances with TRAVEL
   uniform highp float glassGlint;   // and its strength: 0 while standing still
@@ -1079,33 +981,7 @@ local SHADER = [[
       vec2 scroll = waterCurrent * foamPhase * 0.04;
       vec2 uv = fract(vWorld.xz / scale + scroll);
       vec3 art = Texel(waterArt, uv).rgb;
-      // waterArtMix, not 1.0. This mix used to REPLACE the albedo outright --
-      // clamp(vWaterSurf) is exactly 1 on every water face -- so whatever the
-      // PNG happened to be became the water, at 64 world pixels a tile,
-      // across every lake, river and sea at once. The shipped art is a
-      // caustic sheet whose white shapes are big and round, and a big round
-      // white shape lying on blue is a cloud: the pond read as sky, which is
-      // the one thing water in a diorama must not do, because the actual sky
-      // is right there above it doing the same job properly.
-      //
-      // Mixed rather than dropped, because the art is doing something real
-      // underneath the problem -- it carries the surface's own detail at a
-      // scale the two analytic wave trains cannot. It just has no business
-      // being the whole of it.
-      rgb = mix(rgb, art * vShade * light,
-                clamp(vWaterSurf, 0.0, 1.0) * waterArtMix);
-    }
-    // Optional paving art. Tested against `p.rgb` -- the atlas texel BEFORE
-    // shade and before the hour's light -- so the class does not change
-    // colour at dusk and stop being recognised half way through an evening.
-    if (floorArtOn > 0.5 && vUp > 0.5 && vWorld.y < floorYMax
-        && (inBox(p.rgb, floorKeyLo, floorKeyHi)
-         || inBox(p.rgb, floorKey2Lo, floorKey2Hi))) {
-      // No fract(): the sampler wraps MIRRORED (the art does not tile -- see
-      // FloorArt.loadArt), and folding the coordinate here would throw away
-      // the mirror and hand back the seam it exists to hide.
-      vec3 fart = Texel(floorArt, vWorld.xz / floorArtScale).rgb;
-      rgb = mix(rgb, fart * vShade * light, floorArtMix);
+      rgb = mix(rgb, art * vShade * light, clamp(vWaterSurf, 0.0, 1.0));
     }
     // THE CEL WATER. Three effects, all analytic, all keyed off varyings
     // the mesh already carries -- and all of them FLAT-shaded on purpose:
@@ -1143,25 +1019,15 @@ local SHADER = [[
         float wcell = mix(paintWCell, paintWCellIce, freeze);
         if (wcell < 1.0) wcell = 1.0;
         vec2 wz = floor(vWorld.xz / wcell) * wcell;
-        // Sampled on the SNAPPED cell, like everything else in this block:
-        // the paint has to agree with itself across a cell, and the geometry
-        // it is painted on is already the continuous one. Same field, same
-        // two numbers as the vertex stage -- see waterShape.
-        vec4 shape = waterShape(wz);
-        vec3 wmix = shape.xyz;       // long / mid / short, summing to 1
-        float bodyAmp = shape.w;
+        float bf = 0.90 + 0.35 * sin(wz.x * bodyKx) * cos(wz.y * bodyKz);
         float adv = waterAdvect * waterEnergy * dot(wz, waterCurrent);
-        // Three dispersive clocks + one undispersed drag, exactly as the
-        // vertex stage above builds them -- a disagreement here slides a band
-        // edge off the crest it belongs to.
-        vec3 ph = swellPhase * mix(vec3(1.0), waveRate, waterDisperse) + adv;
+        float ph = swellPhase + adv;
         if (paintPhaseStep > 0.001) {
           ph = floor(ph / paintPhaseStep + 0.5) * paintPhaseStep;
         }
-        float wa = dot(wz, swellA) - ph.x;      // long
-        float wb = dot(wz, swellB) + ph.y;      // mid
-        float wc = dot(wz, swellC) - ph.z;      // short
-        float hQ = sin(wa) * wmix.x + sin(wb) * wmix.y + sin(wc) * wmix.z;
+        float wa = dot(wz, swellA) * bf - ph;
+        float wb = dot(wz, swellB) * bf + ph * 0.7;
+        float hQ = sin(wa) * 0.55 + sin(wb) * 0.45;
         float ahQ = abs(hQ);
         hQ = hQ + waterSteep * hQ * ahQ;
         // Capillary micro-ripples (paint): harmonics of the SAME two trains.
@@ -1183,23 +1049,6 @@ local SHADER = [[
         vec3 depthTint  = mix(shallowCol, deepCol, depthRung);
         // multiply-tint so the tileset art stays legible; freeze kills it
         rgb = mix(rgb, rgb * depthTint * 1.15, (1.0 - freeze) * 0.42);
-        // ---- THE SKY IN THE WATER, as coverage and not as shape.
-        //
-        // The deck's colour, leaned toward by how much of the hemisphere is
-        // covered, dithered on the checker so it is a cel step and not a
-        // wash. What this buys is the thing an overcast lake actually does:
-        // it goes flat and grey, because the bright blue dome that was
-        // lighting it went away. It buys no cloud SHAPES, deliberately --
-        // see Sky.deckColor for why that is the feature and not the
-        // shortcut.
-        //
-        // Weighted DOWN in the troughs (depthRung) so it reads as something
-        // landing on the surface rather than as a tint mixed into the body,
-        // and killed by freeze: ice reflects, but it is not what this is.
-        float reflW = cloudRefl * (1.0 - freeze)
-                    * (0.62 + 0.38 * check)
-                    * (1.0 - 0.45 * depthRung);
-        rgb = mix(rgb, cloudReflCol, clamp(reflW, 0.0, 1.0));
         // ---- 4-rung height cel (value mass): deep trough / trough / mid / crest
         float d0 = mix(-0.55, -0.28, freeze);
         float d1 = mix(-0.22, -0.08, freeze);
@@ -1277,44 +1126,11 @@ local SHADER = [[
         rgb = mix(rgb, rgb * 0.68, crack + crack2 + crack3);
         // Specular rings: analytic normal · sun, quantized. Ice silver
         // lives beside rain-killed sparkle.
-        //
-        // The window is measured from the FLAT plane's own alignment with the
-        // sun, so `glint` is a pair of deviations -- and it is a pair of
-        // FRACTIONS, because the deviation this water can reach is not a
-        // constant and the absolute pair that used to live here was measuring
-        // a slope no lake in the game ever made. At the default rung the
-        // largest deviation anywhere was 0.0269 against a floor of 0.020: `s`
-        // reached 0.029 of 1.0, every fragment quantised to ring 0, and the
-        // effect was off. See Water.GLINT_LO.
-        //
-        // What sets the ceiling: the slope is `amp * grad h`, the normal tips
-        // by it, and only the part of the tip that leans along the sun's
-        // ground track shows -- hence |sunRay.xz|. bodyAmp is in this scale on
-        // purpose, so a puddle's window closes with its own swell and it keeps
-        // the glint that SIZE_AMP_MIN exists to preserve, rather than being
-        // measured against an ocean it is not.
-        // Every cosine allowed to peak at once, weighted by how loud its own
-        // train is here -- so the ceiling follows the spectrum: a puddle is
-        // measured against the short chop it actually carries and the sea
-        // against its long swell.
-        float flatDot = -sunRay.y;
-        float gradMax = dot(wmix, waveK) * (1.0 + 2.0 * waterSteep * ahQ);
-        float devMax = max(swell * bodyAmp * gradMax * length(sunRay.xz), 1e-5);
-        float s = smoothstep(flatDot + glint.x * devMax,
-                             flatDot + glint.y * devMax,
-                             dot(vWave, -sunRay));
+        float s = smoothstep(glint.x, glint.y, dot(vWave, -sunRay));
         s = floor(s * 4.0 + 0.5) / 4.0;
         float glintAmt = sparkle + iceSparkle;
         rgb = mix(rgb, vec3(0.93, 0.97, 1.0), s * glintAmt);
         // Breaking crest foam + tip whitewater + wind streaks.
-        //
-        // ALL of it scaled by bodyAmp, and the bands and depth tint above
-        // deliberately NOT. A wave breaks because it got tall enough to
-        // break, so whitewater is the one thing here that has to know how
-        // big the water is -- a fountain throwing spray is the tell that
-        // gave the old single-amplitude ocean away. The cel bands are the
-        // water's COLOUR and a puddle still has a colour, so they read off
-        // the normalised height and stay.
         float breakT = mix(0.66, 0.46, clamp(crest + waterEnergy * 0.35, 0.0, 1.0));
         float crestFoam = step(breakT, h) * crest * (1.0 - freeze);
         float tipFoam = step(0.78, h) * crest * (waterWet + waterEnergy)
@@ -1324,10 +1140,10 @@ local SHADER = [[
         float steepFoam = step(0.12, slope) * waterEnergy * (1.0 - freeze)
                         * (0.25 + 0.35 * check);
         rgb = mix(rgb, vec3(0.93, 0.97, 1.0),
-                  (crestFoam * (0.58 + 0.38 * check)
-                 + tipFoam * 0.60
-                 + steepFoam * 0.40
-                 + streakFoam) * bodyAmp);
+                  crestFoam * (0.58 + 0.38 * check)
+                + tipFoam * 0.60
+                + steepFoam * 0.40
+                + streakFoam);
         // Snow veil on liquid.
         float veil = snowVeil * (0.42 + 0.22 * check) * (1.0 - freeze * 0.50);
         rgb = mix(rgb, vec3(0.95, 0.97, 1.0), veil);
@@ -1872,7 +1688,12 @@ Voxel3D.camera = nil
 
 -- View and projection for a `vw` x `vh` world-pixel view centred on
 -- (cx, cy) in world pixels. Returns the combined matrix.
-function Voxel3D.viewProjection(cx, cy, vw, vh)
+-- `yaw` (radians, defaults to 0) is the compass camera-rotate angle from
+-- src.render.Camera -- the same value the flat and tilt ground passes spin
+-- their canvas by. Ported from DRAMATIC_SHAPE/ADVANCED_SHAPE: without it the
+-- orbit camera always looked from due south regardless of how the flat
+-- camera had been turned.
+function Voxel3D.viewProjection(cx, cy, vw, vh, yaw)
   local cam = Voxel3D.camera
   if cam then
     local eye, focus = cam.eye, cam.focus
@@ -1902,14 +1723,24 @@ function Voxel3D.viewProjection(cx, cy, vw, vh)
   local fov = 2 * math.atan(1 / (2 * focal))
 
   local focus = { cx, 0, cy }
-  local eye = { cx, dist * math.cos(a), cy + dist * math.sin(a) }
+
+  -- Orbit camera rotational math based on yaw tracking (ported from
+  -- ADVANCED_SHAPE): the eye and up vector both rotate around the focus
+  -- point by the compass angle, so the camera itself turns to follow the
+  -- flat camera's own rotation instead of sitting fixed due south.
+  yaw = yaw or 0
+  local cosY, sinY = math.cos(yaw), math.sin(yaw)
+  local offY, offZ = dist * math.cos(a), dist * math.sin(a)
+  local eyeOffX, eyeOffZ = -offZ * -sinY, offZ * cosY
+  local eye = { cx + eyeOffX, offY, cy + eyeOffZ }
   -- exposed for camera-facing billboards (VoxelScene yaws sprites at it)
   Voxel3D.eye = eye
   Voxel3D.focus = focus
-  -- perpendicular to the view direction in the YZ plane: north is screen-up
-  -- when looking straight down, +Y is screen-up when looking level. Never
-  -- parallel to the view direction, so there is no degenerate a = 0 case.
-  local up = { 0, math.sin(a), -math.cos(a) }
+  -- perpendicular to the view direction, rotated the same way as the eye
+  -- offset so the horizon stays level as the view turns. Never parallel to
+  -- the view direction, so there is no degenerate a = 0 case.
+  local upZ = -math.cos(a)
+  local up = { upZ * sinY, math.sin(a), upZ * cosY }
 
   local proj = Mat4.perspective(fov, vw / vh,
                                 math.max(1, dist * 0.05), dist * 4 + 4096)
@@ -2054,7 +1885,7 @@ end
 -- void transparent, which is what every rung below it wants.
 -- `slot` names which cached canvas to render into (see `slots` above);
 -- omitted is the free-roam world pass.
-function Voxel3D.beginScene(w, h, cx, cy, vw, vh, sky, slot)
+function Voxel3D.beginScene(w, h, cx, cy, vw, vh, sky, slot, yaw)
   -- the wireframe variant when the player has it on AND it built; either
   -- answer falls through to the plain scene rather than to no scene
   local grid = VoxelGrid.enabled()
@@ -2107,7 +1938,7 @@ function Voxel3D.beginScene(w, h, cx, cy, vw, vh, sky, slot)
   sceneDepth = depth
   -- Ahead of the clear, because the sky's bands are placed off the ground
   -- plane's vanishing line and that is a property of this matrix.
-  Voxel3D.vp = Voxel3D.viewProjection(cx, cy, vw, vh)
+  Voxel3D.vp = Voxel3D.viewProjection(cx, cy, vw, vh, yaw)
   if sky then
     love.graphics.clear(sky[1], sky[2], sky[3], sky[4] or 1, true, true)
     -- The sky goes down here, in the one window in this function where a
@@ -2205,46 +2036,28 @@ function Voxel3D.beginScene(w, h, cx, cy, vw, vh, sky, slot)
   pcall(sh.send, sh, "lampFlicker", Voxel3D.lampFlicker or 0)
   -- and the water: the swell, its two wave trains, and the slope window a
   -- crest has to reach to catch the sun. The window is measured FROM the
-  -- flat surface's own alignment with the light (-sunRay.y is what a level
-  -- pond scores) so it does not drift off the crests as the hour moves, and
-  -- it is scaled BY the slope this water can actually reach so it does not
-  -- sit above them permanently -- which is what it did. The shader does both;
-  -- what goes over the wire is the pair of fractions.
+  -- flat surface's own alignment with the light (-ray.y is what a level
+  -- pond scores), so it stays a window on the crests at any sun angle
+  -- rather than drifting off them as the hour moves.
   local ray = ShadowMap.sunDir()
   pcall(sh.send, sh, "sunRay", ray)
+  -- The water surface sits at this exact recessed height (Water.BASE,
+  -- -2 by default). The vertex shader used to guess "is this water" from
+  -- ANY vertex below y=-1, which was fine back when water truly was the
+  -- only thing down there -- but sunken stairwells (Structures' stair_down
+  -- cells dig to y=-16) and the painted horizon backdrop (Y_BOTTOM=-120)
+  -- both sit below that line too and are NOT water, so they were getting
+  -- the wave displacement, the foam/tint paint and the optional water art
+  -- texture. Sending the real level lets the shader test a narrow band
+  -- around it instead of an open-ended "anything below zero-ish" guess.
+  pcall(sh.send, sh, "waterLevel", tonumber(Water.BASE) or -2.0)
   pcall(sh.send, sh, "swell", Water.swell())
   pcall(sh.send, sh, "swellA", Water.WAVE_A)
   pcall(sh.send, sh, "swellB", Water.WAVE_B)
-  pcall(sh.send, sh, "swellC", Water.WAVE_C)
   pcall(sh.send, sh, "swellPhase", Water.phase())
-  -- The spectrum: how loud each train is across the size ramp, how long each
-  -- one is, and how fast each one clocks. WAVE_K is live because the three
-  -- vectors are stretched together every frame by Water.refreshLive; the
-  -- tempo ratios are not, on purpose (see Water.DISPERSE).
-  pcall(sh.send, sh, "waterDisperse", tonumber(Water.DISPERSE) or 1)
-  pcall(sh.send, sh, "waveRate", { Water.RATE_LONG, Water.RATE_MID,
-                                   Water.RATE_SHORT })
-  pcall(sh.send, sh, "waveK", Water.WAVE_K)
-  pcall(sh.send, sh, "waveMix", { Water.MIX_LONG, Water.MIX_MID,
-                                  Water.MIX_SHORT })
-  pcall(sh.send, sh, "mixShape", { Water.MIX_FLOOR_LONG, Water.MIX_FLOOR_SHORT,
-                                   Water.MIX_KNEE })
   pcall(sh.send, sh, "iceLift", Water.iceLift())
-  -- how big the water is, as a field over the drawn neighbourhood. The
-  -- sampler is bound every frame whether or not there is a bake -- unbound
-  -- is a crash, `waterFieldOn` is the switch. See waterShape in the shader.
-  do
-    local img = WaterBody.image()
-    local on = img and 1 or 0
-    if not img then img = WaterBody.blank() end
-    if img then pcall(sh.send, sh, "waterField", img) end
-    local ox, oz, ix, iz = WaterBody.uvParams()
-    pcall(sh.send, sh, "waterFieldOn", img and on or 0)
-    pcall(sh.send, sh, "waterFieldOrigin", { ox or 0, oz or 0 })
-    pcall(sh.send, sh, "waterFieldInv", { ix or 0, iz or 0 })
-    pcall(sh.send, sh, "sizeAmpMin", tonumber(Water.SIZE_AMP_MIN) or 0.16)
-    pcall(sh.send, sh, "sizeAmpGamma", tonumber(Water.SIZE_AMP_GAMMA) or 1.35)
-  end
+  pcall(sh.send, sh, "bodyKx", Water.BODY_KX or 0.0039)
+  pcall(sh.send, sh, "bodyKz", Water.BODY_KZ or 0.0045)
   pcall(sh.send, sh, "waterSteep", tonumber(Water.STEEP_NOW) or 0)
   pcall(sh.send, sh, "waterCurrent", Water.CURRENT or { 0.94, 0.34 })
   pcall(sh.send, sh, "waterAdvect", tonumber(Water.ADVECT) or 0.045)
@@ -2282,47 +2095,12 @@ function Voxel3D.beginScene(w, h, cx, cy, vw, vh, sky, slot)
     local okS, s = pcall(Water.artScale)
     if okS and tonumber(s) then scale = tonumber(s) end
     pcall(sh.send, sh, "waterArtScale", scale)
-    local mix = tonumber(Water.ART_MIX) or 0.35
-    if mix < 0 then mix = 0 elseif mix > 1 then mix = 1 end
-    pcall(sh.send, sh, "waterArtMix", mix)
-  end
-  -- optional paving art (assets/floor/floor.png). Sampler always bound.
-  do
-    local art, on = nil, 0
-    local okA, a = pcall(FloorArt.art)
-    if okA and a then art, on = a, 1 end
-    if not art then
-      local okB, blank = pcall(FloorArt.blank)
-      art = (okB and blank) or nil
-    end
-    if art then pcall(sh.send, sh, "floorArt", art) end
-    pcall(sh.send, sh, "floorArtOn", art and on or 0)
-    pcall(sh.send, sh, "floorArtScale", FloorArt.scale())
-    pcall(sh.send, sh, "floorArtMix", FloorArt.mix())
-    pcall(sh.send, sh, "floorYMax", tonumber(FloorArt.Y_MAX) or 4.0)
-    pcall(sh.send, sh, "floorKeyLo", FloorArt.KEY_LO)
-    pcall(sh.send, sh, "floorKeyHi", FloorArt.KEY_HI)
-    pcall(sh.send, sh, "floorKey2Lo", FloorArt.KEY2_LO)
-    pcall(sh.send, sh, "floorKey2Hi", FloorArt.KEY2_HI)
-  end
-  -- the deck over the water: a colour and a coverage, never a shape
-  do
-    local amt, col = 0, { 0.96, 0.97, 0.99 }
-    local okA, a = pcall(Sky.waterReflect)
-    if okA and tonumber(a) then amt = tonumber(a) end
-    local okC, c = pcall(Sky.deckColor)
-    if okC and type(c) == "table" and c[3] then col = c end
-    pcall(sh.send, sh, "cloudRefl", amt)
-    pcall(sh.send, sh, "cloudReflCol", col)
   end
   -- sparkleNow, not SPARKLE: the row's strength with the rain taken out of it
   -- (Water.wet), so a shower dulls the pond's glint on the same tick it starts
   pcall(sh.send, sh, "sparkle", Water.sparkleNow())
-  -- FRACTIONS of the slope this water can reach, not absolute deviations --
-  -- the shader adds the flat plane's own alignment (-sunRay.y) and scales by
-  -- the live amplitude, because that scale is what the absolute pair was
-  -- missing and why the rings were unreachable. See Water.GLINT_LO.
-  pcall(sh.send, sh, "glint", { Water.GLINT_LO, Water.GLINT_HI })
+  local flat = -ray[2]
+  pcall(sh.send, sh, "glint", { flat + Water.GLINT_LO, flat + Water.GLINT_HI })
   -- the window glass: the tileset's mask (or the blank -- the sampler is
   -- declared either way, and unbound is a driver-dependent crash), how lit
   -- the panes are, and the movement-fed glint as the caller last set it
@@ -2390,11 +2168,15 @@ function Voxel3D.beginScene(w, h, cx, cy, vw, vh, sky, slot)
   -- point is already at least eye-to-focus away, so a range that did not
   -- start there would spend its whole first view-height underground.
   --
-  -- A PLACED camera declines it, the way it may decline the curve. The range
-  -- is in view-heights, and a staged shot's framing comes from its arena
-  -- rather than from `vh` -- so the numbers that put the haze on the horizon
-  -- out here would put it across the middle of a battle.
-  local haze = (not placed) and Aerial.color(Voxel3D.skyFill) or nil
+  -- A PLACED camera declines it ONLY for staged shots (battles, etc.), where
+  -- the framing comes from its arena rather than from `vh` -- so the numbers
+  -- that put the haze on the horizon out here would put it across the middle
+  -- of a battle. Free-roam cameras (1ST/3RD person) should behave like the
+  -- orbit camera and have haze enabled.
+  local isFreeCam = false
+  local okV, Voxel = pcall(V.require, "VoxelState")
+  if okV and Voxel then isFreeCam = Voxel.isFreeCam(Voxel.level) end
+  local haze = (not placed or isFreeCam) and Aerial.color(Voxel3D.skyFill) or nil
   local fogNear, fogInv = nil, nil
   if haze then fogNear, fogInv = Aerial.range(vh) end
   if haze and fogNear then
@@ -2786,18 +2568,23 @@ end
 -- pixels, and it defaults to ZERO -- sent on every draw rather than only on
 -- the ones that want it, so a swaying pass can never leak into the terrain
 -- that follows it.
-function Voxel3D.draw(mesh, texture, model, pull, sunModel, sway)
+function Voxel3D.draw(mesh, texture, model, pull, sunModel, sway, waterBody)
   if not (active and mesh) then return end
   -- the variant beginScene actually bound, not whichever one is default:
   -- sending a uniform to the other shader would go nowhere
   local sh = activeShader
   if not sh then return end
-  if texture then mesh:setTexture(texture) end
+  if texture and mesh.setTexture then mesh:setTexture(texture) end
   -- LOVE defaults matrix uniforms to column-major; Mat4 is row-major
   pcall(sh.send, sh, "model", "row", model or IDENTITY)
   pcall(sh.send, sh, "sunModel", "row", sunModel or model or IDENTITY)
   pcall(sh.send, sh, "pull", pull or 0)
   pcall(sh.send, sh, "sway", sway or 0)
+  -- Sent unconditionally, like `sway` just above -- a draw that leaves it
+  -- out must NOT inherit whichever value a water-type stadium rig set on
+  -- the previous one, or the next land creature drawn gets water-tinted
+  -- for a vertex that only ever meant "my foot is mid-stride".
+  pcall(sh.send, sh, "waterBody", waterBody and 1 or 0)
   -- How tall the thing that is about to lean stands, and what is lying on
   -- it. Both ride the same field-set-by-the-caller contract `snowTop` and
   -- `crush` do -- one value for a whole pass, and no new parameter on the
@@ -2831,7 +2618,10 @@ function Voxel3D.draw(mesh, texture, model, pull, sunModel, sway)
   pcall(sh.send, sh, "snowTop", Voxel3D.snowTop or 0)
   pcall(sh.send, sh, "snowColor", Voxel3D.SNOW_COLOR)
   pcall(sh.send, sh, "snowSide", Voxel3D.SNOW_SIDE)
-  love.graphics.draw(mesh)
+  -- Skip if mesh is a table (not a drawable) - can happen in battle contexts
+  if type(mesh) ~= "table" then
+    pcall(love.graphics.draw, mesh)
+  end
 end
 
 -- Draw one terrain GROUP -- a map's chunked mesh (see ChunkMesher) --
@@ -2853,6 +2643,10 @@ function Voxel3D.drawGroup(group, texture, model, pull, sunModel, b)
   pcall(sh.send, sh, "pull", pull or 0)
   -- terrain is planted by definition: buildings do not lean
   pcall(sh.send, sh, "sway", 0)
+  -- terrain's own water tiles are found by the narrow waterLevel band
+  -- (see the shader), not this escape hatch -- a stairwell shares this
+  -- exact draw call and must not light up too.
+  pcall(sh.send, sh, "waterBody", 0)
   local chunks = group.chunks
   for i = 1, #chunks do
     local ch = chunks[i]
@@ -2861,10 +2655,17 @@ function Voxel3D.drawGroup(group, texture, model, pull, sunModel, b)
     -- stands on it -- see the note where ymax is measured
     if not b or (ch.x1 >= b[1] and ch.x0 <= b[3]
                  and ch.z1 + ch.ymax >= b[2] and ch.z0 <= b[4]) then
-      if texture then ch.mesh:setTexture(texture) end
-      love.graphics.draw(ch.mesh)
+      if texture and ch.mesh.setTexture then ch.mesh:setTexture(texture) end
+      if ch.mesh and type(ch.mesh) ~= "table" then
+        pcall(love.graphics.draw, ch.mesh)
+      end
     end
   end
+end
+
+-- Enable or disable grass wind animation
+function Voxel3D.grassWind(on)
+  Voxel3D.windEnabled = on
 end
 
 -- Project a world point to canvas pixels: returns (x, y, scale), or nil
