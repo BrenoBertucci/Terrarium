@@ -611,6 +611,16 @@ end
 -- Every walkable cell is FLAT, whatever its height -- that is what makes it
 -- walkable -- so a pool on one is a pool on level ground, which is all the
 -- original rule was really after.
+-- How much canopy stands over this cell, 0..1. One guarded hop to
+-- GrassWear, which is where the bake lives; zero on any run without it, so
+-- every caller behaves exactly as it did before the canopy existed.
+function GroundFX.canopyOver(cx, cy)
+  local ok, GW = pcall(V.require, "GrassWear")
+  if not (ok and GW and GW.canopyAt) then return 0 end
+  local okv, v = pcall(GW.canopyAt, cx, cy)
+  return (okv and tonumber(v)) or 0
+end
+
 local function puddleCell(map, cx, cy)
   if not map:inBounds(cx, cy) then return false end
   if map:isWaterCell(cx, cy) then return false end
@@ -746,6 +756,27 @@ GroundFX.STEPS = 3
 -- street looks wet.
 GroundFX.PUDDLE_CANDIDATES = 0.70
 GroundFX.PUDDLE_SPACING = 1        -- cells checked around a candidate
+
+-- ------- and what a CANOPY keeps off the ground under it
+--
+-- A tree does not make the ground beneath it dry, it makes it the LAST
+-- thing to get wet and the first to show through the snow. That is the
+-- shape of shelter people actually notice: standing under a tree in a
+-- shower, and the ring of bare grass under one after a snowfall.
+--
+-- Both read GrassWear.canopyAt -- the alpha channel Trees3D bakes when the
+-- map binds, off where the crowns really landed rather than off the site
+-- grid (the jitter and the per-site scale make those different maps).
+--
+-- A pool is a threshold because a puddle either forms or does not: past
+-- this much cover the ground under a crown simply stays dry.
+GroundFX.CANOPY_DRY = 0.45
+-- Snow is a THINNING, not a threshold, because a fall does get through a
+-- canopy -- less of it, in patches. Multiplying the density by the sky
+-- left over means a light cover under a wood and a bare ring under the
+-- densest crowns, out of the stable per-cell hash that already decides
+-- this, so nothing flickers and nothing needs remembering.
+GroundFX.CANOPY_SNOW_KEEP = 0.85
 
 -- Snow: a share of eligible cells per step, climbing to all of them.
 GroundFX.DRIFT_DENSITY = { 0.55, 0.82, 1.0 }
@@ -984,6 +1015,10 @@ local function buildChunk(map, layer, chunkX, chunkY)
       local bareFrame = nil
       if puddle then
         local hold = GroundFX.holdsPuddle(map, cx, cy)
+        -- and nothing pools under a crown (see CANOPY_DRY)
+        if hold and GroundFX.canopyOver(cx, cy) >= GroundFX.CANOPY_DRY then
+          hold = false
+        end
         if not hold then
           want = false
         elseif base == "basin" then
@@ -1022,7 +1057,14 @@ local function buildChunk(map, layer, chunkX, chunkY)
         -- it is a bug. What the steps change is how MUCH (the size below).
         want = crustCell(map, cx, cy)
       else
-        want = unit(h) < (GroundFX.DRIFT_DENSITY[step] or 1)
+        -- Snow thins under a canopy rather than stopping at an edge: the
+        -- density is cut by how much sky the cell has lost, and the cell's
+        -- own stable hash decides which ones survive -- so the thinning is
+        -- the same every time the chunk is built and a wood keeps a
+        -- patchy floor instead of a clean circle.
+        local keep = 1 - GroundFX.CANOPY_SNOW_KEEP
+                         * GroundFX.canopyOver(cx, cy)
+        want = unit(h) < (GroundFX.DRIFT_DENSITY[step] or 1) * keep
                  and driftCell(map, cx, cy)
       end
       if want then
