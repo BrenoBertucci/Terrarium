@@ -297,6 +297,12 @@ mod.content.render_pipelines:register(PIPE_VOXEL, {
     -- (it skips anybody carrying `dsShelter`), and running them the other
     -- way round would spend a frame with the two disagreeing.
     Routines.update(dt)
+    -- and where they are, as opposed to where they are looking. Behind the
+    -- beats for the same reason those are behind Shelter: both write to the
+    -- same people, and the one that moves a body should see the frame the
+    -- one that turns a head already settled. It stands down entirely while
+    -- Shelter holds the town, so rain still outranks the clock.
+    Routines.agendaUpdate(dt)
     -- and the sleeper indoors, which is a real map object for the same
     -- reason and gates itself the same way. Its steam is a drawing and waits
     -- for the overlay; the cat itself is standing there in both modes.
@@ -767,6 +773,17 @@ local SETTINGS = {
     .. "the map drew them. Nobody moves off their cell: this is where they "
     .. "are LOOKING, so no script, no gate guard and no shop counter "
     .. "changes. Trainers are never touched.",
+    full = true },
+  { Routines.agendaSetting,
+    "The people have somewhere to BE. Only the wandering townsfolk -- the "
+    .. "ones Gen 1 already had stepping about at random, ninety-eight in "
+    .. "all of Kanto -- and never a trainer, a shopkeeper or anybody a "
+    .. "script can ask for by name. DAY gives them the post the map author "
+    .. "chose and keeps them near it. FULL adds the night: they take a "
+    .. "doorway after dark and the stray Pokemon go indoors, so a town at "
+    .. "two in the morning is a town rather than a matinee. Nobody is ever "
+    .. "moved while you are looking at them -- they walk there if you are, "
+    .. "and rain still overrules the hour.",
     full = true },
   -- `full = true` because this row is not about the look at all -- it is a
   -- bot, and a preset that owns the camera has no business taking it away.
