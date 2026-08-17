@@ -44,8 +44,15 @@ graphify-out/
 *.rom
 *.bin
 # Shipped mesh bakes (tools/optimize_*_glb.py). ROM dumps stay ignored.
+#
+# EVERY BAKE NEEDS ITS OWN LINE HERE, and forgetting one does not fail
+# loudly: the tree bake was matched by *.bin above and quietly left out of
+# the first commit that carried it. A clone would have got the texture and
+# the metadata but no mesh, Trees3D.available() would have returned false,
+# and the forest would have fallen back to hull balls with nothing logged.
 !assets/ground/grass/grass.mesh.bin
 !assets/ground/lamppost/lamppost.mesh.bin
+!assets/ground/tree/tree_willow.mesh.bin
 *.bps
 *.ips
 *.ups
@@ -54,6 +61,8 @@ assets/ground/source/*.zip
 # Authoring-only GLBs (~20 MB); the bake is what ships.
 assets/ground/grass/*.glb
 assets/ground/lamppost/*.glb
+# tree_willow.glb is 23 MB of source model. Nothing loads a GLB at runtime.
+assets/ground/tree/*.glb
 # Same rule, and it had been missed: assets/mc/Mc.glb is 26 MB of source
 # model. Nothing loads a GLB at runtime -- the bakes do -- so a clone that
 # carried this would carry it forever for no one.
@@ -119,6 +128,9 @@ desktop.ini
 .DS_Store
 *~
 *.bak
+# Whole-folder backups taken before a risky edit (.bak_lamppost was 20 MB of
+# them). Same rule as *.bak, which only ever matched the single files.
+.bak_*/
 *.orig
 *.tmp
 *.swp
