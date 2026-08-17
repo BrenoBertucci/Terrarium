@@ -5,16 +5,28 @@
 -- at Game Boy resolution. This draws into the world canvas instead, from
 -- inside OverworldBattle.snapHUDs, which is already bound to it.
 --
--- WHAT IS REPLACED. The box's frame and fill, the message text, and -- while
--- the command menu is up -- the four commands, drawn as buttons rather than
--- as two columns of words with an arrow beside one of them.
+-- WHAT IS REPLACED. The box's frame and fill, the message text, the four
+-- commands -- drawn as buttons rather than as two columns of words with an
+-- arrow beside one of them -- and the move list, drawn as one row per move
+-- in the move's own type colour, with the type icon, the PP count and a
+-- card for the selected move where the Game Boy put its TYPE/ box.
 --
--- WHAT IS NOT. Which commands exist, which one is highlighted, what the
--- message says, and how fast it types. All four are read off the battle every
--- frame: `menuIndex` (1..4 in reading order, found by moving the cursor and
--- watching which field changed), `current.text`, and `charIndex`, which is
--- the typewriter's own cursor -- honouring it is what keeps the text appearing
+-- WHAT IS NOT. Which commands and moves exist, which one is highlighted,
+-- what the message says, and how fast it types. All of it is read off the
+-- battle every frame: `menuIndex` (1..4 in reading order, found by moving
+-- the cursor and watching which field changed), `moveIndex`,
+-- `player.curMoves`, `current.text`, and `charIndex`, which is the
+-- typewriter's own cursor -- honouring it is what keeps the text appearing
 -- a letter at a time instead of all at once.
+--
+-- EVERYTHING FITS IN THE BOX'S OWN RECT. The first cut of this menu grew
+-- the panel to 1.9x the box's height, full width -- measured on a 1080p
+-- window that is a 1200x684 slab, which buried the player's own mon and
+-- most of the arena the mode exists to show. Nothing here leaves the
+-- bottom third now: the message keeps to the left of the box, the buttons
+-- and the move rows float on the right, and the world stays visible above
+-- them. That is also what lets the player's HUD capsule sit still -- it
+-- used to step upward to dodge the grown panel.
 --
 -- THE LABELS ARE THE GAME'S. The 5X pack draws its command buttons with the
 -- words baked in, in English -- POKéMON, BAG, RUN. This build runs in
@@ -48,31 +60,23 @@ BattleBoxXY.COMMANDS = {
   { art = "cmd_run",     label = "FUGIR", color = { 0.20, 0.52, 0.86 } },
 }
 
--- X/Y stands FIGHT on its own, big, with the other three stacked beside it --
--- the shape says "this is the one you press" before any word is read. The
--- Game Boy's 2x2 grid of words carried no such weight, and menuIndex's own
+-- X/Y stands FIGHT on its own, big, with the other three along the bottom
+-- edge running off it -- the shape says "this is the one you press" before
+-- any word is read, and the three are drawn as the top half of a capsule
+-- precisely so they can be cut by the edge of the screen. menuIndex's own
 -- order is preserved underneath: the cursor still moves the way the engine
 -- moves it, only the boxes it lands on have changed shape.
--- The three go in a ROW beside FIGHT, not in a column.
 --
--- Stacked, they were limited by a third of the box's height and came out tiny
--- with a band of empty panel beside them: this box is 160x48 in Game Boy
--- terms, which is very wide and very short, and three things stacked down its
--- short axis have nowhere to grow. In a row each one gets a third of the WIDE
--- axis and roughly doubles.
--- X/Y's own arrangement, which is not a row and not a grid: FIGHT alone on
--- top, filling most of the panel, and the other three along the BOTTOM edge
--- running off it -- they are drawn as the top half of a capsule precisely so
--- they can be cut by the edge of the screen.
---
--- That needs more height than the Game Boy's text box has (160x48, a third of
--- the frame), so with the command menu up the panel grows UPWARD from the
--- box's own bottom edge. Only upward, and only here: the box's baseline is
--- where the player's eye already is, and the message phases keep the
--- engine's own rectangle exactly.
-BattleBoxXY.MENU_GROW = 1.9        -- panel height, as a multiple of the box's
-BattleBoxXY.FIGHT_FRAC = 0.62      -- of the panel's height, for FIGHT's band
-BattleBoxXY.FIGHT_WIDE = 0.72      -- and of its width
+-- The cluster takes the RIGHT end of the box's rect and the message keeps
+-- the left, so the whole menu lives in the bottom third of the letterbox.
+-- The buttons float on the world with no panel behind them, X/Y's own
+-- arrangement -- the art is opaque and carries its own silhouette, and a
+-- backing slab behind it is how the first cut ended up covering the frame.
+BattleBoxXY.MSG_FRAC = 0.52        -- of the box's width, for the message panel
+BattleBoxXY.MENU_MSG_H = 0.78      -- and of its height, while the menu is up
+BattleBoxXY.CLUSTER_FRAC = 0.46    -- of the box's width, for the buttons
+BattleBoxXY.FIGHT_FRAC = 0.54      -- of the box's height, for FIGHT's band
+BattleBoxXY.FIGHT_WIDE = 0.80      -- of the cluster's width
 BattleBoxXY.STACK_GAP = 0.02       -- between buttons, as a fraction
 
 -- The bottom row, left to right, by menuIndex. X/Y puts BAG, RUN and POKéMON
@@ -88,6 +92,45 @@ BattleBoxXY.BOTTOM_ORDER = { 3, 4, 2 }
 BattleBoxXY.UNSEL_ALPHA = 0.62
 BattleBoxXY.UNSEL_SCALE = 0.90
 
+-- Landing on a button POPS it: it starts at the unselected scale, overshoots
+-- full size and settles, and while it sits selected it breathes. Both are
+-- functions of the wall clock rather than of a stored velocity, so a frame
+-- hitch skips ahead instead of accumulating.
+BattleBoxXY.POP_TIME = 0.16        -- seconds, cursor-landing pop
+BattleBoxXY.POP_OVER = 0.10        -- how far past full size the pop swings
+BattleBoxXY.PULSE = 0.013          -- idle breathing, as a scale amplitude
+BattleBoxXY.PULSE_HZ = 1.4
+
+-- The move list: one row per move on the right, the selected move's card on
+-- the left where the Game Boy put its TYPE/ box. Rows keep four slots of
+-- height whatever the mon knows, so a one-move mon gets one full-sized row
+-- and three empty slots rather than one row the height of the box.
+BattleBoxXY.INFO_FRAC = 0.30       -- of the box's width, for the move card
+BattleBoxXY.MOVE_GAP = 0.035       -- between rows, as a fraction of box height
+BattleBoxXY.ROW_SEL_ALPHA = 0.96
+BattleBoxXY.ROW_UNSEL_ALPHA = 0.55
+
+-- The series' own type colours, keyed by the type's display name. A type
+-- this table does not know (a mod's) falls back to slate.
+BattleBoxXY.TYPE_COLOR = {
+  NORMAL   = { 0.66, 0.66, 0.47 },
+  FIGHTING = { 0.75, 0.19, 0.16 },
+  FLYING   = { 0.66, 0.56, 0.94 },
+  POISON   = { 0.63, 0.25, 0.63 },
+  GROUND   = { 0.88, 0.75, 0.41 },
+  ROCK     = { 0.72, 0.63, 0.22 },
+  BUG      = { 0.66, 0.72, 0.13 },
+  GHOST    = { 0.44, 0.34, 0.60 },
+  FIRE     = { 0.94, 0.50, 0.19 },
+  WATER    = { 0.41, 0.56, 0.94 },
+  GRASS    = { 0.47, 0.78, 0.31 },
+  ELECTRIC = { 0.91, 0.77, 0.19 },
+  PSYCHIC  = { 0.97, 0.35, 0.53 },
+  ICE      = { 0.60, 0.85, 0.85 },
+  DRAGON   = { 0.44, 0.22, 0.97 },
+}
+BattleBoxXY.TYPE_FALLBACK = { 0.45, 0.47, 0.52 }
+
 BattleBoxXY.PANEL = { 0.08, 0.09, 0.12, 0.90 }
 BattleBoxXY.PANEL_EDGE = { 0.62, 0.67, 0.78, 0.60 }
 BattleBoxXY.TEXT = { 1, 1, 1, 1 }
@@ -101,8 +144,6 @@ BattleBoxXY.SELECT_RING = { 1, 1, 1, 0.95 }
 BattleBoxXY.TEXT_H = 0.20        -- message glyph height
 BattleBoxXY.LINE_GAP = 1.35      -- line height, as a multiple of TEXT_H
 BattleBoxXY.PAD = 0.10           -- inside the panel
-BattleBoxXY.BUTTON_H = 0.34      -- one button's height
-BattleBoxXY.MENU_FRAC = 0.42     -- how much of the box's width the buttons take
 
 local BattleHudXY = V.require("BattleHudXY")
 
@@ -124,6 +165,7 @@ end
 BattleBoxXY.PHASES = {
   menu = true,        -- the four command buttons
   messages = true,    -- the typed message
+  moveSelect = true,  -- the move rows and the selected move's card
 }
 
 function BattleBoxXY.covers(battle)
@@ -199,6 +241,48 @@ end
 
 BattleBoxXY._art = art     -- named for the suite
 
+-- ------- the selection's motion
+--
+-- One clock, two motions: a pop when the cursor lands (starts at the
+-- unselected scale, overshoots by POP_OVER, settles at 1) and a slow breath
+-- while it sits there. `group` keeps the command menu's cursor and the move
+-- list's from resetting each other's pop.
+local anim = {}
+
+local function popScale(group, sel)
+  local t = (love.timer and love.timer.getTime) and love.timer.getTime() or 0
+  local a = anim[group]
+  if not a or a.sel ~= sel then
+    a = { sel = sel, at = t }
+    anim[group] = a
+  end
+  local s = 1 + BattleBoxXY.PULSE
+            * math.sin(t * BattleBoxXY.PULSE_HZ * 2 * math.pi)
+  local dt = t - a.at
+  if dt < BattleBoxXY.POP_TIME then
+    local p = dt / BattleBoxXY.POP_TIME
+    local u = BattleBoxXY.UNSEL_SCALE
+    s = s * (u + (1 - u) * p + BattleBoxXY.POP_OVER * math.sin(p * math.pi))
+  end
+  return s
+end
+
+-- Text over a coloured fill needs its own contrast: the same offset copy in
+-- black first, which reads as a cast shadow and keeps white glyphs legible
+-- on ELECTRIC yellow as well as on GHOST purple.
+local function shadowText(str, x, y, th, color)
+  local off = math.max(1, th * 0.06)
+  BattleHudXY.text(str, x + off, y + off, th, { 0, 0, 0, 0.55 })
+  BattleHudXY.text(str, x, y, th, color or BattleBoxXY.TEXT)
+end
+
+-- Exported for the party and bag screens (lib/BattleScreenXY.lua): one
+-- clock and one shadow across the whole battle costume, so every cursor in
+-- it pops the same way. The anim table is shared on purpose -- the groups
+-- keep the cursors apart.
+BattleBoxXY.popScale = popScale
+BattleBoxXY.shadowText = shadowText
+
 -- One button, fitted INSIDE its slot with its own aspect kept. The four
 -- buttons are different shapes -- FIGHT is a full oval, the other three are
 -- the top half of a capsule -- so a slot is a box to fit into rather than a
@@ -207,7 +291,8 @@ BattleBoxXY._art = art     -- named for the suite
 -- `align` is "bottom" for the three half-capsules: the pack draws them as the
 -- TOP half of a button, so they are meant to sit on a floor. Centred in their
 -- slot they float with air under them and read as clipped rather than seated.
-local function button(x, y, w, h, cmd, selected, align)
+-- `mul` is the selection's animated scale (popScale); 1 when still.
+local function button(x, y, w, h, cmd, selected, align, mul)
   local img = art(cmd.art)
   if not img then
     -- the art did not load: a coloured rounded rectangle with the game's own
@@ -225,7 +310,7 @@ local function button(x, y, w, h, cmd, selected, align)
   end
 
   local iw, ih = img:getDimensions()
-  local shrink = selected and 1 or BattleBoxXY.UNSEL_SCALE
+  local shrink = selected and (mul or 1) or BattleBoxXY.UNSEL_SCALE
   local s = math.min(w / iw, h / ih) * shrink
   local dw, dh = iw * s, ih * s
   local dx = x + (w - dw) * 0.5
@@ -246,28 +331,10 @@ local function button(x, y, w, h, cmd, selected, align)
   love.graphics.setColor(1, 1, 1, 1)
 end
 
--- ------- the draw
---
--- `rect` is the text box in WORLD-canvas pixels, which is what the caller
--- already computed for the frosted panel it is replacing.
-function BattleBoxXY.draw(battle, rect)
-  if not (rect and BattleBoxXY.covers(battle)) then return false end
-  local x, y, w, h = rect[1], rect[2], rect[3], rect[4]
-  if not (w and h) or w < 8 or h < 8 then return false end
-
-  local menuUp = (battle.phase == "menu")
+-- ------- the message, typed into a panel
+local function drawMessage(battle, x, y, w, h)
   local pad = h * BattleBoxXY.PAD
-
-  -- The panel grows upward with the buttons, so FIGHT is inside it rather
-  -- than standing on it. Anchored on the box's BOTTOM edge either way: that
-  -- line is where every message in the game has been read from, and moving it
-  -- would make the menu feel like it belongs to a different screen.
-  local ph = menuUp and (h * BattleBoxXY.MENU_GROW) or h
-  local py = y + h - ph
-  panel(x, py, w, ph)
-
-  local textW = w
-
+  panel(x, y, w, h)
   local msg = battle.current and battle.current.text
   local shown = revealed(msg, battle.charIndex)
   local th = h * BattleBoxXY.TEXT_H
@@ -276,28 +343,261 @@ function BattleBoxXY.draw(battle, rect)
     BattleHudXY.text(line, x + pad, ly, th, BattleBoxXY.TEXT)
     ly = ly + th * BattleBoxXY.LINE_GAP
   end
+end
 
-  if menuUp then
-    local bx = x + pad
-    local bw = w - pad * 2
-    local bh = ph - pad * 2
-    local by = py + pad
-    local sel = tonumber(battle.menuIndex) or 1
+-- ------- the command menu: message left, cluster right, nothing grows
+--
+-- The menu phase has no `current.text` -- on the Game Boy the "What will
+-- <mon> do?" prompt belongs to the LAYOUT, printed beside the commands (see
+-- the engine's WideBattle.drawWide), so an empty panel here is not a missing
+-- message, it is a prompt this file has to print itself. Through the
+-- engine's own Strings so a translated build stays translated, and skipped
+-- for the demo battle for the reason the engine skips it: Oak's scripted
+-- catch has nobody to name (its #557).
+local Strings = nil
 
-    -- FIGHT: centred, on its own, taking the top band
-    local fh = bh * BattleBoxXY.FIGHT_FRAC
-    local fw = bw * BattleBoxXY.FIGHT_WIDE
-    button(bx + (bw - fw) * 0.5, by, fw, fh, BattleBoxXY.COMMANDS[1], sel == 1)
+local function engineString(s)
+  if Strings == nil then
+    local ok, S = pcall(require, "src.core.Strings")
+    Strings = (ok and S) or false
+  end
+  if Strings then
+    local ok, out = pcall(Strings, s)
+    if ok and out then return out end
+  end
+  return s
+end
 
-    -- and the other three along the bottom edge, running off it
-    local gap = bw * BattleBoxXY.STACK_GAP
-    local sw = (bw - gap * 2) / 3
-    local sy = by + fh
-    local sh = bh - fh
-    for slot, i in ipairs(BattleBoxXY.BOTTOM_ORDER) do
-      button(bx + (slot - 1) * (sw + gap), sy, sw, sh,
-             BattleBoxXY.COMMANDS[i], sel == i, "bottom")
-    end
+local function drawMenu(battle, x, y, w, h)
+  local pad = h * BattleBoxXY.PAD
+  local mw = w * BattleBoxXY.MSG_FRAC
+  local mh = h * BattleBoxXY.MENU_MSG_H
+  local my = y + h - mh
+  panel(x, my, mw, mh)
+  local shown = revealed(battle.current and battle.current.text,
+                         battle.charIndex)
+  local msgLines
+  if shown ~= "" then
+    msgLines = lines(shown)
+  elseif not battle.demo then
+    local who = (battle.player and battle.player.name) or ""
+    msgLines = { engineString("What will"), who .. engineString(" do?") }
+  else
+    msgLines = {}
+  end
+  local th = h * BattleBoxXY.TEXT_H
+  local ly = my + pad
+  for _, line in ipairs(msgLines) do
+    BattleHudXY.text(line, x + pad, ly, th, BattleBoxXY.TEXT)
+    ly = ly + th * BattleBoxXY.LINE_GAP
+  end
+
+  local cw = w * BattleBoxXY.CLUSTER_FRAC
+  local cx = x + w - cw
+  local sel = tonumber(battle.menuIndex) or 1
+  local pop = popScale("menu", sel)
+
+  -- FIGHT: centred, on its own, taking the top band
+  local fh = h * BattleBoxXY.FIGHT_FRAC
+  local fw = cw * BattleBoxXY.FIGHT_WIDE
+  button(cx + (cw - fw) * 0.5, y, fw, fh, BattleBoxXY.COMMANDS[1],
+         sel == 1, nil, pop)
+
+  -- and the other three along the bottom edge, running off it
+  local gap = cw * BattleBoxXY.STACK_GAP
+  local sw = (cw - gap * 2) / 3
+  local sy = y + fh
+  local sh = h - fh
+  for slot, i in ipairs(BattleBoxXY.BOTTOM_ORDER) do
+    button(cx + (slot - 1) * (sw + gap), sy, sw, sh,
+           BattleBoxXY.COMMANDS[i], sel == i, "bottom", pop)
+  end
+end
+
+-- ------- the move list
+--
+-- What the engine knows about a move the mod did not inject: `def.name`,
+-- `def.type`, `def.pp`, `def.power`, `def.category` (see
+-- src/battle/BattleState.lua's moveSelect draw and Damage.lua). A def the
+-- data table does not carry -- a mod-injected id -- prints its raw id on a
+-- slate row, the engine's own fallback policy.
+local TypeChart = nil
+
+local function typeName(ty)
+  if ty == nil then return nil end
+  if TypeChart == nil then
+    local ok, TC = pcall(require, "src.battle.TypeChart")
+    TypeChart = (ok and TC) or false
+  end
+  local name = TypeChart and TypeChart.displayName and TypeChart.displayName(ty)
+  return tostring(name or ty):upper()
+end
+
+local function ppOf(mv, def)
+  if not (mv and def and def.pp) then return nil, nil end
+  local maxPP = def.pp + (mv.ppUps or 0) * math.floor(def.pp / 5)
+  return mv.pp or 0, maxPP
+end
+
+-- White above half, amber below, red at empty -- and never colour alone:
+-- the numbers themselves are the information.
+local function ppColor(pp, maxPP)
+  if not (pp and maxPP) or maxPP == 0 then return BattleBoxXY.TEXT end
+  local r = pp / maxPP
+  if pp == 0 then return { 1.0, 0.42, 0.38, 1 } end
+  if r <= 0.5 then return { 1.0, 0.84, 0.40, 1 } end
+  return BattleBoxXY.TEXT
+end
+
+-- One move row: a rounded slab in the type's colour, the type's icon, the
+-- name, and the PP count on the right edge. Selected rows sit at full
+-- colour with a ring and the pop; the rest step back the way the command
+-- buttons do. `ring` overrides the ring colour for the swap marker.
+local function moveRow(x, y, w, h, label, tcolor, icon, ppText, ppCol,
+                       selected, mul, ring)
+  if selected and mul then
+    local dw, dh = w * (mul - 1), h * (mul - 1)
+    x, y, w, h = x - dw * 0.5, y - dh * 0.5, w + dw, h + dh
+  end
+  local r = math.min(h * 0.38, 16)
+  local c = tcolor or BattleBoxXY.TYPE_FALLBACK
+  -- A dark base first, the type's colour on top. The colour alone at row
+  -- alpha dissolves into a bright floor -- measured on Vermilion's tiled
+  -- ground, where an unselected ELECTRIC row all but vanished -- and
+  -- darkening the colour itself would shift its identity. The base buys the
+  -- contrast, the overlay keeps the hue.
+  setColor(BattleBoxXY.PANEL, selected and 0.85 or 0.75)
+  love.graphics.rectangle("fill", x, y, w, h, r, r)
+  love.graphics.setColor(c[1], c[2], c[3],
+                         selected and BattleBoxXY.ROW_SEL_ALPHA
+                                  or BattleBoxXY.ROW_UNSEL_ALPHA)
+  love.graphics.rectangle("fill", x, y, w, h, r, r)
+  if selected or ring then
+    setColor(ring or BattleBoxXY.SELECT_RING)
+    love.graphics.setLineWidth(math.max(2, h * 0.045))
+    love.graphics.rectangle("line", x, y, w, h, r, r)
+    love.graphics.setLineWidth(1)
+  end
+
+  local pad = h * 0.18
+  local tx = x + pad
+  if icon then
+    local iw, ih = icon:getDimensions()
+    local is = (h * 0.64) / math.max(1, ih)
+    love.graphics.setColor(1, 1, 1, selected and 1 or 0.75)
+    love.graphics.draw(icon, tx, y + (h - ih * is) * 0.5, 0, is, is)
+    tx = tx + iw * is + pad
+  end
+
+  local th = h * 0.42
+  local alpha = selected and 1 or 0.85
+  shadowText(label, tx, y + (h - th) * 0.5, th,
+             { 1, 1, 1, alpha })
+  if ppText then
+    local tw = BattleHudXY.textWidth(ppText) * (th / 84)
+    local pc = ppCol or BattleBoxXY.TEXT
+    shadowText(ppText, x + w - pad - tw, y + (h - th) * 0.5, th,
+               { pc[1], pc[2], pc[3], (pc[4] or 1) * alpha })
+  end
+  love.graphics.setColor(1, 1, 1, 1)
+end
+
+-- The selected move's card, where the Game Boy put its TYPE/ box: the type
+-- icon with its name, the power (or STATUS), and the PP -- the stats a
+-- player is actually weighing when the cursor moves.
+local function drawMoveCard(x, y, w, h, def, mv, disabled)
+  panel(x, y, w, h)
+  local pad = h * BattleBoxXY.PAD
+  local th = h * 0.155
+  local cx = x + w * 0.5
+
+  local ly = y + pad
+  local tname = def and typeName(def.type)
+  local icon = tname and art("types/" .. tname)
+  if icon then
+    local iw, ih = icon:getDimensions()
+    local is = (h * 0.30) / math.max(1, ih)
+    love.graphics.setColor(1, 1, 1, 1)
+    love.graphics.draw(icon, cx - iw * is * 0.5, ly, 0, is, is)
+    ly = ly + ih * is + pad * 0.6
+  elseif tname then
+    local tw = BattleHudXY.textWidth(tname) * (th / 84)
+    shadowText(tname, cx - tw * 0.5, ly, th, BattleBoxXY.TEXT)
+    ly = ly + th * BattleBoxXY.LINE_GAP
+  end
+
+  local linesOut = {}
+  if disabled then
+    linesOut[#linesOut + 1] = { "DISABLED!", { 1.0, 0.42, 0.38, 1 } }
+  elseif def and (not def.power or def.power == 0
+                  or def.category == "status") then
+    linesOut[#linesOut + 1] = { "STATUS", BattleBoxXY.TEXT }
+  elseif def then
+    linesOut[#linesOut + 1] = { "POWER " .. tostring(def.power),
+                                BattleBoxXY.TEXT }
+  end
+  local pp, maxPP = ppOf(mv, def)
+  if pp then
+    linesOut[#linesOut + 1] = { ("PP %d/%d"):format(pp, maxPP),
+                                ppColor(pp, maxPP) }
+  end
+  for _, ln in ipairs(linesOut) do
+    local tw = BattleHudXY.textWidth(ln[1]) * (th / 84)
+    shadowText(ln[1], cx - tw * 0.5, ly, th, ln[2])
+    ly = ly + th * BattleBoxXY.LINE_GAP
+  end
+end
+
+local SWAP_RING = { 1.0, 0.84, 0.40, 0.95 }
+
+local function drawMoves(battle, x, y, w, h)
+  local moves = (battle.player and battle.player.curMoves) or {}
+  if #moves == 0 then return end
+  local data = (battle.data and battle.data.moves) or {}
+  local sel = math.max(1, math.min(tonumber(battle.moveIndex) or 1, #moves))
+  local pop = popScale("moves", sel)
+
+  local iw = w * BattleBoxXY.INFO_FRAC
+  local selMv = moves[sel]
+  local selDef = selMv and data[selMv.id]
+  drawMoveCard(x, y, iw, h, selDef, selMv,
+               battle.player.disabledSlot == sel)
+
+  local gap = h * BattleBoxXY.MOVE_GAP
+  local rx = x + iw + gap
+  local rw = w - iw - gap
+  local rowH = (h - gap * 3) / 4
+  for i, mv in ipairs(moves) do
+    local def = data[mv.id]
+    local tname = def and typeName(def.type)
+    local pp, maxPP = ppOf(mv, def)
+    moveRow(rx, y + (i - 1) * (rowH + gap), rw, rowH,
+            (def and def.name) or tostring(mv.id),
+            tname and BattleBoxXY.TYPE_COLOR[tname],
+            tname and art("types/" .. tname),
+            pp and ("%d/%d"):format(pp, maxPP), ppColor(pp, maxPP),
+            i == sel, pop,
+            (battle.moveSwapIndex and battle.moveSwapIndex == i
+             and battle.moveSwapIndex ~= sel) and SWAP_RING or nil)
+  end
+end
+
+-- ------- the draw
+--
+-- `rect` is the text box in WORLD-canvas pixels, which is what the caller
+-- already computed for the frosted panel it is replacing. Every phase stays
+-- inside it.
+function BattleBoxXY.draw(battle, rect)
+  if not (rect and BattleBoxXY.covers(battle)) then return false end
+  local x, y, w, h = rect[1], rect[2], rect[3], rect[4]
+  if not (w and h) or w < 8 or h < 8 then return false end
+
+  if battle.phase == "menu" then
+    drawMenu(battle, x, y, w, h)
+  elseif battle.phase == "moveSelect" then
+    drawMoves(battle, x, y, w, h)
+  else
+    drawMessage(battle, x, y, w, h)
   end
   love.graphics.setColor(1, 1, 1, 1)
   return true

@@ -124,6 +124,76 @@ BATTLE_PLAIN = {
     "battlexy/slot_sel.png":    "battle menu/tex1_256x64_2946EF67A8065185_0_mip0.png",
     "battlexy/slot_plain.png":  "battle menu/tex1_256x64_FF0914F30BAE6011_0_mip0.png",
 }
+
+# Item sprites for the battle bag's rows (lib/BattleScreenXY.lua), keyed by
+# the engine item id each depicts. Identified by EYE off numbered contact
+# sheets of all 422 dumps -- the filenames are content hashes and say
+# nothing -- so re-cutting means re-looking. Notes from that pass:
+#   * TM / HM are two generic discs (blue / gold): the pack colours TMs per
+#     move type and Gen 1 has no such fact to read off an item id.
+#   * the repels share one canister and the X items one capsule: the pack
+#     draws the families apart, but not in any dump this set includes.
+#   * BURN_HEAL, PARLYZ_HEAL and FULL_HEAL were NOT found among the 422;
+#     the draw falls back to the pocket icon for them.
+ITEM_SPRITES = {
+    "ANTIDOTE":     "tex1_32x32_7C0BBDB48FBCA701_2_mip0.png",
+    "AWAKENING":    "tex1_32x32_8E5E027235EF5383_2_mip0.png",
+    "BICYCLE":      "tex1_32x32_9A2B3F40FC77BAF1_2_mip0.png",
+    "DIRE_HIT":     "tex1_32x32_C63EACDCCF046C90_2_mip0.png",
+    "ELIXER":       "tex1_32x32_9D875F01E63D4F8D_2_mip0.png",
+    "ESCAPE_ROPE":  "tex1_32x32_4D209ADB827CFAF0_2_mip0.png",
+    "ETHER":        "tex1_32x32_D7244856BABF8DD5_2_mip0.png",
+    "FRESH_WATER":  "tex1_32x32_8401241AEDBB7842_2_mip0.png",
+    "FULL_RESTORE": "tex1_32x32_CC406A472814FAF3_2_mip0.png",
+    "GOOD_ROD":     "tex1_32x32_9D61E7AB2B6C1DC5_2_mip0.png",
+    "GREAT_BALL":   "tex1_32x32_A1C9548279C3B09D_2_mip0.png",
+    "GUARD_SPEC":   "tex1_32x32_C63EACDCCF046C90_2_mip0.png",
+    "HM":           "tex1_32x32_0B0932228C4AFC32_2_mip0.png",
+    "HYPER_POTION": "tex1_32x32_33449CD772AB9CA7_2_mip0.png",
+    "ICE_HEAL":     "tex1_32x32_AD31989D8C43A439_2_mip0.png",
+    "LEMONADE":     "tex1_32x32_62029CC62744975A_2_mip0.png",
+    "MASTER_BALL":  "tex1_32x32_587767C4F2115004_2_mip0.png",
+    "MAX_ELIXER":   "tex1_32x32_641BF7E161473063_2_mip0.png",
+    "MAX_ETHER":    "tex1_32x32_DF766DED40D9ECAC_2_mip0.png",
+    "MAX_POTION":   "tex1_32x32_FB0A776516C78C58_2_mip0.png",
+    "MAX_REPEL":    "tex1_32x32_7CAE6F33E5B9623D_2_mip0.png",
+    "MAX_REVIVE":   "tex1_32x32_E5F612A55DE77D60_2_mip0.png",
+    "NUGGET":       "tex1_32x32_4123790F7C45A459_2_mip0.png",
+    "OLD_ROD":      "tex1_32x32_8478AE340C2AA017_2_mip0.png",
+    "POKE_BALL":    "tex1_32x32_0203A9CFEB82A029_2_mip0.png",
+    "POKE_DOLL":    "tex1_32x32_D43411C06D37208D_2_mip0.png",
+    "POKE_FLUTE":   "tex1_32x32_F8CE16ADCF30959F_2_mip0.png",
+    "POTION":       "tex1_32x32_0D10C3A673A81CC3_2_mip0.png",
+    "RARE_CANDY":   "tex1_32x32_25505E4429FB8DE9_2_mip0.png",
+    "REPEL":        "tex1_32x32_7CAE6F33E5B9623D_2_mip0.png",
+    "REVIVE":       "tex1_32x32_B102D86FC1FD7242_2_mip0.png",
+    "SODA_POP":     "tex1_32x32_8D21F8153DD95FE5_2_mip0.png",
+    "SUPER_POTION": "tex1_32x32_2C8FBDBA8744A2E5_2_mip0.png",
+    "SUPER_REPEL":  "tex1_32x32_7CAE6F33E5B9623D_2_mip0.png",
+    "SUPER_ROD":    "tex1_32x32_E867126E8511E61F_2_mip0.png",
+    "S_S_TICKET":   "tex1_32x32_F3DEFCB5CE4DAF23_2_mip0.png",
+    "TM":           "tex1_32x32_69C769DEF3C58F53_2_mip0.png",
+    "TOWN_MAP":     "tex1_32x32_B04F32200C52D933_2_mip0.png",
+    "ULTRA_BALL":   "tex1_32x32_7B03BC925CA81801_2_mip0.png",
+    "X_ACCURACY":   "tex1_32x32_C63EACDCCF046C90_2_mip0.png",
+    "X_ATTACK":     "tex1_32x32_C63EACDCCF046C90_2_mip0.png",
+    "X_DEFEND":     "tex1_32x32_C63EACDCCF046C90_2_mip0.png",
+    "X_SPECIAL":    "tex1_32x32_C63EACDCCF046C90_2_mip0.png",
+    "X_SPEED":      "tex1_32x32_C63EACDCCF046C90_2_mip0.png",
+}
+
+# The bag's own pocket buttons, for the tab strip: the pack draws each
+# pocket twice, coloured (active) and olive (idle). ITENS has only the one
+# state in the dump and the draw dims it instead.
+POCKETS = {
+    "balls":     "tex1_32x32_A334FB21D9BD4F01_4_mip0.png",
+    "balls_off": "tex1_32x32_0EF07A46C9ABE85B_4_mip0.png",
+    "cura":      "tex1_32x32_6C6EAA3951FC5D4C_4_mip0.png",
+    "cura_off":  "tex1_32x32_CD86F88E1A2B4A55_4_mip0.png",
+    "items":     "tex1_32x32_D48CD573A4F8BFAB_0_mip0.png",
+    "tm":        "tex1_32x32_C8D62F2AC01C1A3E_4_mip0.png",
+    "tm_off":    "tex1_32x32_E8770FB053357F36_4_mip0.png",
+}
 # FIGHT ships as the LEFT HALF of its oval -- the texture ends at the seam,
 # because in the games the other half is that half mirrored. Its word is a
 # separate texture again.
@@ -152,7 +222,8 @@ def build(pack: pathlib.Path):
                  "point this at the unzipped pack, not at a subfolder of it")
 
     out = ROOT / "assets"
-    for sub in ("hudxy", "menuxy", "battlexy", "battlexy/types"):
+    for sub in ("hudxy", "menuxy", "battlexy", "battlexy/types",
+                "battlexy/items", "battlexy/pockets"):
         (out / sub).mkdir(parents=True, exist_ok=True)
 
     missing = []
@@ -180,6 +251,19 @@ def build(pack: pathlib.Path):
         im = load(f"type icons/tex1_64x32_{h}_4_mip0.png")
         if im:
             trim(im).save(out / "battlexy/types" / f"{name}.png")
+
+    # plain copies, no trim: the 32x32 cell IS the sprite's frame and the
+    # rows scale by the image's height -- trimming would make every item a
+    # different size on the list
+    for name, src in ITEM_SPRITES.items():
+        im = load(f"item sprites/{src}")
+        if im:
+            im.save(out / "battlexy/items" / f"{name}.png")
+
+    for name, src in POCKETS.items():
+        im = load(f"bag/{src}")
+        if im:
+            im.save(out / "battlexy/pockets" / f"{name}.png")
 
     # FIGHT: mirror the half, then drop its word on top
     half, word = load(FIGHT_HALF), load(FIGHT_WORD)
