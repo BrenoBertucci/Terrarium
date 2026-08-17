@@ -18,7 +18,30 @@ from PIL import Image
 ROOT = Path(__file__).resolve().parents[1]
 GLB = ROOT / "assets" / "ground" / "grass" / "grass-texture.glb"
 OUT = GLB.parent
-MAX_TRIS = 1800
+# THE MESH IS STAMPED FOUR TIMES PER GRASS CELL, not drawn once.
+#
+# Structures.buildGrass walks HALF-tiles -- `wx = tx * 8` where a cell is 16
+# -- so one tall-grass cell produces FOUR instances, and every one of them
+# is a full copy of this template appended into a Lua table in
+# Grass3D.meshFromInstances.
+#
+# This was 1800 triangles / 1719 vertices, which is a budget for a model you
+# look at. On a route with three hundred grass cells that is twelve hundred
+# tufts:
+#
+#     1800 tris   ->  2,062,800 vertices in one mesh   (the shipped bake)
+#      160 tris   ->    283,200                        (first cut at this)
+#       24 tris   ->     46,800                        (here)
+#
+# Two million vertices is not a GPU problem, it is a LUA problem: they are
+# built as two million six-element sub-tables in a single loop that cannot
+# yield. That is what froze the game and took the pause menu with it when
+# the GRASS row was set to 3D.
+#
+# lib/Grass3D.MAX_TRIS is the runtime guard. It refuses a bake above its
+# budget and falls back to the tileset slab, so a future re-bake that
+# forgets this note degrades instead of hanging.
+MAX_TRIS = 24
 TEX_SIZE = 128
 TARGET_HEIGHT = 10.0  # world pixels (knee-high Gen1 grass)
 

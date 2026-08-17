@@ -73,7 +73,30 @@ Drafts ready to file (UI leftovers + roamer/ambient follow-ups):
 `.github/issues-draft/` — run `powershell -File .github/issues-draft/create.ps1`
 after `gh auth login`.
 
-## New in 1.20.0-mobile
+## New in 1.21.0-mobile
+
+The grass remembers.
+
+- **Routes develop paths where people actually walk.** Every grass cell keeps a
+  wear value that climbs when somebody crosses it and recovers over in-game
+  days. It rides your save file, so a route you have crossed forty times looks
+  crossed forty times.
+- **And it is not only you writing it.** Wild Pokemon and the civilians on
+  their routines wear the ground down too, at their own weight -- so a route
+  grows desire paths along the traffic that really crosses it, including
+  corners you have never stood in.
+- **Worn grass THINS, it does not shrink.** Individual tufts drop out of a
+  trampled cell rather than the whole patch getting shorter, and the earth
+  under them shows through as trodden dirt. A path you can look back at.
+- **Lightning leaves a scar.** A ground strike burns the grass where it lands,
+  and that mark outlives a footpath by a good part of the journey.
+- **Grass is calm behind buildings.** The wind now goes around a house instead
+  of through it, so a sheltered meadow stands still while the open field waves.
+- **Cut clears a cell, and the cell regrows.** Tall grass you cut has no wild
+  encounter until it grows back -- so a corridor through a forest is something
+  you can make, and something that expires.
+
+## In 1.20.0-mobile
 
 The water.
 

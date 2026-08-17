@@ -569,6 +569,37 @@ function StreetLamps.lights(map, wx, wz, limit)
   return out
 end
 
+-- Same nearest-N pools, but the current map AND its connected neighbours.
+-- Posts on a neighbour town were already geometry we could draw; without
+-- this their light stayed behind at the seam and the street went dark
+-- the moment you stepped onto the route.
+function StreetLamps.lightsAround(state, wx, wz, limit)
+  if not (state and state.map) then
+    return StreetLamps.lights(state and state.map, wx, wz, limit)
+  end
+  limit = math.max(1, math.min(StreetLamps.LIGHT_LIMIT, limit or StreetLamps.LIGHT_LIMIT))
+  local all = {}
+  local function take(map, ox, oz)
+    if not map then return end
+    local list = StreetLamps.lights(map, (wx or 0) - ox, (wz or 0) - oz, limit)
+    for i = 1, #list do
+      local L = list[i]
+      L.x = L.x + ox
+      L.z = L.z + oz
+      local dx, dz = L.x - (wx or 0), L.z - (wz or 0)
+      L.d2 = dx * dx + dz * dz
+      all[#all + 1] = L
+    end
+  end
+  take(state.map, 0, 0)
+  for _, nb in ipairs(state.neighbors or {}) do
+    take(nb.map, tonumber(nb.ox) or 0, tonumber(nb.oy) or 0)
+  end
+  table.sort(all, function(a, b) return a.d2 < b.d2 end)
+  for i = #all, limit + 1, -1 do all[i] = nil end
+  return all
+end
+
 -- ------- draw
 --
 -- Pole under the hour's light (casts a real shadow when the sun pass runs).
@@ -580,12 +611,15 @@ end
 -- at night a warm flatten wash so the lantern still reads as lit without
 -- splitting the GLB into parts.
 
-function StreetLamps.draw(map, outdoor)
+-- `ox, oz` are the neighbour-map translation in world pixels (0 on the
+-- map being stood on). Sites are stored in the map's own coordinates.
+function StreetLamps.draw(map, outdoor, ox, oz)
   if not StreetLamps.enabled() then return end
   if not outdoor then return end
   if not Voxel3D.available() then return end
   local sites = sitesFor(map)
   if #sites == 0 then return end
+  ox, oz = tonumber(ox) or 0, tonumber(oz) or 0
 
   local lit = 0
   if outdoor then
@@ -604,7 +638,8 @@ function StreetLamps.draw(map, outdoor)
     local xf = {}
     for i, s in ipairs(sites) do
       local yaw = cellHash(map.id, s.cx, s.cy) * math.pi * 2
-      xf[i] = Mat4.mul(Mat4.translate(s.wx, 0, s.wz), Mat4.rotateY(yaw))
+      xf[i] = Mat4.mul(Mat4.translate(s.wx + ox, 0, s.wz + oz),
+                       Mat4.rotateY(yaw))
     end
 
     -- The ironwork, under the hour's own light. It is a dark object at night
@@ -641,7 +676,7 @@ function StreetLamps.draw(map, outdoor)
   for _, s in ipairs(sites) do
     local t = tpl[s.style] or tpl.classic
     if t and t.pole then
-      local m = Mat4.translate(s.wx, 0, s.wz)
+      local m = Mat4.translate(s.wx + ox, 0, s.wz + oz)
       Voxel3D.draw(t.pole, tex, m, 0, m)
     end
   end
@@ -655,7 +690,7 @@ function StreetLamps.draw(map, outdoor)
   for _, s in ipairs(sites) do
     local t = tpl[s.style] or tpl.classic
     if t and t.head then
-      local m = Mat4.translate(s.wx, 0, s.wz)
+      local m = Mat4.translate(s.wx + ox, 0, s.wz + oz)
       Voxel3D.draw(t.head, tex, m, 0, m)
     end
   end
@@ -666,11 +701,12 @@ end
 
 -- Shadow casters for the sun pass: poles only on the box models (heads are
 -- small and would speck the ground).  Authored mesh casts as a whole.
-function StreetLamps.castShadows(map)
+function StreetLamps.castShadows(map, ox, oz)
   if not StreetLamps.enabled() then return end
   if not Voxel3D.available() then return end
   local sites = sitesFor(map)
   if #sites == 0 then return end
+  ox, oz = tonumber(ox) or 0, tonumber(oz) or 0
   local ShadowMap = V.require("ShadowMap")
   local authored = loadMesh3d()
   if authored then
@@ -679,7 +715,8 @@ function StreetLamps.castShadows(map)
     -- would print a shadow of the thing doing the lighting.
     for _, s in ipairs(sites) do
       local yaw = cellHash(map.id, s.cx, s.cy) * math.pi * 2
-      local m = Mat4.mul(Mat4.translate(s.wx, 0, s.wz), Mat4.rotateY(yaw))
+      local m = Mat4.mul(Mat4.translate(s.wx + ox, 0, s.wz + oz),
+                         Mat4.rotateY(yaw))
       pcall(ShadowMap.draw, authored.body, tex, ShadowMap.snug(m))
     end
     return
@@ -690,7 +727,7 @@ function StreetLamps.castShadows(map)
   for _, s in ipairs(sites) do
     local t = tpl[s.style] or tpl.classic
     if t and t.pole then
-      local m = Mat4.translate(s.wx, 0, s.wz)
+      local m = Mat4.translate(s.wx + ox, 0, s.wz + oz)
       pcall(ShadowMap.draw, t.pole, tex, ShadowMap.snug(m))
     end
   end

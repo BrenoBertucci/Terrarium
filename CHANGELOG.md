@@ -19,11 +19,70 @@ MAJOR.MINOR.PATCH[-CHANNEL]
 
 Tags and packages:
 
-- Git tag: `v1.20.0-mobile`
-- Zip asset: `TERRARIUM-1.20.0-mobile.zip`
-- `manifest.json` / catalog `version` field: `1.20.0-mobile`
+- Git tag: `v1.21.0-mobile`
+- Zip asset: `TERRARIUM-1.21.0-mobile.zip`
+- `manifest.json` / catalog `version` field: `1.21.0-mobile`
 
 ## Unreleased
+
+## 1.21.0-mobile
+
+The grass remembers.
+
+### Persistent grass wear
+
+Everything the meadow did until now was reactive and had no memory past a few
+seconds: wind pushes, a boot lays a tuft over, an underdamped spring stands it
+back up, a trail crumb fades in six seconds, and the meadow is exactly as it
+was before anybody walked through it. Leave the map and come back and there is
+no evidence a journey happened here.
+
+- **A wear field per map, in the save.** One scalar per 16px cell, 0..1, that
+  climbs when something walks on it and comes back down on the **in-game**
+  clock over days rather than seconds. 128x128 texels covers any Kanto
+  overworld map whole, at the same 16 KB footprint the foot-crush map already
+  pays. Rides `save.modData` next to the day/night clock (`lib/GrassWear.lua`).
+- **The world writes it, not just the player.** Player, wild roamers and
+  routine NPCs all deposit, at 1.0 / 0.35 / 0.6 of the rate, off the same
+  `feet` list the crush springs already build. So a route develops **desire
+  paths** along the traffic that actually crosses it, including places the
+  player has never stood. Standing still deposits nothing.
+- **Trample saturates at 0.75, never bare.** The one line that stops the
+  feature turning every route bald: the player walks where the game lets them
+  walk, so given enough hours the walkable set is the trampled set. Only the
+  two deliberate causes go all the way to earth.
+- **Decay is lazy and exact.** Each cell stores its strength and the clock
+  reading it was written at; the current value is an exponential computed on
+  read. A map with thousands of worn cells costs nothing while you are not
+  looking at it, and a save reopened after an hour of play comes back
+  correctly faded without replaying the hour.
+- **The tufts THIN rather than shrink.** One vertex texture tap (the same
+  contract `crushMap` pays at `grassDetail` 1) and the per-tuft hash that
+  already scatters stiffness: `smoothstep(0, 0.35, wear - id)` folds
+  individual blades back to their own root, so the cell loses plants instead
+  of getting shorter. Scaling every tuft down together read as the meadow
+  deflating, which is what an LOD pop looks like. Nothing remeshes.
+- **Bare earth underneath** (`GroundFX`, layer `bare1..3`). Sparse tufts over
+  vivid green tileset grass read as a rendering fault, so the ground shows
+  trodden dirt — or lightning char, by cause — on a generated 8-frame strip
+  with a feathered rim. Wear is quantised into steps so a cached chunk mesh is
+  rebuilt only when a cell **crosses** a step, never per footstep. Draws on
+  every quality rung, including the one where the tufts stop thinning.
+- **Local wind, free.** The green channel of the same texel carries a shelter
+  value baked once per map from `Structures`' own walls, multiplying the wind
+  amplitude — so the meadow is calm behind a house and waving in the open, and
+  the boundary of the calm moves with nothing, because buildings do not move.
+- **HM Cut is the only thing here that touches the rules.** A cut cell has no
+  encounter and regrows on the same clock; accumulated trample stays purely
+  cosmetic on purpose, because a hidden encounter-rate drift the player cannot
+  read is noise dressed as depth.
+
+Measured, not asserted (`tests/grass_wear_offline.lua`, 33 checks;
+`tests/grass_wear_shot.lua`, 20 checks): wear moves 42k screen pixels against
+a 529-pixel noise floor, deepens monotonically across three steps, is ignored
+by the tuft shader at the cheap rung (387 vs a floor of 227), and rebuilds
+zero chunks on a settled frame. `tests/grass_crush_offline.lua`'s `PINNED_HASH`
+is unchanged, which is the guard that the map-off path was not touched.
 
 ### Roamer overworld art
 

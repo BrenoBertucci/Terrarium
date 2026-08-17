@@ -402,14 +402,19 @@ return function(game)
     if moved then went = dir break end
     if game.overworld.map.id ~= home then break end
   end
-  log(("walked %s: peak trail crumbs=%d, peak crush slots=%d"):format(
-        went, bestTrail, bestSlots))
+  log(("walked %s: peak trail crumbs=%d, peak crush slots=%d, span=%s"):format(
+        went, bestTrail, bestSlots,
+        tostring(Grass3D.trailSpan and Grass3D.trailSpan())))
   check(went ~= "-", "the player actually moved (otherwise this measures a wall)")
-  -- Four of the five, not two: two was the number a Rattata laid while the
-  -- player's own foot was crowded out of the live slots (see VoxelScene's
-  -- `foot(me)` note). A walk of four cells fills the trail budget.
+  -- Four crumbs was the old uniform budget. The map path keeps many more;
+  -- four is still the floor so a walk that laid nothing still fails.
   check(bestTrail >= 4, "walking leaves a line of laid grass behind")
-  check(bestSlots > 1, "and foot plus trail reach the shader together")
+  if Grass3D.trailSpan then
+    check(Grass3D.trailSpan() >= 24,
+          "the trail is longer than the old 24 px uniform plank")
+  else
+    check(bestSlots > 1, "and foot plus trail reach the shader together")
+  end
 
   -- and the same walk, seen. Walked south -- the camera looks north, so
   -- the path is BEHIND the player and therefore up the frame, where it can

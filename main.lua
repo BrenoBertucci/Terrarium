@@ -108,6 +108,7 @@ local Aerial = V.require("Aerial")
 local Skyline = V.require("Skyline")
 local OverworldBattle = V.require("OverworldBattle")
 local WildRoamers = V.require("WildRoamers")
+local GrassWear = V.require("GrassWear")
 local BattleExit = V.require("BattleExit")
 local DayNight = V.require("DayNight")
 local DayTint = V.require("DayTint")
@@ -1612,12 +1613,20 @@ DayTint.install()
 -- the bytes hit disk -- and read back whenever a save is opened or begun. A
 -- save with no clock in it starts at day; that is DayNight.restore's
 -- fallback, and also the DAYTIME row's own default.
+-- ------- and what the gramado remembers
+--
+-- Same bucket, same three events, for the same reason: which paths this
+-- journey has worn into Kanto's meadows is a fact about the journey, not
+-- about the install. A save with no field in it starts with virgin grass,
+-- which is GrassWear.deserialize's fallback.
 mod.events:on("save.writing", function()
   DayNight.store()
+  GrassWear.store()
 end)
 
 mod.events:on("save.loaded", function()
   DayNight.restore()
+  GrassWear.restore()
   -- a save written before this mod was installed can carry TILT or GBC FX
   -- switched on, and their rows are not there to switch them back off (see
   -- pinEngineFx). Answered here rather than only when the menu opens, so a
@@ -1627,6 +1636,7 @@ end)
 
 mod.events:on("save.created", function()
   DayNight.restore()
+  GrassWear.restore()
   pinEngineFx()
 end)
 
@@ -1645,7 +1655,7 @@ end)
 -- first so this cannot drift again: this literal sat five minors behind the
 -- manifest, and in a feature-encoded form the versioning rules in CHANGELOG.md
 -- forbid outright (`.snow.1` -- features live in the changelog, not here).
-mod.exports.version = mod.version or "1.20.0-mobile"
+mod.exports.version = mod.version or "1.21.0-mobile"
 -- exposed so a companion mod can pin its own tiles' shapes or read the
 -- camera without reaching into this mod's file layout
 mod.exports.lib = V

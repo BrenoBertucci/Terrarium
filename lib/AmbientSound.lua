@@ -46,9 +46,10 @@
 -- ------- what decides each level
 --
 -- The same clocks the rest of the mod runs on. DayNight says what hour it is
--- (crickets at night, the dawn chorus in the morning), Weather says what is
--- coming down, Wind how hard the air is moving, WaterBody how big the water
--- nearby is, and the map itself says whether there is water within earshot
+-- (crickets at night, the dawn chorus in the morning, cicadas on a hot day),
+-- Weather says what is coming down, Wind how hard the air is moving,
+-- WaterBody how big the water nearby is, StreetLamps where a flame is
+-- burning, and the map itself says whether there is water within earshot
 -- -- counted by LOOKING, in cells, rather than by a list of maps with ponds
 -- on them. Indoors the outdoor beds stop but two stay: RAIN KEEPS PLAYING
 -- INDOORS, quieter and pitched down, and a soft room-tone so a house is not
@@ -67,6 +68,7 @@ local Weather = V.require("Weather")
 local Wind = V.require("Wind")
 local WaterBody = V.require("WaterBody")
 local Underpass = V.require("Underpass")
+local StreetLamps = V.require("StreetLamps")
 local SpatialAudio = V.require("SpatialAudio")
 
 local Map = require("src.world.Map")
@@ -323,10 +325,23 @@ AmbientSound.BEDS = {
   -- room tone. Indoors that are not dungeons; quiet so rain still wins.
   -- chip=nil.
   indoor   = { file = "indoor.ogg",   chip = nil,              gain = 0.28 },
+  -- day-hot insect drone, the diurnal counterpart of the cricket bed.
+  -- Driven by DayNight.tod + DayNight.month (summer in Kanto). chip=nil:
+  -- silent if the file is missing.
+  cicadas  = { file = "cicadas.ogg",  chip = nil,              gain = 0.38 },
+  -- lantern flame. Driven by StreetLamps.lights at night, near a post.
+  -- A fireplace recording kept quiet so it reads as a lamp, not a hearth.
+  -- chip=nil: silent if the file is missing.
+  fire     = { file = "fire.ogg",     chip = nil,              gain = 0.32 },
 }
 
 AmbientSound.THUNDER = { file = "thunder.ogg", chip = "TR_AMB_THUNDER",
                          gain = 1.0 }
+
+-- Footstep rustle in tall grass. One-shot, same reason thunder is: a
+-- step is an event, not a bed. chip = nil: silent if the file is missing
+-- (house default for anything that never had a synth version).
+AmbientSound.GRASS = { file = "grass.ogg", chip = nil, gain = 0.42 }
 
 -- ------- decoding
 --
@@ -578,6 +593,43 @@ local function playThunder(volume, pitch)
   end
 end
 
+-- Tall-grass rustle. A couple of clones so two walkers (or a step that
+-- lands before the last one finished) do not cut each other off.
+local grassVoices = nil
+
+function AmbientSound.playGrass(wx, wz)
+  if not love.audio then return end
+  if not AmbientSound.enabled() then return end
+  if grassVoices == nil then
+    local base = sourceFor("grass", AmbientSound.GRASS)
+    if not base then
+      grassVoices = false
+      return
+    end
+    grassVoices = { base }
+    for _ = 2, 3 do
+      local ok, clone = pcall(base.clone, base)
+      if ok and clone then grassVoices[#grassVoices + 1] = clone end
+    end
+  end
+  if not grassVoices then return end
+  for _, src in ipairs(grassVoices) do
+    local ok, playing = pcall(src.isPlaying, src)
+    if not (ok and playing) then
+      pcall(src.setVolume, src,
+            AmbientSound.GAIN * sfxScale() * AmbientSound.GRASS.gain)
+      pcall(src.setPitch, src, 0.92 + (math.random() * 0.16))
+      if wx and wz and SpatialAudio and SpatialAudio.place then
+        pcall(SpatialAudio.place, src, wx, 0, wz)
+      else
+        SpatialAudio.relative(src)
+      end
+      pcall(src.play, src)
+      return
+    end
+  end
+end
+
 function AmbientSound.silence()
   for _, bed in pairs(beds) do
     if bed.src then pcall(bed.src.stop, bed.src) end
@@ -585,6 +637,9 @@ function AmbientSound.silence()
   end
   if type(thunderVoices) == "table" then
     for _, src in ipairs(thunderVoices) do pcall(src.stop, src) end
+  end
+  if type(grassVoices) == "table" then
+    for _, src in ipairs(grassVoices) do pcall(src.stop, src) end
   end
 end
 
@@ -988,6 +1043,57 @@ local function tick(dt)
   end
   relativeBed("indoor")
   driveBed("indoor", indoorWant, dt)
+
+  -- ------- cicadas
+  --
+  -- The day-hot answer to the cricket bed. Same wet mute, same open-air
+  -- gate (routes and the forest -- cicadas live in the trees). The month
+  -- clock already exists for snow; June-August is a full chorus, the
+  -- shoulders of May and September are thinner, and the rest of the year
+  -- is silent rather than a winter cicada.
+  local cicadaWant = 0
+  if open then
+    if day then cicadaWant = 1
+    elseif evening then cicadaWant = 0.38
+    elseif morning then cicadaWant = 0.16 end
+    local month = 0
+    do
+      local okm, m = pcall(DayNight.month)
+      month = (okm and tonumber(m)) or 0
+    end
+    local heat = 0
+    if month >= 6 and month <= 8 then
+      heat = 1
+    elseif month == 5 or month == 9 then
+      heat = 0.40
+    end
+    cicadaWant = cicadaWant * heat
+  end
+  anchorBed("cicadas", px + 24, 20, pz - 28, { ref = 52, max = 210 })
+  driveBed("cicadas", cicadaWant * dry, dt)
+
+  -- ------- lamp flame
+  --
+  -- StreetLamps already plants posts and lights them after dusk. This is
+  -- the sound of the nearest one: a small flame, not a campfire, so the
+  -- gain is low and the reach is the lamp's own pool. lights() returns
+  -- nothing when the hour has the lamps off, so day is silence without
+  -- a second clock.
+  local fireWant = 0
+  local fwx, fwz = px, pz
+  if outdoor then
+    local okL, lamps = pcall(StreetLamps.lights, ow.map, px, pz, 1)
+    if okL and type(lamps) == "table" and lamps[1] then
+      local lamp = lamps[1]
+      local reach = StreetLamps.LIGHT_RADIUS or 56
+      local d = math.sqrt(lamp.d2 or 0)
+      fireWant = math.max(0, 1 - d / (reach * 1.35))
+      fwx, fwz = lamp.x or px, lamp.z or pz
+    end
+  end
+  -- the flame sits ON the post, a little above the cobbles
+  anchorBed("fire", fwx, 18, fwz, { ref = 18, max = 90, rolloff = 1.6 })
+  driveBed("fire", fireWant, dt)
 end
 
 -- Rides the voxel pipeline's update hook with everything else that has a
@@ -1018,6 +1124,7 @@ function AmbientSound.invalidate()
   end
   sources = {}
   thunderVoices = nil
+  grassVoices = nil
 end
 
 pcall(function()

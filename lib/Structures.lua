@@ -2476,8 +2476,17 @@ function Structures.buildGrass(S, map, x0, x1, y0, y1, data)
   -- the bake is missing so a stripped package still has grass.
   local Grass3D = nil
   do
-    local ok, G = pcall(V.require, "Grass3D")
-    if ok and G and G.available and G.available() then Grass3D = G end
+    -- available() INSIDE the pcall, not beside it. The old form wrapped only
+    -- the require and then called available() bare, so anything that module
+    -- threw while deciding -- and it threw, on this engine, just for naming
+    -- love.filesystem -- came out here, in the middle of a chunk build. A
+    -- mesh build is not a place that expects to catch anything.
+    local ok, G = pcall(function()
+      local M = V.require("Grass3D")
+      if M and M.available and M.available() then return M end
+      return nil
+    end)
+    if ok and G then Grass3D = G end
   end
   for ty = y0, y1 do
     for tx = x0, x1 do
