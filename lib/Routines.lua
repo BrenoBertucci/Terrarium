@@ -151,6 +151,13 @@ end
 -- out of any one of them being interesting.
 Routines.BEAT_MIN, Routines.BEAT_MAX = 3.5, 11.0
 
+-- How far from the authored cell still counts as being at your post, by day.
+-- Three is a doorstep and a couple of paces either side of it -- wide enough
+-- that the engine's own wander lives entirely inside it and never trips the
+-- agenda, narrow enough that somebody who has drifted across the square is
+-- still brought back. At 0 this feature freezes the town; see walkTick.
+Routines.LEASH = 3
+
 -- How long a turn is held before the clock rolls again. A CHAT runs much
 -- longer than a glance: a conversation that broke off every three seconds
 -- would read as two people repeatedly noticing each other.
@@ -508,6 +515,18 @@ local function anchorOf(npc)
   return npc.cellX, npc.cellY        -- no authored cell: stand where you are
 end
 
+-- Is this person at their post? Shared by the placer and the walker so the
+-- two cannot disagree about who still needs moving -- if they did, one would
+-- spend its frames undoing the other's work.
+local function atPost(npc, tx, ty)
+  local nightPost = (Routines.phase() == "night")
+                    and (Routines.agendaMode() == "full")
+  if nightPost then
+    return npc.cellX == tx and npc.cellY == ty
+  end
+  return (math.abs(npc.cellX - tx) + math.abs(npc.cellY - ty)) <= Routines.LEASH
+end
+
 -- Doors, nearest-first from the anchor, one person per doorway.
 --
 -- The claim set is this module's own rather than Shelter's: the two features
@@ -667,7 +686,7 @@ function Routines.materialize(ow)
   for npc, d in pairs(dest) do
     local tx, ty = d[1], d[2]
     local key = tx .. "," .. ty
-    if not (npc.cellX == tx and npc.cellY == ty)
+    if not atPost(npc, tx, ty)
        and not npc.dsShelter and not npc.moving
        and not taken[key]
        and unseen(p, npc.cellX, npc.cellY, hw, hh)
@@ -775,9 +794,29 @@ function Routines.walkTick(ow)
   local dest = Routines.destinations(ow)
   local pending = 0
 
+  local nightPost = (Routines.phase() == "night")
+                    and (Routines.agendaMode() == "full")
+
   for npc, d in pairs(dest) do
     local tx, ty = d[1], d[2]
-    local arrived = (npc.cellX == tx and npc.cellY == ty)
+    -- A POST IS A PLACE, NOT A TILE.
+    --
+    -- This used to be an exact cell match, and it turned the feature inside
+    -- out: a walker one step off its anchor was not "arrived", so it was
+    -- taken, frozen and walked back -- and the moment it landed it was
+    -- released, wandered one step, and was walked back again. Traced over
+    -- ten seconds, three of Fuchsia's five never left their tile at all and
+    -- the other two never got further than one cell. Gen 1 let these people
+    -- wander; the agenda was taking that away and giving nothing back.
+    --
+    -- So by day, anywhere inside the leash counts as being at your post, and
+    -- what happens inside it is the engine's own wander, untouched. The
+    -- agenda only intervenes when somebody has drifted out of the
+    -- neighbourhood the map author put them in.
+    --
+    -- The night post stays exact, and has to: a doorway is one specific cell
+    -- and standing near it is standing in the street.
+    local arrived = atPost(npc, tx, ty)
     local seen = math.abs(npc.cellX - p.cellX) <= hw
                  and math.abs(npc.cellY - p.cellY) <= hh
     if npc.dsShelter then
