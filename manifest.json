@@ -1,8 +1,9 @@
 {
   "id": "TERRARIUM",
   "name": "Terrarium (a Dramatic Shape Voxel Mod fork)",
-  "version": "1.25.0-mobile",
+  "version": "1.26.0-mobile",
   "api": 2,
+  "gen2compat": true,
   "entry": "main.lua",
   "profile": "content",
   "category": "GRAPHICS",

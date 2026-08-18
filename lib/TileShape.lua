@@ -390,6 +390,14 @@ function TileShape.at(map, shapes, tile, tx, ty)
   local cx = math.floor(tx / 2)
   local cy = math.floor(ty / 2)
   if map:isWaterCell(cx, cy) then return shapes.classes.water end
+  -- Gold names tall grass in the COLLISION byte rather than on the
+  -- tileset (there is no tileset.grassTile to pin above), so on a map
+  -- without that pin the cell is the only place grass exists at all.
+  -- Gated on the missing pin so Gen 1 keeps its tile-level answer.
+  if not map.tileset.grassTile and map.isGrassCell
+      and map:isGrassCell(cx, cy) then
+    return shapes.classes.grass
+  end
   if map:isWalkableCell(cx, cy) then return shapes.classes.ground end
   return s
 end

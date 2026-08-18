@@ -80,9 +80,68 @@ end
 -- The static atlas for `map` under `colors`: the answer this file gave
 -- before animation existed, and the base every animated frame is patched
 -- over. Returns the image and, when we baked it ourselves, its pixels.
+-- Gold's sheets are 4-shade GRAYSCALE (shade 0 white .. 3 black, exactly
+-- src/render/GbcPalette.lua's contract); the color lives in per-tile
+-- palettes -- tileset.tilePalettes names each tile's slot, and
+-- Palettes.bgSet resolves the 8 slots for a map's environment.  So the
+-- atlas is baked once per tileset+environment+roof-group: every pixel's
+-- shade swapped for its tile's palette entry.  Baked at DAY on purpose --
+-- this mod's own DayNight rig owns the hour, exactly as on Yellow, and
+-- baking the engine's night colors under it would tint dusk twice.
+local goldBaked = {}
+
+local function goldAtlas(map)
+  local tileset = map.tileset
+  local path = tileset and tileset.image
+  if not path then return nil end
+  local def = map.def or {}
+  local key = path .. "#" .. tostring(def.environment) .. "#"
+              .. tostring(def.group)
+  local hit = goldBaked[key]
+  if hit ~= nil then return hit or nil end
+
+  local ok, img = pcall(function()
+    local Palettes = require("src.world.gen2.Palettes")
+    local Game = require("src.core.Game")
+    local pdata = Game and Game.data and Game.data.gen2Palettes
+    local set = pdata and Palettes.bgSet(pdata, def, "DAY")
+    local palMap = tileset.tilePalettes
+    local src = Assets.imageData(path)
+    local w, h = src:getDimensions()
+    local out = love.image.newImageData(w, h)
+    local perRow = tileset.tilesPerRow or 16
+    for y = 0, h - 1 do
+      local rowBase = math.floor(y / 8) * perRow
+      for x = 0, w - 1 do
+        local r, g, b, a = src:getPixel(x, y)
+        local slot = palMap and palMap[rowBase + math.floor(x / 8) + 1]
+        local pal = set and slot and set[slot]
+        if pal then
+          local shade = math.floor((1 - r) * 3 + 0.5) + 1
+          local c = pal[shade] or pal[4]
+          out:setPixel(x, y, c[1] / 255, c[2] / 255, c[3] / 255, a)
+        else
+          out:setPixel(x, y, r, g, b, a)
+        end
+      end
+    end
+    local image = love.graphics.newImage(out)
+    image:setFilter("nearest", "nearest")
+    return image
+  end)
+  goldBaked[key] = ok and img or false
+  return goldBaked[key] or nil
+end
+
 local function staticAtlas(map, colors)
   local renderer = map.renderer
   local base = renderer and renderer.image
+  -- Gold has no per-map TileRenderer (the world bakes whole-map images),
+  -- so there is no renderer.image to sample; bake the colored sheet from
+  -- the tileset art and its palette map instead.
+  if not base and not renderer then
+    base = goldAtlas(map)
+  end
   if not base then return nil end
   -- already true color: RED++'s baked per-map atlas, or a mod's own art
   if not colors or renderer.gbcAtlas or map.tileset.trueColor then

@@ -8,6 +8,9 @@ is, where it came from and the legal position; this file is the reference.
 > Shape. Most of what is described below is his work — this document grew out
 > of his README and keeps its shape.
 
+> **Play Gen 1.** Gold / Johto is an early first pass in 1.26.0 and is
+> **not recommended**. Stay on Red, Blue or Yellow.
+
 A mod for the [Pokémon Gen 1 Recompilation
 Project](https://github.com/bryanthaboi/gen1recomp).
 
