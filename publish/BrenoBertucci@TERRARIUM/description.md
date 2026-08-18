@@ -37,6 +37,28 @@ Upstream Dramatic Shape still uses `3` / `5` / `6` / `7` / `8` / `9`.
 - Wild Pokemon visible in the grass; ecology / shelter / city life systems
 - Tuned defaults for lower-end / mobile hardware
 
+## Play Gen 1. Gold is not ready.
+
+**Do not use Terrarium on Pokémon Gold / Johto yet.** This release is
+recommended on **Red, Blue and Yellow only**. Gen 2 is an early first
+pass: the diorama can boot and draw, but most of the fork (wild roamers,
+ecology, shelter, routines, the XY battle UI, horizon, minimap) is
+unported or untested there.
+
+## New in 1.26.0-mobile
+
+- **Gold first pass, not a Johto release.** The mod loads on the engine's
+  Gold (Beta) column: neighbor Map instances, a palette-baked terrain
+  atlas, cell-rule ground heights, warp-kind doors, and a v1 on-map
+  battle (enemy on the field, back sprite still in the panel). Stay on
+  Gen 1.
+
+## New in 1.25.0-mobile
+
+- **Premium building kit.** Roofs overhang, window panes recess with a
+  sill, facades pick up baked corner AO, and night windows light room by
+  room. The Indigo Plateau and the Victory Road entrance stand.
+
 ## New in 1.23.1-mobile
 
 - **Day posts are a neighbourhood, not a tile.** Wanderers were walking back

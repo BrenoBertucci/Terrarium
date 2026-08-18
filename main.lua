@@ -95,6 +95,14 @@ function V.data(name)
   return value
 end
 
+-- ------- generation bridge
+--
+-- Before anything renders: on Pokemon Gold the world's neighbor rows have
+-- no Map instance, and every module below reads nb.map. The bridge hangs
+-- one on each row at the source; on Gen 1 it is a no-op.
+
+V.require("Gen2Bridge").install()
+
 -- ------- pipelines
 
 local Voxel = V.require("VoxelState")
@@ -1692,7 +1700,7 @@ end)
 -- first so this cannot drift again: this literal sat five minors behind the
 -- manifest, and in a feature-encoded form the versioning rules in CHANGELOG.md
 -- forbid outright (`.snow.1` -- features live in the changelog, not here).
-mod.exports.version = mod.version or "1.25.0-mobile"
+mod.exports.version = mod.version or "1.26.0-mobile"
 -- exposed so a companion mod can pin its own tiles' shapes or read the
 -- camera without reaching into this mod's file layout
 mod.exports.lib = V

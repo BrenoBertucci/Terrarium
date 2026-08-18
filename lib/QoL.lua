@@ -181,9 +181,15 @@ local function fieldMoveA(ow)
   -- is for talking to what is standing in it, not for mowing it (and this
   -- mod stands things in it).
   local ts = ow.map.def.tileset
-  local tile = ow.map:cellTile(fx, fy)
-  local cuttable = (ts == "OVERWORLD" and tile == 0x3d)
-                   or (ts == "GYM" and tile == 0x50)
+  -- tile read gated on the two Gen 1 tilesets it names: on Gold neither
+  -- matches and cellTile answers collision bytes, so asking first would
+  -- only trip the facade's warning
+  local cuttable = false
+  if ts == "OVERWORLD" or ts == "GYM" then
+    local tile = ow.map:cellTile(fx, fy)
+    cuttable = (ts == "OVERWORLD" and tile == 0x3d)
+               or (ts == "GYM" and tile == 0x50)
+  end
   if cuttable and Game.save.inventory.CASCADEBADGE
      and ow:useCutFieldMove() == "ok" then
     ow:tryCut(fx, fy)

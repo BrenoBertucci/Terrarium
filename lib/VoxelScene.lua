@@ -191,7 +191,16 @@ local function groundAt(map, cellX, cellY)
   -- exactly one step -- the "hops like a ledge" seam bug.
   if not map:inBounds(cellX, cellY) then return 0 end
   local shapes = TileShape.forMap(map)
-  local s = shapes[map:cellTile(cellX, cellY)]
+  -- Resolved through TileShape.at -- the same call the mesh itself is
+  -- built from -- rather than the raw per-tile table, for two reasons.
+  -- The tile id is tileAt(cx*2, cy*2+1) (identical to Gen 1's cellTile,
+  -- which on Gold answers a COLL_* byte from an unrelated number space).
+  -- And on Gold the per-tile table has no walkable/water lists to fall
+  -- back on, so every tile reads "wall" there and only the CELL rules
+  -- know the path is ground -- raw reads hoisted every walker into the
+  -- air at wall height.
+  local tx, ty = cellX * 2, cellY * 2 + 1
+  local s = TileShape.at(map, shapes, map:tileAt(tx, ty), tx, ty)
   if not s then return 0 end
   -- a recessed class (water) still supports whatever stands on it; only
   -- raised ground lifts the model.  Stairs never do: the class height is
@@ -264,7 +273,9 @@ local ROUND_ART = {
 local function flatTop(map, cellX, cellY)
   if not map:inBounds(cellX, cellY) then return false end
   local shapes = TileShape.forMap(map)
-  local s = shapes[map:cellTile(cellX, cellY)]
+  -- through TileShape.at, for groundAt's reason
+  local tx, ty = cellX * 2, cellY * 2 + 1
+  local s = TileShape.at(map, shapes, map:tileAt(tx, ty), tx, ty)
   -- no shape is flat ground at zero, which groundAt already reports as 0 and
   -- every caller here rejects on its own
   if not s then return true end

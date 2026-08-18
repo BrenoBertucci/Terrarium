@@ -245,9 +245,21 @@ function Structures.forMap(map)
   -- Celadon Mansion is the case that found it: all four of its
   -- staircases are door tiles, so `stair_e` / `stair_down_w` pins there
   -- silently did nothing and the flights stayed painted on the floor.
+  -- Gen 1 maps carry the tileset's doorTiles set; Gold has no door TILE
+  -- set at all -- a door there is a warp COLLISION kind, and the Map
+  -- already answers it as isDoorTileCell (the narrow walked-INTO arm,
+  -- which is exactly a door standing in a facade).
+  local doorAt
+  if map.doorTiles then
+    doorAt = function(cx, cy) return map.doorTiles[map:cellTile(cx, cy)] end
+  elseif map.isDoorTileCell then
+    doorAt = function(cx, cy) return map:isDoorTileCell(cx, cy) end
+  else
+    doorAt = function() return false end
+  end
   for cy = math.floor(y0 / 2), math.floor(y1 / 2) do
     for cx = math.floor(x0 / 2), math.floor(x1 / 2) do
-      if map.doorTiles[map:cellTile(cx, cy)] then
+      if doorAt(cx, cy) then
         local northK = keyOf(cx * 2, cy * 2 - 1)
         local ns = shapeAt[northK]
         if ns and ns.art == "upright" then

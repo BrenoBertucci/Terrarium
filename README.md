@@ -3,18 +3,16 @@
 A little world under glass: it has its own weather, its own hours, and things
 living in it.
 
-> ### ⚠️ Experimental branch — the X/Y interface work is in progress
+> ### Gen 2 (Pokémon Gold) is an early first pass — play Gen 1
 >
-> `main` currently carries an **unfinished** rewrite of the interface in
-> Pokemon X/Y art: the battle HUD, the overworld menu, and the battle text
-> box and command buttons. It runs and it is measured, but it is not done,
-> and pieces of it are known to be rough — see the open issues.
+> Terrarium is recommended on **Gen 1 only** (Red / Blue / Yellow).
+> **Do not use it on Gold / Johto yet.**
 >
-> **The finished version should land on Friday 14 August 2026.** Until then,
-> expect the battle interface to change under you between commits.
->
-> Every new piece degrades to the Game Boy original when its art is missing,
-> so a clone without the texture pack is playable rather than broken.
+> A first-pass Gold boot is in this tree so the port can keep moving: the
+> diorama can load and draw. Most of what this fork is known for (wild
+> roamers, ecology, shelter, routines, the XY battle UI, horizon, minimap)
+> is unported or untested there. If you want the finished experience, stay
+> on Kanto.
 
 > ### This is a fork, and the original is not mine
 >

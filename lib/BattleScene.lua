@@ -129,6 +129,13 @@ end
 -- the engine's own pipeline context gets it too (OverworldController's
 -- ctx.paletteFor).
 local function paletteFor(state, home)
+  -- Gold's World has no paletteNameFor -- and needs none: nil is the
+  -- "colour is already in the art" answer there, the same one the
+  -- engine's own pipeline ctx.paletteFor gives, and TerrainAtlas bakes
+  -- the coloured sheet itself on that path.
+  if not state.paletteNameFor then
+    return function() return nil end
+  end
   return function(map)
     return PaletteFX.pal(require("src.core.Game").data,
                          state:paletteNameFor(map or home))
