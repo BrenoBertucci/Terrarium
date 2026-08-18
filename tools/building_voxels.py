@@ -560,6 +560,48 @@ TEMPLATES = {
         ],
         roof_rows=16, roof_back=7, roof_front=8, roof_cycle=(9, 12),
         slab=4, front_eave=4, ledge=None, tileset="plateau",
+        # a rock face, not a building: the cliff top gets no carpentry
+        eave_out=0, recess_depth=1, sill=False,
+    ),
+    # B19: the Indigo Plateau -- TWO structures in one drawing, which is
+    # what defeated the single band table (see REMAINING.md). `parts`
+    # splits the drawing into stacked footprints, each with its own band
+    # table and its own z span of the template's footprint:
+    #   - the plateau's retaining wall, full width, standing at the back
+    #     (rows r1-r6: the rim band, the terrace paving seen from above,
+    #     and the 32px rock face);
+    #   - the League lobby punching through it, 8 cells wide, standing in
+    #     front (its flat roof is drawn r1-r5, fascia r6, facade r7-r10).
+    # `trim` drops the top 4px of ground above the drawn rim so each
+    # part's profile starts at its own first drawn row.
+    "indigo_plateau": dict(
+        tiles=[
+            [37, 38,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3, 37, 38],
+            [40, 41, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 32, 33,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3, 32, 33, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 40, 41],
+            [21, 22, 15, 15, 15, 15, 15, 15, 21, 22, 15, 15, 46, 47,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3, 46, 47, 15, 15, 21, 22, 15, 15, 15, 15, 15, 15, 21, 22],
+            [ 5,  6, 15, 15, 15, 15, 15, 15,  5,  6, 15, 15, 46, 47,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3, 46, 47, 15, 15,  5,  6, 15, 15, 15, 15, 15, 15,  5,  6],
+            [ 5,  6, 15, 15, 15, 15, 15, 15,  5,  6, 15, 15, 37, 38,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3, 37, 38, 15, 15,  5,  6, 15, 15, 15, 15, 15, 15,  5,  6],
+            [21, 22, 14, 14, 14, 14, 14, 14, 21, 22, 14, 14, 40, 41, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 40, 41, 14, 14, 21, 22, 14, 14, 14, 14, 14, 14, 21, 22],
+            [35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 21, 22, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 21, 22, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35],
+            [45, 35, 35, 35, 45, 35, 35, 35, 45, 35, 35, 35,  5,  6, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15,  5,  6, 45, 35, 35, 35, 45, 35, 35, 35, 45, 35, 35, 35],
+            [35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35,  5,  6, 15, 15, 15, 15, 11, 12, 11, 12, 15, 15, 15, 15,  5,  6, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35],
+            [35, 35, 45, 35, 35, 35, 45, 35, 35, 35, 45, 35, 21, 22, 14, 14, 14, 14, 27, 28, 27, 28, 14, 14, 14, 14, 21, 22, 35, 35, 45, 35, 35, 35, 45, 35, 35, 35, 45, 35],
+        ],
+        tileset="plateau", slab=4,
+        parts=[
+            # the retaining wall: rim (r1) as the roof's north band, the
+            # terrace paving (r2) as its field and front, the rock face
+            # (r3-r6) as the facade
+            dict(rows=(1, 6), z=(0, 48),
+                 roof_rows=16, roof_back=8, roof_front=4, roof_cycle=(8, 11),
+                 front_eave=0, eave_out=0, recess_depth=1, sill=False),
+            # the lobby: flat roof drawn r1-r5, fascia r6, facade r7-r10.
+            # The crop's own borders cut through the pale roof field, so
+            # every side but the ground line is sealed.
+            dict(rows=(1, 10), cols=(13, 28), z=(48, 80), seal="new",
+                 roof_rows=48, roof_back=8, roof_front=8, roof_cycle=(8, 15),
+                 front_eave=4, eave_out=0, recess_depth=1, sill=False),
+        ],
     ),
 }
 
@@ -647,10 +689,16 @@ def profile(sp, t):
 
     # Recesses: the panes the art seals behind a black frame. Non-black
     # pixels of the facade split into components across the black outline;
-    # a component small enough to be a window or a doorway sinks one voxel.
+    # a component small enough to be a window or a doorway sinks. A pane
+    # whose bottom reaches the base course is a DOORWAY (keeps the classic
+    # one-voxel recess); the rest are windows (sink recess_depth, and feed
+    # the sill mask -- one proud voxel on the frame row under each pane,
+    # except a pane nested inside a doorway).
     wall_y0 = t["roof_rows"]
     comp = {}
     recess = set()
+    door = set()
+    door_boxes, win_boxes = [], []
     for sy in range(wall_y0, H):
         for sx in range(W):
             if (sx, sy) in comp or not inside(sx, sy) or sp["col"][sy][sx] == BLACK:
@@ -673,9 +721,25 @@ def profile(sp, t):
                         stack.append((nx, ny))
             if x1 - x0 + 1 <= RECESS_MAX and y1 - y0 + 1 <= RECESS_MAX:
                 recess.update(cells)
+                if y1 >= H - 4:
+                    door.update(cells)
+                    door_boxes.append((x0, x1, y0, y1))
+                else:
+                    win_boxes.append((x0, x1, y0, y1))
+
+    sill = set()
+    if t.get("sill", True):
+        for (x0, x1, y0, y1) in win_boxes:
+            nested = any(x0 >= dx0 - 1 and x1 <= dx1 + 1
+                         and y0 >= dy0 - 1 and y1 <= dy1 + 1
+                         for (dx0, dx1, dy0, dy1) in door_boxes)
+            sy = y1 + 1
+            if not nested and sy < H:
+                sill.update((x, sy) for x in range(x0, x1 + 1)
+                            if inside(x, sy))
 
     return dict(top=top, wall_h=wall_h, ytop=ytop, recess=recess,
-                inside=inside, D=H, W=W, H=H)
+                door=door, sill=sill, inside=inside, D=H, W=W, H=H)
 
 
 # --------------------------------------------------------------- stage 3 --
@@ -748,40 +812,61 @@ def build(sp, pr, t):
                     for z in (-2, -1, D, D + 1):
                         put(sx, y, z, sx, sy)
 
-    # ---- recesses: the front voxel of every pane sinks, its frame stays proud
-    for sx, sy in pr["recess"]:
-        vox.pop((sx, H - 1 - sy, D - 1), None)
-
-    # ---- roof: flat top over the plateau, stepped diagonal ends
-    z0, z1 = 0, D - 1 + t["front_eave"]
-    back, front = t["roof_back"], t["roof_front"]
-    c0, c1 = t["roof_cycle"]
-
-    def roof_sy(z):
-        df, db = z - z0, z1 - z             # from the north / the south edge
-        if df < back:
-            return df                       # north rim: the drawing's top rows
-        if db < front:
-            return t["roof_rows"] - 1 - db  # south rim: fascia and eave course
-        return c0 + (df - c0) % (c1 - c0 + 1)
-
     shade_px = {}
     for sy in range(H):
         for sx in range(W):
             if inside(sx, sy):
                 shade_px.setdefault(col[sy][sx], (sx, sy))
 
-    for x in roofed:
-        tt = T(x)
-        for z in range(z0, z1 + 1):
-            outer = x == x0d or x == x1d or z == z0 or z == z1
+    # ---- recesses: a window pane sinks recess_depth voxels, a doorway the
+    # classic one (the walk-in sprite reads against it); frames stay proud
+    rdepth = min(t.get("recess_depth", 2), D - 2)
+    for sx, sy in pr["recess"]:
+        depth = 1 if (sx, sy) in pr["door"] else rdepth
+        for z in range(D - depth, D):
+            vox.pop((sx, H - 1 - sy, z), None)
+
+    # ---- sills: the frame row under a window juts one voxel proud of the
+    # facade, in the drawing's own dark shade
+    for sx, sy in pr["sill"]:
+        y = H - 1 - sy
+        if not trimmed(sx, y):
+            px = shade_px.get(DARK) or shade_px[BLACK]
+            put(sx, y, D, px[0], px[1])
+
+    # ---- roof: flat top over the plateau, stepped diagonal ends -- and the
+    # eave: the drawn span pushed `eave_out` voxels past its sides and back
+    # (the front already carries front_eave), overhang columns clamped into
+    # the span so they continue the edge column's texture and height
+    z0, z1 = 0, D - 1 + t["front_eave"]
+    back, front = t["roof_back"], t["roof_front"]
+    c0, c1 = t["roof_cycle"]
+    eave = t.get("eave_out", 2)
+    ex0, ex1 = x0d - eave, x1d + eave
+    z0e = z0 - eave
+
+    def roof_sy(z):
+        df, db = max(0, z - z0), z1 - z     # from the north / the south edge
+        if df < back:
+            return df                       # north rim: the drawing's top rows
+        if db < front:
+            return t["roof_rows"] - 1 - db  # south rim: fascia and eave course
+        return c0 + (df - c0) % (c1 - c0 + 1)
+
+    for x in range(ex0, ex1 + 1):
+        cx = min(max(x, x0d), x1d)
+        if top[cx] >= t["roof_rows"]:
+            continue
+        tt = T(cx)
+        for z in range(z0e, z1 + 1):
+            outer = x == ex0 or x == ex1 or z == z0e or z == z1
             # the slope's texture is the drawing's own: clamping into the
             # column's first drawn row keeps flank battens running down the
             # slope instead of falling off the silhouette
-            sy = max(roof_sy(z), pr["top"][x])
+            sy = max(roof_sy(z), pr["top"][cx])
             for y in range(tt - slab + 1, tt + 1):
                 if y == tt and not outer:
-                    put(x, y, z, x, sy)
+                    put(x, y, z, cx, sy)
                 else:
                     # the rim: the drawing's own eave -- a black outline
                     # over a shaded fascia, closed by the outline again
@@ -793,6 +878,22 @@ def build(sp, pr, t):
                         shade = DARK
                     px = shade_px.get(shade) or shade_px[BLACK]
                     put(x, y, z, px[0], px[1])
+
+    # ---- chimney: an optional box standing on the roof surface (per-flag
+    # only, never a default), worn in the drawing's own palette
+    ch = t.get("chimney")
+    if ch:
+        for x in range(ch["x"], ch["x"] + ch["w"]):
+            cx = min(max(x, x0d), x1d)
+            if top[cx] >= t["roof_rows"]:
+                continue
+            base = T(cx)
+            for z in range(ch["z"], ch["z"] + ch["w"]):
+                for y in range(base + 1, base + ch["h"] + 1):
+                    shade = (BLACK if y == base + ch["h"] or y == base + 1
+                             else DARK)
+                    px = shade_px.get(shade) or shade_px[BLACK]
+                    put(x, y, z, px[0], px[1])
     return vox
 
 
@@ -802,13 +903,26 @@ def verify(vox, sp, pr, t):
     ytop, top, slab = pr["ytop"], pr["top"], t["slab"]
     T = lambda x: ytop - top[max(0, min(W - 1, x))]
 
-    for (x, y, z), _ in vox.items():
-        assert y <= T(x), f"voxel pokes through the roof at {x},{y},{z}"
-
     # The roof surface reads over the columns the drawing actually paints:
     # a sprite inset from its box says nothing about the rest.
     roofed = [x for x in range(W) if top[x] < t["roof_rows"]]
     assert roofed, "no roof band is drawn"
+    x0d, x1d = roofed[0], roofed[-1]
+    # an overhang column reads the height of the drawn column it clamps to
+    Tc = lambda x: ytop - top[max(x0d, min(x1d, x))]
+    ch = t.get("chimney")
+
+    def cap(x, z):
+        """The highest voxel a column may legally carry: the roof surface,
+        or the chimney's top inside its footprint."""
+        if (ch and ch["x"] <= x < ch["x"] + ch["w"]
+                and ch["z"] <= z < ch["z"] + ch["w"]):
+            return Tc(x) + ch["h"]
+        return Tc(x)
+
+    for (x, y, z), _ in vox.items():
+        assert y <= cap(x, z), f"voxel pokes through the roof at {x},{y},{z}"
+
     prof = [T(x) for x in roofed]
     assert prof == prof[::-1], "the roof is not symmetric"
     plateau = [i for i, v in enumerate(prof) if v == ytop]
@@ -835,13 +949,15 @@ def verify(vox, sp, pr, t):
         assert all(ytop - v <= 1 for v in prof), "the flat roof is not level"
 
     # every wall column carries roof over it -- and a column the roof never
-    # reaches carries nothing at all, rather than being silently trimmed away
+    # reaches carries nothing but the eave overhang, rather than being
+    # silently trimmed away
     over = set(roofed)
     for x in range(W):
         for z in range(D):
             if x not in over:
-                assert not any((x, y, z) in vox for y in range(ytop + 1)), \
-                    f"wall stands where no roof reaches at {x},{z}"
+                for y in range(ytop + 1):
+                    assert (x, y, z) not in vox or y > Tc(x) - slab, \
+                        f"wall stands where no roof reaches at {x},{z}"
             elif any((x, y, z) in vox for y in range(0, T(x) - slab + 1)):
                 assert (x, T(x), z) in vox, f"wall uncovered at {x},{z}"
 
@@ -892,10 +1008,58 @@ def preview(shell, vox, sp, name, out, flip, canvas=(1700, 900), pad=20):
     img.save(os.path.join(out, name))
 
 
+def build_parts(t):
+    """A `parts` template: each part is a stacked footprint with its own
+    band table -- a tile-rect crop of the drawing (rows/cols, plus a pixel
+    `trim` off the top), standing over its own z span of the template's
+    footprint. Each part runs the ordinary pipeline and verify; the model
+    is the union, so touching faces between parts cull each other."""
+    merged, pal = {}, None
+    for p in t["parts"]:
+        r0, r1 = p["rows"]
+        c0, c1 = p.get("cols", (1, len(t["tiles"][0])))
+        sub = [row[c0 - 1:c1] for row in t["tiles"][r0 - 1:r1]]
+        pt = dict(t)
+        pt.pop("parts", None)
+        pt.update(tiles=sub, seal=p.get("seal", ""),
+                  roof_rows=p["roof_rows"], roof_back=p["roof_back"],
+                  roof_front=p["roof_front"], roof_cycle=p["roof_cycle"],
+                  front_eave=p.get("front_eave", 0),
+                  eave_out=p.get("eave_out", 0),
+                  recess_depth=p.get("recess_depth", 2),
+                  sill=p.get("sill", True), ledge=None)
+        sp = sprite(sub, pt["seal"], pt["tileset"])
+        trim = p.get("trim", 0)
+        if trim:
+            sp = dict(W=sp["W"], H=sp["H"] - trim, pal=sp["pal"],
+                      col=sp["col"][trim:], out=sp["out"][trim:],
+                      src=sp["src"][trim:])
+        pr = profile(sp, pt)
+        pr["D"] = p["z"][1] - p["z"][0]
+        vox = build(sp, pr, pt)
+        verify(vox, sp, pr, pt)
+        px0, pz0 = (c0 - 1) * 8, p["z"][0]
+        for (x, y, z), v in vox.items():
+            merged[(x + px0, y, z + pz0)] = v
+        pal = sp["pal"]
+    shell = [k for k in merged if not all(
+        (k[0] + d[0], k[1] + d[1], k[2] + d[2]) in merged
+        for d in ((1, 0, 0), (-1, 0, 0), (0, 1, 0),
+                  (0, -1, 0), (0, 0, 1), (0, 0, -1)))]
+    return merged, shell, pal
+
+
 def main():
     out = sys.argv[1] if len(sys.argv) > 1 else "."
     os.makedirs(out, exist_ok=True)
     for name, t in TEMPLATES.items():
+        if "parts" in t:
+            vox, shell, pal = build_parts(t)
+            print(f"{name}: parts={len(t['parts'])}  ->  voxels {len(vox)}  "
+                  f"shell {len(shell)}")
+            preview(shell, vox, {"pal": pal}, f"{name}_front.png", out, True)
+            preview(shell, vox, {"pal": pal}, f"{name}_back.png", out, False)
+            continue
         sp = sprite(t["tiles"], t.get("seal", ""), t.get("tileset", "overworld"))
         pr = profile(sp, t)
         vox = build(sp, pr, t)

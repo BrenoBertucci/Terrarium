@@ -3231,5 +3231,67 @@ return {
         slab = 4, frontEave = 4, ledge = nil,
       },
     },
+
+    PLATEAU = {
+      -- assets/docs/buildings/B19: the INDIGO PLATEAU -- the one drawing
+      -- in the catalogue holding TWO STRUCTURES, which is what defeated
+      -- the single band table (one roofRows cannot say "and the wall
+      -- stops here"). `parts` splits it into stacked footprints, each
+      -- with its own band table over its own z span of the footprint:
+      -- the plateau's full-width retaining wall at the back (rim r1 as
+      -- the roof's north band, terrace paving r2 as its field, rock face
+      -- r3-r6 as the facade), and the League lobby punching through it,
+      -- 8 cells wide, standing in front (flat roof r1-r5, fascia r6,
+      -- facade r7-r10 with the two doors). Both facades are drawn 32px,
+      -- so the union tops out flush -- the lobby's roof meets the rim.
+      -- No kit carpentry on either: a rock face gets no eave and no sill.
+      {
+        id = "indigo_plateau",
+        tiles = {
+          { 37, 38,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3, 37, 38 },
+          { 40, 41, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 32, 33,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3, 32, 33, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 40, 41 },
+          { 21, 22, 15, 15, 15, 15, 15, 15, 21, 22, 15, 15, 46, 47,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3, 46, 47, 15, 15, 21, 22, 15, 15, 15, 15, 15, 15, 21, 22 },
+          {  5,  6, 15, 15, 15, 15, 15, 15,  5,  6, 15, 15, 46, 47,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3, 46, 47, 15, 15,  5,  6, 15, 15, 15, 15, 15, 15,  5,  6 },
+          {  5,  6, 15, 15, 15, 15, 15, 15,  5,  6, 15, 15, 37, 38,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3, 37, 38, 15, 15,  5,  6, 15, 15, 15, 15, 15, 15,  5,  6 },
+          { 21, 22, 14, 14, 14, 14, 14, 14, 21, 22, 14, 14, 40, 41, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 40, 41, 14, 14, 21, 22, 14, 14, 14, 14, 14, 14, 21, 22 },
+          { 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 21, 22, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 21, 22, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35 },
+          { 45, 35, 35, 35, 45, 35, 35, 35, 45, 35, 35, 35,  5,  6, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15,  5,  6, 45, 35, 35, 35, 45, 35, 35, 35, 45, 35, 35, 35 },
+          { 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35,  5,  6, 15, 15, 15, 15, 11, 12, 11, 12, 15, 15, 15, 15,  5,  6, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35 },
+          { 35, 35, 45, 35, 35, 35, 45, 35, 35, 35, 45, 35, 21, 22, 14, 14, 14, 14, 27, 28, 27, 28, 14, 14, 14, 14, 21, 22, 35, 35, 45, 35, 35, 35, 45, 35, 35, 35, 45, 35 },
+        },
+        slab = 4,
+        parts = {
+          { rows = { 1, 6 }, z = { 0, 48 },
+            roofRows = 16, roofBack = 8, roofFront = 4,
+            roofCycle = { 8, 11 }, frontEave = 0, eaveOut = 0,
+            recessDepth = 1, sill = false },
+          -- the crop's own borders cut through the pale roof field, so
+          -- every side but the ground line is sealed
+          { rows = { 1, 10 }, cols = { 13, 28 }, z = { 48, 80 },
+            seal = "new",
+            roofRows = 48, roofBack = 8, roofFront = 8,
+            roofCycle = { 8, 15 }, frontEave = 4, eaveOut = 0,
+            recessDepth = 1, sill = false },
+        },
+      },
+      -- assets/docs/buildings/B23: the VICTORY ROAD entrance on ROUTE_23
+      -- -- a rock face with two barred doors, the pale cliff top drawn
+      -- from above as its roof band. A rock face, not a building: the
+      -- cliff top gets no carpentry (no eave, no sill, classic recess).
+      {
+        id = "victory_road_gate",
+        tiles = {
+          { 37, 38,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3, 37, 38 },
+          { 40, 41, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 40, 41 },
+          { 21, 22, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 46, 47,  3,  3,  3,  3,  3,  3,  3,  3, 46, 47, 15, 15, 15, 15, 15, 15, 21, 22 },
+          {  5,  6, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 46, 47,  3,  3,  3,  3,  3,  3,  3,  3, 46, 47, 15, 15, 15, 15, 15, 15,  5,  6 },
+          {  5,  6, 15, 15, 15, 15, 15, 15, 11, 12, 15, 15, 15, 15, 15, 15, 46, 47,  3,  3,  3,  3,  3,  3,  3,  3, 46, 47, 11, 12, 15, 15, 15, 15,  5,  6 },
+          { 21, 22, 14, 14, 14, 14, 14, 14, 27, 28, 14, 14, 14, 14, 14, 14, 46, 47,  3,  3,  3,  3,  3,  3,  3,  3, 46, 47, 27, 28, 14, 14, 14, 14, 21, 22 },
+        },
+        roofRows = 16, roofBack = 7, roofFront = 8, roofCycle = { 9, 12 },
+        slab = 4, frontEave = 4, ledge = nil,
+        eaveOut = 0, recessDepth = 1, sill = false,
+      },
+    },
   },
 }

@@ -558,12 +558,18 @@ local function runGeometry(map, bodyOnly, masks, sink)
   -- of leaving it looking pasted over the top.
   local aoProp = { 0, 0, 0, 0 }
   local function groundShades(c, shade)
-    if type(shade) == "table" then return shade end
+    -- A quad arriving with its own 4-corner shade (a building carrying
+    -- baked corner AO) still sits on the floor: COMPOSE the ground factor
+    -- by multiplication instead of returning early -- an early return
+    -- here silently strips ground contact from exactly the quads that
+    -- got the rest of their light right.
+    local tbl = type(shade) == "table"
     local y1, y2, y3, y4 = c[1][2], c[2][2], c[3][2], c[4][2]
     if math.min(y1, y2, y3, y4) >= AO_RISE then return shade end
     for i = 1, 4 do
       local t = c[i][2] / AO_RISE
-      aoProp[i] = shade * (t >= 1 and 1 or (1 - AO_GROUND * (1 - t)))
+      local g = t >= 1 and 1 or (1 - AO_GROUND * (1 - t))
+      aoProp[i] = (tbl and shade[i] or shade) * g
     end
     return aoProp
   end

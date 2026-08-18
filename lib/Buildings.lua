@@ -223,7 +223,14 @@ local function measure(sp, t)
   -- sinks a voxel. Frames stay proud, so the pane behind them reads as
   -- glass set into the wall -- and a nested frame (the door's own little
   -- window) layers for free.
-  local recess, seen = {}, {}
+  --
+  -- A pane whose bottom reaches the drawing's base course is a DOORWAY:
+  -- it keeps the classic one-voxel recess (the walk-in sprite reads
+  -- against it) while windows sink recessDepth. Window regions also feed
+  -- the sill mask -- one proud voxel on the frame row under each pane --
+  -- except a pane nested inside a doorway (the door's own little window).
+  local recess, seen, door = {}, {}, {}
+  local doorBoxes, winBoxes = {}, {}
   for sy = roofRows, H - 1 do
     for sx = 0, W - 1 do
       local i0 = sy * W + sx
@@ -254,9 +261,43 @@ local function measure(sp, t)
         end
         if x1 - x0 < RECESS_MAX and y1 - y0 < RECESS_MAX then
           for _, i in ipairs(cells) do recess[i] = true end
+          if y1 >= H - 4 then
+            for _, i in ipairs(cells) do door[i] = true end
+            doorBoxes[#doorBoxes + 1] = { x0, x1, y0, y1 }
+          else
+            winBoxes[#winBoxes + 1] = { x0, x1, y0, y1 }
+          end
         end
       end
     end
+  end
+
+  -- The sill mask (t.sill == false opts a template out): the frame row
+  -- under each window juts one voxel at z == D, wearing shadeTexel[DARK].
+  local sill = nil
+  if t.sill ~= false then
+    sill = {}
+    local n = 0
+    for _, w in ipairs(winBoxes) do
+      local nested = false
+      for _, d in ipairs(doorBoxes) do
+        if w[1] >= d[1] - 1 and w[2] <= d[2] + 1
+            and w[3] >= d[3] - 1 and w[4] <= d[4] + 1 then
+          nested = true
+          break
+        end
+      end
+      local sy = w[4] + 1
+      if not nested and sy < H then
+        for x = w[1], w[2] do
+          if sp.inside[sy * W + x] then
+            sill[sy * W + x] = true
+            n = n + 1
+          end
+        end
+      end
+    end
+    if n == 0 then sill = nil end
   end
 
   -- One representative texel per shade, taken from the building's own art:
@@ -278,9 +319,11 @@ local function measure(sp, t)
   -- built from `tiles` alone), but a template with `topRows` has a
   -- sprite taller than its footprint -- the tower's 16-row drawing
   -- stands on the 8 rows of it that are actually on the map, and D = H
-  -- would have pushed its body 64px south into the town plaza.
-  return { top = top, ytop = ytop, D = #t.tiles * 8,
-           recess = recess, interior = interior, shadeTexel = shadeTexel }
+  -- would have pushed its body 64px south into the town plaza. A `parts`
+  -- sub-template carries its own z span as an explicit depth.
+  return { top = top, ytop = ytop, D = t.depth or (#t.tiles * 8),
+           recess = recess, door = door, sill = sill,
+           interior = interior, shadeTexel = shadeTexel }
 end
 
 -- ----------------------------------------------------------------- build --
@@ -293,6 +336,15 @@ local function model(sp, pr, t)
   local W, H, D = sp.W, sp.H, pr.D
   local slab, roofRows = t.slab, t.roofRows
   local top, ytop = pr.top, pr.ytop
+
+  -- The premium kit's parametric fields, every one optional (see
+  -- assets/docs/buidling_to_voxel/premium_kit_plan.md, F1). Defaults are
+  -- global on purpose: the kit applies to every building from day one,
+  -- and a template that must not wear it (a rock face) opts out.
+  local eave = t.eaveOut or 2            -- side/back roof overhang
+  local rdepth = t.recessDepth or 2      -- how deep a window pane sinks
+  local ch = t.chimney                   -- {x=,z=,w=,h=} box, never default
+  if rdepth > D - 2 then rdepth = D - 2 end
 
   -- The roof's drawn span. A sprite inset from its box (B03) leaves outer
   -- columns undrawn in the roof band; they carry no roof at all, and the
@@ -313,15 +365,22 @@ local function model(sp, pr, t)
   local cyc0, cyc1 = t.roofCycle[1], t.roofCycle[2]
   local cycN = cyc1 - cyc0 + 1
 
+  -- The eave-extended roof bounds: the drawn span pushed `eave` voxels
+  -- out to the sides and the back. The front already carries frontEave.
+  local ex0 = x0d and (x0d - eave) or nil
+  local ex1 = x1d and (x1d + eave) or nil
+  local rz0e = rz0 - eave
+
   -- Which drawn row lies at depth z. The drawing looks at the roof from
   -- the north, so its top rows ARE the far edge and its bottom rows the
   -- eave over the facade. The band is shallower than the building, so the
   -- rims map one row per voxel and the middle cycles a run whose period is
   -- the course rhythm -- picked up where the north rim left off, which
   -- continues both the course lines and the roof texture seamlessly.
+  -- The back eave rows (z < rz0) repeat the drawing's top row.
   local roofSy = {}
-  for z = rz0, rz1 do
-    local df, db = z - rz0, rz1 - z          -- from the north / south edge
+  for z = rz0e, rz1 do
+    local df, db = math.max(0, z - rz0), rz1 - z   -- from north / south edge
     if df < back then
       roofSy[z] = df
     elseif db < front then
@@ -335,35 +394,75 @@ local function model(sp, pr, t)
   for x = 0, W - 1 do T[x] = ytop - top[x] end
 
   local function at(x, y, z)
+    -- roof: a solid of constant thickness following the elevation
+    -- profile, overhanging the drawn span by `eave` on the sides and the
+    -- back. Overhang columns clamp into the span, so the eave continues
+    -- the edge column's texture and height.
+    if x0d and x >= ex0 and x <= ex1 and z >= rz0e and z <= rz1 then
+      local cx = x < x0d and x0d or (x > x1d and x1d or x)
+      if top[cx] < roofRows then
+        local tx = T[cx]
+        if y > tx - slab and y <= tx then
+          if y == tx and x > ex0 and x < ex1 and z > rz0e and z < rz1 then
+            -- the surface itself. Clamping the row into the column's
+            -- first drawn row keeps the flank battens running down the
+            -- slope instead of falling off the silhouette.
+            local sy = roofSy[z]
+            if sy < top[cx] then sy = top[cx] end
+            return sy * W + cx
+          end
+          -- The rim reproduces the eave the drawing itself paints under
+          -- the roof: a black outline, a shaded fascia, closed by the
+          -- outline again. (A GREY fascia band -- what the first cut had
+          -- -- comes out WHITE once the atlas is recoloured and turns
+          -- every sloped end into a black-and-white zip.) Under the
+          -- surface it is all shadow.
+          local outer = x == ex0 or x == ex1 or z == rz0e or z == rz1
+          if not outer then return pr.shadeTexel[DARK] end
+          if y == tx or y == tx - slab + 1 then
+            return pr.shadeTexel[BLACK]
+          end
+          return pr.shadeTexel[DARK]
+        end
+      end
+    end
+
+    -- the chimney: an optional box standing on the roof surface, worn in
+    -- the drawing's own palette -- body in shadow, capped and based by
+    -- the outline shade. Checked before the trim so it survives above
+    -- the roof.
+    if ch and x0d and x >= ch.x and x < ch.x + ch.w
+        and z >= ch.z and z < ch.z + ch.w then
+      local cx = x < x0d and x0d or (x > x1d and x1d or x)
+      if top[cx] < roofRows then
+        local base = T[cx]
+        if y > base and y <= base + ch.h then
+          if y == base + ch.h or y == base + 1 then
+            return pr.shadeTexel[BLACK]
+          end
+          return pr.shadeTexel[DARK]
+        end
+      end
+    end
+
     if x < 0 or x >= W then return nil end
     local tx = T[x]
-
-    -- roof: a solid of constant thickness following the elevation profile
-    if top[x] < roofRows
-        and y > tx - slab and y <= tx and z >= rz0 and z <= rz1 then
-      if y == tx and x > x0d and x < x1d and z > rz0 and z < rz1 then
-        -- the surface itself. Clamping the row into the column's first
-        -- drawn row keeps the flank battens running down the slope
-        -- instead of falling off the silhouette.
-        local sy = roofSy[z]
-        if sy < top[x] then sy = top[x] end
-        return sy * W + x
-      end
-      -- The rim reproduces the eave the drawing itself paints under the
-      -- roof: a black outline, a shaded fascia, closed by the outline
-      -- again. (A GREY fascia band -- what the first cut had -- comes out
-      -- WHITE once the atlas is recoloured and turns every sloped end
-      -- into a black-and-white zip.) Under the surface it is all shadow.
-      local outer = x == x0d or x == x1d or z == rz0 or z == rz1
-      if not outer then return pr.shadeTexel[DARK] end
-      if y == tx or y == tx - slab + 1 then return pr.shadeTexel[BLACK] end
-      return pr.shadeTexel[DARK]
-    end
 
     -- trimmed: under the slope. A column with no roof over it has no
     -- underside to trim to, and must not be cut away by a profile the
     -- drawing never set.
     if top[x] < roofRows and y > tx - slab then return nil end
+
+    -- the sill: the frame row under a window juts one voxel proud of the
+    -- facade, in the drawing's own dark shade. Checked before the awning
+    -- clause, which owns the same z plane and answers nil outside its
+    -- band.
+    if pr.sill and z == D then
+      local sy = H - 1 - y
+      if sy >= 0 and sy < H and pr.sill[sy * W + x] then
+        return pr.shadeTexel[DARK]
+      end
+    end
 
     -- the awning: the band juts two voxels past the walls, front and back
     if ledge0 and (z == -2 or z == -1 or z == D or z == D + 1) then
@@ -385,17 +484,87 @@ local function model(sp, pr, t)
       sy, i = sy - 1, i - W
     end
     if not sp.inside[i] then return nil end
-    if z == D - 1 then
-      if pr.recess[i] then return nil end
-      return i
+    -- panes sink: a window recessDepth voxels, a doorway the classic one
+    if pr.recess[i] and z >= D - (pr.door[i] and 1 or rdepth) then
+      return nil
     end
+    if z == D - 1 then return i end
     if z == 0 then return i end
     return pr.interior[i]
   end
 
-  return { at = at, W = W, ytop = ytop,
-           zmin = ledge0 and -2 or 0,
-           zmax = math.max(rz1, ledge0 and (D + 1) or 0) }
+  return { at = at, W = W,
+           ytop = ytop + (ch and ch.h or 0),
+           xmin = math.min(0, ex0 or 0),
+           xmax = math.max(W - 1, ex1 or (W - 1)),
+           zmin = math.min(ledge0 and -2 or 0, x0d and rz0e or 0),
+           zmax = math.max(rz1, ledge0 and (D + 1) or 0, D) }
+end
+
+-- ----------------------------------------------------------------- parts --
+
+-- A drawing holding TWO (or more) structures -- the Indigo Plateau's
+-- retaining wall with the League lobby punching through it -- defeats the
+-- single band table: one roofRows cannot say "and the wall stops here".
+-- `parts` splits the template into stacked footprints. Each part is a
+-- tile-rect crop of the drawing (rows, optional cols) with its own band
+-- table, standing over its own z span of the template's footprint; it
+-- runs the ordinary read/measure/model pipeline on its crop, and the
+-- final model is the union -- so faces where two parts touch cull each
+-- other exactly like any interior face.
+local function modelParts(t, data, perRow)
+  local fullW = #t.tiles[1] * 8
+  local parts = {}
+  local xmin, xmax, zmin, zmax, ytop = 0, fullW - 1, 0, 0, 0
+  for _, p in ipairs(t.parts) do
+    local r0, r1 = p.rows[1], p.rows[2]
+    local c0 = p.cols and p.cols[1] or 1
+    local c1 = p.cols and p.cols[2] or #t.tiles[1]
+    local sub = {}
+    for r = r0, r1 do
+      local row, src = {}, t.tiles[r]
+      for c = c0, c1 do row[#row + 1] = src[c] end
+      sub[#sub + 1] = row
+    end
+    local pt = { tiles = sub, seal = p.seal,
+                 slab = p.slab or t.slab,
+                 roofRows = p.roofRows, roofBack = p.roofBack,
+                 roofFront = p.roofFront, roofCycle = p.roofCycle,
+                 frontEave = p.frontEave or 0,
+                 eaveOut = p.eaveOut or 0,
+                 recessDepth = p.recessDepth,
+                 sill = p.sill, ledge = nil, chimney = p.chimney,
+                 depth = p.z[2] - p.z[1] }
+    local ss = read(pt, data, perRow)
+    local pr = measure(ss, pt)
+    local m = model(ss, pr, pt)
+    local px0, py0, pz0 = (c0 - 1) * 8, (r0 - 1) * 8, p.z[1]
+    parts[#parts + 1] = { m = m, px0 = px0, py0 = py0, pz0 = pz0,
+                          subW = ss.W }
+    xmin = math.min(xmin, px0 + m.xmin)
+    xmax = math.max(xmax, px0 + m.xmax)
+    zmin = math.min(zmin, pz0 + m.zmin)
+    zmax = math.max(zmax, pz0 + m.zmax)
+    ytop = math.max(ytop, m.ytop)
+  end
+  -- The union. A part answers in its crop's own pixel indices; remap into
+  -- the FULL drawing's index space so emit's uv/adjacency logic reads one
+  -- consistent sprite. (The crop is a rect of the same drawing, so the
+  -- remap is a pure offset.)
+  local function at(x, y, z)
+    for i = 1, #parts do
+      local P = parts[i]
+      local v = P.m.at(x - P.px0, y, z - P.pz0)
+      if v then
+        local sx = v % P.subW
+        local sy = (v - sx) / P.subW
+        return (P.py0 + sy) * fullW + (P.px0 + sx)
+      end
+    end
+    return nil
+  end
+  return { at = at, W = fullW, ytop = ytop,
+           xmin = xmin, xmax = xmax, zmin = zmin, zmax = zmax }
 end
 
 -- ------------------------------------------------------------------ emit --
@@ -411,18 +580,22 @@ local function emit(m, sp, atlasW, atlasH)
   local cell = {}                        -- (y, z, x) -> sprite pixel index
 
   local zmin, zmax, ytop = m.zmin, m.zmax, m.ytop
+  -- the model may overhang its own box: the roof's side eaves stand at
+  -- x < 0 and x >= W, exactly as the front eave always stood at z >= D
+  local xmin, xmax = m.xmin or 0, m.xmax or (W - 1)
   local zn = zmax - zmin + 1
+  local xn = xmax - xmin + 1
   local function ci(x, y, z)
-    if x < 0 or x >= W or y < 0 or y > ytop or z < zmin or z > zmax then
+    if x < xmin or x > xmax or y < 0 or y > ytop or z < zmin or z > zmax then
       return nil
     end
-    return cell[(y * zn + (z - zmin)) * W + x]
+    return cell[(y * zn + (z - zmin)) * xn + (x - xmin)]
   end
   for y = 0, ytop do
     Budget.tick()
     for z = zmin, zmax do
-      local base = (y * zn + (z - zmin)) * W
-      for x = 0, W - 1 do
+      local base = (y * zn + (z - zmin)) * xn - xmin
+      for x = xmin, xmax do
         local v = m.at(x, y, z)
         cell[base + x] = v
         if v then quads.voxels = quads.voxels + 1 end
@@ -435,7 +608,7 @@ local function emit(m, sp, atlasW, atlasH)
   for y = 0, ytop do
     Budget.tick()
     for z = zmin, zmax do
-      for x = 0, W - 1 do
+      for x = xmin, xmax do
         if ci(x, y, z) and not (ci(x + 1, y, z) and ci(x - 1, y, z)
             and ci(x, y + 1, z) and ci(x, y - 1, z)
             and ci(x, y, z + 1) and ci(x, y, z - 1)) then
@@ -443,6 +616,33 @@ local function emit(m, sp, atlasW, atlasH)
         end
       end
     end
+  end
+
+  -- ---- baked AO (premium kit F2): classic voxel corner occlusion, ----
+  -- sampled POST-merge on each quad's four corners. Pre-merge AO would
+  -- fragment the greedy runs (the merge only collapses runs of EQUAL
+  -- shade); on the merged corners it costs ~12 ci() lookups per quad and
+  -- not one extra quad. The weights echo the mesher's terrain AO family
+  -- so a building sits in the same light as the ground it stands on.
+  local AO_STEP, AO_FLOOR = 0.09, 0.25
+  local function aoCorner(s1, s2, dg)
+    local k = 0
+    if s1 then k = k + 1 end
+    if s2 then k = k + 1 end
+    -- a diagonal wedged behind both of its edges adds nothing: the
+    -- corner is already as enclosed as it can get (same rule as the
+    -- terrain's aoShades)
+    if dg and not (s1 and s2) then k = k + 1 end
+    if k == 0 then return 1 end
+    local f = 1 - AO_STEP * k
+    if f < AO_FLOOR then f = AO_FLOOR end
+    return f
+  end
+  -- an open corner keeps the scalar shade: the merge-friendly common case
+  -- costs no table at all
+  local function shades(base, f1, f2, f3, f4)
+    if f1 == 1 and f2 == 1 and f3 == 1 and f4 == 1 then return base end
+    return { base * f1, base * f2, base * f3, base * f4 }
   end
 
   -- u/v of a run: `n` texels starting at sprite pixel `i`, stepping along
@@ -491,20 +691,31 @@ local function emit(m, sp, atlasW, atlasH)
     for y = 0, ytop do
       Budget.tick()
       for z = zmin, zmax do
-        local x = 0
-        while x < W do
+        local x = xmin
+        while x <= xmax do
           if ci(x, y, z) and not ci(x, y, z + d) then
             local i, strip, n = runX(y, z, 0, 0, d, x)
             local u0, u1, v0, v1 = uvOf(i, strip, n)
             local zf = d == 1 and (z + 1) or z
+            -- corner AO in the layer the face looks into
+            local zo = z + d
+            local xl, xr = x - 1, x + n         -- beyond the run's ends
+            local xe0, xe1 = x, x + n - 1       -- the run's end cells
+            local yd, yu = y - 1, y + 1
+            local sBL = aoCorner(ci(xl, y, zo), ci(xe0, yd, zo), ci(xl, yd, zo))
+            local sBR = aoCorner(ci(xr, y, zo), ci(xe1, yd, zo), ci(xr, yd, zo))
+            local sTR = aoCorner(ci(xr, y, zo), ci(xe1, yu, zo), ci(xr, yu, zo))
+            local sTL = aoCorner(ci(xl, y, zo), ci(xe0, yu, zo), ci(xl, yu, zo))
             if d == 1 then
               put({ x, y, zf }, { x + n, y, zf },
                   { x + n, y + 1, zf }, { x, y + 1, zf },
-                  { { u0, v1 }, { u1, v1 }, { u1, v0 }, { u0, v0 } }, shade)
+                  { { u0, v1 }, { u1, v1 }, { u1, v0 }, { u0, v0 } },
+                  shades(shade, sBL, sBR, sTR, sTL))
             else
               put({ x + n, y, zf }, { x, y, zf },
                   { x, y + 1, zf }, { x + n, y + 1, zf },
-                  { { u1, v1 }, { u0, v1 }, { u0, v0 }, { u1, v0 } }, shade)
+                  { { u1, v1 }, { u0, v1 }, { u0, v0 }, { u1, v0 } },
+                  shades(shade, sBR, sBL, sTL, sTR))
             end
             x = x + n
           else
@@ -523,20 +734,31 @@ local function emit(m, sp, atlasW, atlasH)
       -- the underside of the bottom layer is the ground it stands on
       if not (d == -1 and y == 0) then
         for z = zmin, zmax do
-          local x = 0
-          while x < W do
+          local x = xmin
+          while x <= xmax do
             if ci(x, y, z) and not ci(x, y + d, z) then
               local i, strip, n = runX(y, z, 0, d, 0, x)
               local u0, u1, v0, v1 = uvOf(i, strip, n)
               local yf = d == 1 and (y + 1) or y
+              -- corner AO in the layer the face looks into
+              local yo = y + d
+              local xl, xr = x - 1, x + n
+              local xe0, xe1 = x, x + n - 1
+              local zd, zu = z - 1, z + 1
+              local f1 = aoCorner(ci(xl, yo, z), ci(xe0, yo, zd), ci(xl, yo, zd))
+              local f2 = aoCorner(ci(xr, yo, z), ci(xe1, yo, zd), ci(xr, yo, zd))
+              local f3 = aoCorner(ci(xr, yo, z), ci(xe1, yo, zu), ci(xr, yo, zu))
+              local f4 = aoCorner(ci(xl, yo, z), ci(xe0, yo, zu), ci(xl, yo, zu))
               if d == 1 then
                 put({ x, yf, z }, { x + n, yf, z },
                     { x + n, yf, z + 1 }, { x, yf, z + 1 },
-                    { { u0, v0 }, { u1, v0 }, { u1, v1 }, { u0, v1 } }, shade)
+                    { { u0, v0 }, { u1, v0 }, { u1, v1 }, { u0, v1 } },
+                    shades(shade, f1, f2, f3, f4))
               else
                 put({ x, yf, z + 1 }, { x + n, yf, z + 1 },
                     { x + n, yf, z }, { x, yf, z },
-                    { { u0, v1 }, { u1, v1 }, { u1, v0 }, { u0, v0 } }, shade)
+                    { { u0, v1 }, { u1, v1 }, { u1, v0 }, { u0, v0 } },
+                    shades(shade, f4, f3, f2, f1))
               end
               x = x + n
             else
@@ -551,7 +773,7 @@ local function emit(m, sp, atlasW, atlasH)
   -- ---- faces along +-X (the flanks): merge along z, one texel each ----
   for _, d in ipairs({ 1, -1 }) do
     for y = 0, ytop do
-      for x = 0, W - 1 do
+      for x = xmin, xmax do
         local z = zmin
         while z <= zmax do
           local i = ci(x, y, z)
@@ -564,16 +786,25 @@ local function emit(m, sp, atlasW, atlasH)
             end
             local u0, u1, v0, v1 = uvOf(i, false, n)
             local xf = d == 1 and (x + 1) or x
+            -- corner AO in the layer the face looks into
+            local xo = x + d
+            local zl, zr = z - 1, z + n
+            local ze0, ze1 = z, z + n - 1
+            local yd, yu = y - 1, y + 1
+            local fBn = aoCorner(ci(xo, y, zr), ci(xo, yd, ze1), ci(xo, yd, zr))
+            local fB0 = aoCorner(ci(xo, y, zl), ci(xo, yd, ze0), ci(xo, yd, zl))
+            local fT0 = aoCorner(ci(xo, y, zl), ci(xo, yu, ze0), ci(xo, yu, zl))
+            local fTn = aoCorner(ci(xo, y, zr), ci(xo, yu, ze1), ci(xo, yu, zr))
             if d == 1 then
               put({ xf, y, z + n }, { xf, y, z },
                   { xf, y + 1, z }, { xf, y + 1, z + n },
                   { { u0, v1 }, { u1, v1 }, { u1, v0 }, { u0, v0 } },
-                  SHADE.side)
+                  shades(SHADE.side, fBn, fB0, fT0, fTn))
             else
               put({ xf, y, z }, { xf, y, z + n },
                   { xf, y + 1, z + n }, { xf, y + 1, z },
                   { { u0, v1 }, { u1, v1 }, { u1, v0 }, { u0, v0 } },
-                  SHADE.side)
+                  shades(SHADE.side, fB0, fBn, fTn, fT0))
             end
             z = z + n
           else
@@ -658,6 +889,12 @@ function Buildings.build(S, map, data, perRow)
                   -- placement composites them via topRows). Left to the
                   -- detector they stood as a second half-building.
                   models[key] = {}
+                elseif t.parts then
+                  -- two structures in one drawing (the Indigo Plateau):
+                  -- each part models its own crop, emit takes the union
+                  local sp = read(t, data, perRow)
+                  models[key] = emit(modelParts(t, data, perRow), sp,
+                                     atlasW, atlasH)
                 else
                   local sp = read(t, data, perRow)
                   local pr = measure(sp, t)
