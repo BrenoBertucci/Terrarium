@@ -37,6 +37,13 @@ Upstream Dramatic Shape still uses `3` / `5` / `6` / `7` / `8` / `9`.
 - Wild Pokemon visible in the grass; ecology / shelter / city life systems
 - Tuned defaults for lower-end / mobile hardware
 
+## New in 1.23.1-mobile
+
+- **Day posts are a neighbourhood, not a tile.** Wanderers were walking back
+  to the exact cell all day and the town looked emptier than Gen 1. Within
+  three cells they wander as they always did. A night doorway is still one
+  cell.
+
 ## New in 1.23.0-mobile
 
 The battle is drawn at the window. The birds are the right size. People
