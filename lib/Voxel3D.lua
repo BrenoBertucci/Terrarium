@@ -1638,8 +1638,24 @@ local SHADER = [[
       // is the only property that matters.
       vec2 paneId = floor(tc * glassSize / 6.0);
       float jit = fract(sin(dot(paneId, vec2(12.9898, 78.233))) * 4375.85);
-      vec3 lamp = lampColor * (0.5 + 0.55 * shine) * (0.86 + 0.28 * jit);
-      rgb = mix(pane, lamp, glassNight * glass);
+      // JANELAS VIVAS (premium kit F4). The atlas block alone repeats with
+      // the art -- every copy of the same window TILE shared one lamp, so
+      // a tower's course lit floor by identical floor. The ROOM folds in
+      // the pane's 8px world cell (x, y and z): 8px is the tile grid, so
+      // the cell boundary lands on the pane's own frame and never splits
+      // the glass. Three or four rooms in ten keep no lamp at night, the
+      // rest spread +-20% in brightness, and one in ~14 breathes on the
+      // wind's slow clock -- far below anything stroboscopic.
+      float cellSeed = dot(floor(vWorld / 8.0), vec3(0.913, 7.077, 3.217));
+      float room = fract(sin(dot(paneId, vec2(26.651, 47.113))
+                             + cellSeed) * 2913.33);
+      float home = step(0.30, room);
+      float flick = mix(1.0,
+                        0.80 + 0.20 * sin(lampFlicker * 0.7 + room * 41.0),
+                        step(0.93, fract(room * 9.77)));
+      vec3 lamp = lampColor * (0.5 + 0.55 * shine)
+                * (0.80 + 0.40 * fract(jit + room * 3.7)) * flick;
+      rgb = mix(pane, lamp, glassNight * glass * home);
     }
     // The snow lying ON this surface, if it is one snow can lie on. A hard
     // step rather than a smooth falloff: this is a four-colour world and the

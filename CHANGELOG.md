@@ -25,6 +25,60 @@ Tags and packages:
 
 ## Unreleased
 
+## 1.25.0-mobile
+
+### Premium building kit (F0-F5 of the plan in assets/docs/buidling_to_voxel/premium_kit_plan.md)
+
+The buildings stop being extruded facades. All bake / vertex data / a few
+shader ALU ops -- frame cost measured unchanged against the F0 baseline
+on the i3, and mobile inherits everything but sees nothing per-frame.
+
+- **Parametric geometry kit** (`lib/Buildings.lua` model()): every roof
+  now overhangs its sides and back (`eaveOut`, default 2; the front
+  already had `frontEave`), window panes sink two voxels instead of one
+  (`recessDepth`, doorways keep the classic one so the walk-in sprite
+  reads), and every window grows a sill -- one proud voxel on the frame
+  row below the pane, in the drawing's own dark shade. `chimney` exists
+  behind a per-template flag, never default. Quad growth 11-22% per
+  model, inside the 30% budget.
+- **Baked corner AO** (emit(), post-greedy-merge): classic voxel corner
+  occlusion sampled on the merged quads' corners -- the facade seats
+  under the eave, window reveals darken, wall feet sit into the ground.
+  Post-merge on purpose: AO before the merge fragments the mesh; here it
+  costs ~12 lookups per quad and not one extra quad.
+  `ChunkMesher.groundShades()` now COMPOSES its floor-contact factor into
+  table shades by multiplication instead of returning early -- the early
+  return would have stripped ground contact from exactly the quads that
+  carry baked AO.
+- **Static eave shadow, proven**: the existing shadow map projects the
+  new eave onto the facade by itself (facade band -3.1 luminance with the
+  eave alone, controls at exactly 0.0). The moving sun (F6, the only item
+  that would have spent the ~10% frame budget) is therefore parked.
+- **Living windows** (the glass block in `lib/Voxel3D.lua`): at night,
+  three or four panes in ten keep no lamp, the lit ones spread +-20% in
+  brightness, and one in ~14 breathes on the gas lamps' slow clock. The
+  room hash folds the pane's 8px world cell into the old atlas-block
+  hash, so identical window TILES stop sharing one lamp (the tower used
+  to light floor by identical floor).
+- **The Indigo Plateau stands** (`data/voxel_heights.lua`,
+  `buildings.PLATEAU`): B19 is the catalogue's "two structures in one
+  drawing", and the new `parts` field says what one band table cannot --
+  each part is a tile-rect crop with its own band table over its own z
+  span of the footprint, and the model is the union. The retaining wall
+  and the League lobby come out flush at the top, as drawn.
+- **The Victory Road entrance ships** (B23): the reference tool had the
+  template all along; the Lua data never did. Ported, with the kit's
+  carpentry off (a rock face grows no eaves).
+- `tools/building_voxels.py` mirrors every change (Stage 5 parity: Lua
+  and Python agree voxel-for-voxel on all 33 templates, `indigo_plateau`
+  and its parts included), and `assets/docs/buildings/REMAINING.md` now
+  tells the truth: 33 of 34 drawings, 146 of 147 placements, only the
+  S.S. Anne out -- by decision, not accident.
+- New probes: `tests/plateau_probe.lua` (the PLATEAU templates build,
+  stamp and claim), plus the F0 baseline pair
+  (`tests/buildings_baseline_probe.lua`, `tests/buildings_perf_probe.lua`)
+  that every later phase was measured against.
+
 ## 1.23.1-mobile
 
 ### Townsfolk agenda

@@ -95,6 +95,9 @@ _probe_*/
 DS_PROBE*/
 probe-out/
 probe_out/
+# ...and the per-run dirs the newer probes name probe_out_<what>. One
+# pattern instead of one line per probe (probe_out_atm/ above predates it).
+probe_out_*/
 tests/out/
 
 # Captures written next to a driver when DS_PROBE_DIR is unset or mistyped.

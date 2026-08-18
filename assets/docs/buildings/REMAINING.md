@@ -1,79 +1,47 @@
 # Buildings not yet voxelized
 
 Status of the 34 catalogued drawings against the `buildings` list in
-`data/voxel_heights.lua`. Coverage is **31 of 34 drawings, 144 of 147
-placements**. Three are left, one placement each, and none of them is a
-matter of sitting down and reading the drawing - each defeats a different
-assumption the band-table pipeline is built on.
+`data/voxel_heights.lua`. Coverage is **33 of 34 drawings, 146 of 147
+placements**. One is left, and it is out of scope by decision, not by
+accident.
 
 (Counting note: the catalogue's per-building tables list one row per DOOR,
 so B19, B22 and B23 each appear twice for a single placement. 150 rows,
 147 placements. This page counts placements.)
 
-| id | tileset | cells | px | used | what defeats it |
+| id | tileset | cells | px | used | status |
 | --- | --- | --- | --- | --- | --- |
-| [B19](B19-unnamed-building.md) | `PLATEAU` | 20 x 5 | 320x80 | 1x | two structures in one drawing |
-| [B30](B30-unnamed-building.md) | `OVERWORLD` | 6 x 4 | 96x64 | 1x | truncated by the map edge; no roof drawn |
-| [B32](B32-unnamed-building.md) | `SHIP_PORT` | 8 x 3 | 128x48 | 1x | not a building |
+| [B19](B19-unnamed-building.md) | `PLATEAU` | 20 x 5 | 320x80 | 1x | **done** -- the first `parts` template (premium kit F5) |
+| [B23](B23-unnamed-building.md) | `PLATEAU` | 18 x 3 | 288x48 | 1x | **done** -- ported from the reference tool, which always had it while the Lua data never did |
+| [B30](B30-unnamed-building.md) | `OVERWORLD` | 6 x 4 | 96x64 | 1x | **done** -- `topRows` composites the ROUTE_10 half (`pokemon_tower` + its `claimOnly` twin) |
+| [B32](B32-unnamed-building.md) | `SHIP_PORT` | 8 x 3 | 128x48 | 1x | **out of scope** -- not a building |
 
-## The silhouette test
+## How each blocker fell
 
-A drawing the pipeline can read floods to **one connected piece**. That is
-the most useful single number here, more than fill percentage: a drawing
-can be 95% filled and still be shredded.
+**B30 — the Pokemon Tower.** The catalogue read it as "truncated by the
+map edge; no roof drawn" — but the roof IS drawn, on the neighbouring
+map: the drawing straddles the LAVENDER_TOWN / ROUTE_10 boundary, and
+its 64px purple roof band stands in the route's last rows. `topRows`
+composites those rows above the matched grid so the model is built from
+the complete twenty-row drawing, and a `claimOnly` twin claims the
+ROUTE_10 cells so the roof half does not also stand as its own building.
+No `synthOutline`, no `roofCap`: the "missing" roof was a missing half
+of the drawing, not missing art.
 
-| id | fill | pieces | largest piece | note |
-| --- | --- | --- | --- | --- |
-| shipped, for reference | 82-95% | **1** | 100% | |
-| B19 | 76% | **1** | 100% | silhouette is fine; the problem is elsewhere |
-| B32 | 95% | 29 | 98% | mostly intact, fragments are the ship's fittings |
-| B30 | 37% | 126 | 25% | unbounded - see below |
+**B19 — the Indigo Plateau.** Two structures in one drawing: the
+plateau's full-width retaining wall, and the League lobby punching
+through it. The band table cannot say "and the wall stops here", so the
+premium kit's F5 added `parts`: each part is a tile-rect crop of the
+drawing with its own band table, standing over its own z span of the
+footprint; the model is the union, and faces where the parts touch cull
+each other. Both facades are drawn 32px, so the wall top and the lobby
+roof come out flush — which is what the drawing meant.
 
-## B19 - Indigo Plateau
-
-`INDIGO_PLATEAU` (0,1), doors at (9,5) and (10,5) into
-`INDIGO_PLATEAU_LOBBY`.
-
-Its silhouette is clean, and B23 - the Victory Road entrance, the same
-tileset and the same kind of rock face - was voxelized without trouble. The
-difference is that **B19 is two structures in one drawing**. Rows 0..47
-span the full 320px: that is the plateau wall. Rows 48..79 span only
-x=96..223: that is the lobby building standing in front of it, 8 cells
-wide.
-
-The band table describes one roof over one facade. Give B19 a single
-`roofRows` and the roof slab covers all 320 columns while walls exist only
-under the middle 128, so the two ends come out as a slab floating over
-nothing. Nothing in the band table can say "and the wall stops here".
-
-It needs either a way to express two stacked footprints in one template, or
-splitting into two drawings - which means changing the extraction, not the
-profile.
-
-## B30 - the Pokemon Tower
-
-`LAVENDER_TOWN` (12,0). A tall face of windows over brick.
-
-Two problems, and the second is the one that stops it.
-
-**Its silhouette is unbounded.** The drawing has no black outline anywhere
-on its boundary: row 0, row H-1 and both side columns are entirely light,
-so the flood enters at 318 separate border seeds and eats everything up to
-the window frames - 126 fragments, largest 25%. `seal` does not rescue it
-the way it did Route 10's block: sealing the south side alone changes
-nothing (37% either way), and sealing all four asserts the whole box is
-building.
-
-**It cannot be sealed, because the box is not all building.** The
-catalogue's own silhouette record says 1552 of the 6144 px are ground -
-a quarter of the box - including interior tile columns. Seal all four sides
-and that quarter becomes wall.
-
-**And it has no roof.** The tower sits at `y=0`, the top row of the map, so
-the drawing is cut off by the map boundary: rows 0..59 are windows and
-brick all the way up, with no roof band. A band table with a small
-`roofRows` caps it with its own top rows, which renders plausibly, but the
-cap is a reading the drawing does not support.
+**B23 — the Victory Road entrance.** Was voxelized "without trouble" in
+`tools/building_voxels.py` — and then never ported: the Lua data had a
+comment pointing at an entry "at the bottom of this file" that was not
+there. It is now, under `buildings.PLATEAU`, with the kit's carpentry
+switched off (`eaveOut = 0`, `sill = false`: a rock face grows no eaves).
 
 ## B32 - the S.S. Anne
 
@@ -85,4 +53,5 @@ mirror), which by itself fails the reference tool's symmetry assert. Its
 silhouette is largely fine, but the band table does not describe it at any
 setting: there is no roof-from-above band, no face-on facade, and no taper
 that means elevation. Voxelizing the S.S. Anne means a different archetype,
-not a band table.
+not a band table — and the premium kit plan (2026-08-17) ruled it out of
+scope on purpose.
