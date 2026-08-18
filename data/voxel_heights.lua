@@ -179,6 +179,54 @@ return {
       prop_ground = { [45] = 44, [46] = 44, [61] = 44, [62] = 44 },
     },
 
+    -- ------- Pokemon Gold (Gen 2) -------
+    --
+    -- The two Johto overworld tilesets.  Ids verified against the
+    -- extracted cache (gold/data/generated/tilesets.lua), not eyeballed:
+    -- the border tree wall is border-block 5 (tiles $1E/$1F over $2E/$2F
+    -- over $3E/$3F), the lone tree is block 115 ($46/$47 crown, $56/$57
+    -- base, $3C cap), the cut bush and the headbutt tree share blocks
+    -- 91/95/99/103 (COLL_CUT_TREE $12 on $13/$15/$45/$1D, COLL $15 on
+    -- the $1E-family tree), the sign is the $37/$38/$39/$3A board, tall
+    -- grass is COLL $18 on tile $04, and $14 is the ANIMATED WATER tile
+    -- (AnimateWaterTile) -- which is also the sea maps' border block, so
+    -- its per-tile pin is what lets an ocean border recess instead of
+    -- standing as a 16px wall.  The whirlpool frames ($32/$33/$42/$43)
+    -- are water for the same reason.  Collision covers walkable/water
+    -- cells at cell level already; these pins are what the border ring
+    -- and blocked cells read.
+    TILESET_JOHTO = {
+      -- the tree wall, the lone/headbutt tree and its cap: real round
+      -- canopies instead of the 16px checkered monolith
+      cylinder = { 30, 31, 46, 47, 60, 62, 63, 70, 71, 86, 87 },
+      -- the cuttable bush ($13/$15 over $45/$1D): a standing cutout,
+      -- exactly like Kanto's -- and it stands on the plain grass Cut
+      -- leaves behind ($05)
+      prop = { 19, 21, 29, 69 },
+      prop_ground = { [19] = 5, [21] = 5, [29] = 5, [69] = 5 },
+      -- the town/route sign board
+      signpost = { 55, 56, 57, 58 },
+      -- the animated flower tile (AnimateFlowerTile's target)
+      flower = { 3 },
+      -- animated water + whirlpool frames; see the header note
+      water = { 20, 50, 51, 66, 67 },
+      -- the vertical fence slats: thin per-cell standees, not boxes
+      post = { 65, 74, 91 },
+    },
+
+    -- Same sheet layout for every nature tile (verified side by side);
+    -- what changes is the building art.  One difference matters: this
+    -- tileset's border block runs $13/$15 as the tree wall's MIDDLE
+    -- band (JOHTO uses them for the cut bush), and it has no
+    -- COLL_CUT_TREE cells at all -- so here they are canopy, not prop.
+    TILESET_JOHTO_MODERN = {
+      cylinder = { 19, 21, 30, 31, 46, 47, 60, 62, 63, 70, 71, 86, 87 },
+      signpost = { 55, 56, 57, 58 },
+      flower = { 3 },
+      water = { 20, 50, 51, 66, 67 },
+      post = { 65, 74, 91 },
+    },
+
     -- The badge gyms and Bruno's room (one tileset): the bird statues
     -- that flank every gym's aisles, and Lt. Surge's trash cans.  A
     -- statue is one cell of figure ($02/$38/$12/$13) drawn over one

@@ -38,6 +38,9 @@
 -- the mod namespace (see main.lua): V.require loads a sibling module
 local V = ...
 
+-- which generation this boot is; the Gold arm of this feature hangs off it
+local Gen2Bridge = V.require("Gen2Bridge")
+
 local ModSetting = V.require("ModSetting")
 local BattleArena = V.require("BattleArena")
 local BattleCam = V.require("BattleCam")
@@ -104,6 +107,10 @@ OverworldBattle.backSetting = ModSetting.new(OverworldBattle.BACK_KEY,
 -- battle screen already draws exactly this.
 function OverworldBattle.backPinned()
   if not OverworldBattle.enabled() then return false end
+  -- Gold (v1): always pinned.  The player's back pic stays in the engine's
+  -- own panel and only the ENEMY stands on the arena -- the front-pic swap
+  -- and the player-side card are Gen 1 plumbing not yet ported.
+  if Gen2Bridge.isGen2() then return true end
   return OverworldBattle.backSetting:get() and true or false
 end
 
@@ -497,7 +504,12 @@ function OverworldBattle.update(dt)
     -- reason the scene is: it binds a canvas of its own. After the frost, so
     -- the glass is frosted from the world alone and never from the glyphs
     -- about to sit on it.
-    local okHud, up = pcall(OverworldBattle.snapHUDs, session.battle, shot)
+    -- snapped HUDs are Gen 1 plumbing (they re-drive drawHUDs); on Gold the
+    -- engine's own panel HUD draws over the diorama instead
+    local okHud, up = true, false
+    if not Gen2Bridge.isGen2() then
+      okHud, up = pcall(OverworldBattle.snapHUDs, session.battle, shot)
+    end
     session.snapped = (okHud and up) and true or false
     -- once per battle, not once per frame: a driver that cannot do this cannot
     -- do it sixty times a second either, and the fallback is silent and fine
@@ -693,6 +705,49 @@ local function texCanvasFor(side)
   return made
 end
 
+-- ------- the Gold texture route
+--
+-- Gen 1 renders a side by driving the whole drawPicsLayer with placement
+-- overrides; Gold's screen has no such layer -- it has drawPic(mon, back),
+-- the single call its own panel and lifted rows use.  So the card is baked
+-- by that call, at the pic's own slot in a GB-sized canvas, and the feet
+-- anchor is the slot's bottom-centre (hlcoord 12,0; a 7-tile box).
+local gen2InnerPic = nil     -- BS2.drawPic captured by installGen2
+local gen2Texturing = false  -- lets the bake through the panel suppression
+
+local function gen2SideTexture(screen, side)
+  -- v1 stages the enemy only; the player's back pic stays in the panel
+  if side ~= "enemy" then return nil end
+  if not gen2InnerPic then return nil end
+  local model = screen.battle
+  local mon = model and model.enemy
+  if not mon then return nil end
+  -- the trainer's intro front pic belongs to the classic slot, and slides
+  -- out there; only the MON stands on the field
+  if screen.showEnemyTrainer then return nil end
+  local canvas = texCanvasFor(side)
+  if not canvas then return nil end
+  local g = love.graphics
+  local prev = g.getCanvas()
+  gen2Texturing = true
+  local ok, err = pcall(function()
+    g.setCanvas(canvas)
+    g.clear(0, 0, 0, 0)
+    g.push()
+    g.origin()
+    g.setColor(1, 1, 1, 1)
+    gen2InnerPic(screen, mon, false)
+    g.pop()
+  end)
+  gen2Texturing = false
+  if prev then g.setCanvas(prev) else g.setCanvas() end
+  if not ok then error(err, 0) end
+  local BS2 = require("src.ui.gen2.BattleState")
+  local ax = (BS2.ENEMY_PIC_TILE_X + BS2.ENEMY_PIC_TILES / 2) * 8
+  local ay = (BS2.ENEMY_PIC_TILE_Y + BS2.ENEMY_PIC_TILES) * 8
+  return { canvas = canvas, ax = ax, ay = ay, trainer = false }
+end
+
 -- Whether this side has anything to draw at all. Mirrors drawPicsLayer's own
 -- guards, so an empty canvas is never hung on a quad: a fainted, hidden or
 -- not-yet-sent-out mon simply has no billboard this frame.
@@ -718,6 +773,10 @@ local OFF = {
 -- Render one side's pics layer into its canvas and report where the pic's
 -- feet ended up, in canvas coordinates.
 function OverworldBattle.sideTexture(battle, side)
+  -- a Gen 2 screen (drawPic + a battle model) takes the Gold route
+  if battle and battle.drawPic and battle.battle then
+    return gen2SideTexture(battle, side)
+  end
   if not (innerPics and battle) then return nil end
   if not sideVisible(battle, side) then return nil end
   local canvas = texCanvasFor(side)
@@ -805,7 +864,70 @@ end
 --
 -- Four wraps, each idempotent so a hot reload cannot stack them.
 
+-- The Gold arm.  The Gen 1 install patches ten members of a class Gold's
+-- battle never calls; Gold's one seam is drawWidescreen -- the call that
+-- fills the window white and draws the 160x144 panel over it.  With a
+-- staged shot, the white surround becomes the arena render, the panel's
+-- own full-screen white fill (Chrome.clear) is silenced for that one
+-- draw, and the enemy's flat pic stays out of the panel because the mon
+-- is standing on the field.  HUDs and the text box keep their engine
+-- boxes -- honest and readable over the diorama, snapped panels can come
+-- later.
+function OverworldBattle.installGen2()
+  local okB, BS2 = pcall(require, "src.ui.gen2.BattleState")
+  local okC, Chrome = pcall(require, "src.ui.gen2.Chrome")
+  if not (okB and okC and BS2 and Chrome) then return end
+  if BS2.terrariumGoldHook then return end
+  BS2.terrariumGoldHook = true
+
+  gen2InnerPic = BS2.drawPic
+
+  -- the enemy stands ON the arena, so its flat pic stays out of the panel;
+  -- gen2Texturing lets the card bake itself through this same call
+  function BS2:drawPic(mon, back)
+    if not back and not gen2Texturing and self.dramaticShapeShot
+        and not self.showEnemyTrainer then
+      return
+    end
+    return gen2InnerPic(self, mon, back)
+  end
+
+  -- Chrome.clear IS the battle's background fill; while the diorama is
+  -- under the panel it only keeps the ink-color contract
+  local suppressClear = false
+  local innerClear = Chrome.clear
+  function Chrome.clear()
+    if suppressClear then
+      love.graphics.setColor(0, 0, 0, 1)
+      return
+    end
+    return innerClear()
+  end
+
+  local innerWide = BS2.drawWidescreen
+  function BS2:drawWidescreen(winW, winH)
+    local shot = OverworldBattle.shot()
+    self.dramaticShapeShot = shot
+    if not shot then return innerWide(self, winW, winH) end
+    local G = love.graphics
+    G.setColor(1, 1, 1, 1)
+    local cw, ch = shot.canvas:getDimensions()
+    G.draw(shot.canvas, 0, 0, 0, (winW or cw) / cw, (winH or ch) / ch)
+    local scale = Chrome.fitScale(winW, winH)
+    local ox, oy = Chrome.fitOrigin(winW, winH, scale)
+    G.push()
+    G.translate(ox, oy)
+    G.scale(scale, scale)
+    suppressClear = true
+    local ok, err = pcall(self.drawScene, self)
+    suppressClear = false
+    G.pop()
+    if not ok then error(err, 0) end
+  end
+end
+
 function OverworldBattle.install()
+  if Gen2Bridge.isGen2() then return OverworldBattle.installGen2() end
   local OverworldState = require("src.world.OverworldController")
   if not OverworldState.dramaticShapeBattleHook then
     local inner = OverworldState.pushBattle

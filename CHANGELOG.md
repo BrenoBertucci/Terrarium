@@ -25,6 +25,51 @@ Tags and packages:
 
 ## Unreleased
 
+## 1.24.0-mobile
+
+### Pokemon Gold (Gen 2) support — first pass
+
+The mod now loads and runs on the engine's Gold (Beta) column
+(`gen2compat` in the manifest; engine 0.2.x serves Gen 1 module names
+through its `src/mods/Gen2Compat.lua` facades). What was ported:
+
+- **Neighbor Map instances** (`lib/Gen2Bridge.lua`): Gold's world keeps
+  `{ id, ox, oy, image }` neighbor rows with no Map object — everything
+  here reads `nb.map`. The bridge wraps `World:rebuildNeighbors` and
+  hangs a real `src/world/gen2/Map.lua` instance on every row, so all
+  26 call sites see Gen 1's shape unedited. It also gives Gold's Player
+  the seven-value `pose()` its NPCs already carry.
+- **Terrain atlas** (`TerrainAtlas`): Gold has no per-map TileRenderer,
+  and its sheets are 4-shade grayscale with the colour in per-tile
+  palettes. The atlas is now baked per tileset+environment: every
+  pixel's shade swapped for its tile's `tilePalettes` slot out of
+  `Palettes.bgSet`, at DAY — this mod's own DayNight rig keeps the hour.
+- **Tile classification** (`TileShape`, `VoxelScene`): ground heights
+  resolve through `TileShape.at` (the cell rules) instead of the raw
+  per-tile table — on Gold every tile fell to the "wall" fallback and
+  walkers floated at wall height. Tall grass now classifies from the
+  collision byte (`isGrassCell`) when the tileset carries no
+  `grassTile` pin. `cellTile` reads became `tileAt(cx*2, cy*2+1)`
+  (identical on Gen 1; Gold's `cellTile` answers COLL_* bytes).
+- **Doors** (`Structures`): Gold has no door tile set — a door is a warp
+  collision kind, answered by `Map:isDoorTileCell`.
+- **Overworld battle, Gold arm** (`OverworldBattle.installGen2`): Gold's
+  one seam is `drawWidescreen` — the white surround becomes the staged
+  arena render, the panel's `Chrome.clear` is silenced under it, and
+  the enemy's card is baked through the screen's own `drawPic` at the
+  classic slot (feet at hlcoord 12,0 + 7 tiles). v1: the enemy stands
+  on the field, the player's back pic stays pinned in the panel, HUDs
+  and text keep the engine's boxes (no snapped/frosted panels yet).
+- **BattleScene**: a state with no `paletteNameFor` (Gold) answers nil —
+  the colour is already in the art on that path.
+
+Not yet exercised on Gold: ECOLOGY's re-weighting (Gold has native
+time-of-day tables — it should probably stand down there), WILD roamer
+art bakes, AUTO-FARM, SHELTER/ROUTINES over Gen 2 NPC routines, the
+MINIMAP, StartMenu XY art, HIDDEN items glints, and the HORIZON
+skyline over Johto's connection graph. Yellow verified unregressed
+(voxel pass, trees, lamps, staged battle with snapped HUDs).
+
 ## 1.23.1-mobile
 
 ### Townsfolk agenda
