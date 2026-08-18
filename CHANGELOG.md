@@ -19,11 +19,22 @@ MAJOR.MINOR.PATCH[-CHANNEL]
 
 Tags and packages:
 
-- Git tag: `v1.23.0-mobile`
-- Zip asset: `TERRARIUM-1.23.0-mobile.zip`
-- `manifest.json` / catalog `version` field: `1.23.0-mobile`
+- Git tag: `v1.23.1-mobile`
+- Zip asset: `TERRARIUM-1.23.1-mobile.zip`
+- `manifest.json` / catalog `version` field: `1.23.1-mobile`
 
 ## Unreleased
+
+## 1.23.1-mobile
+
+### Townsfolk agenda
+
+The day post is a **radius**, not a single tile. Arrival used to demand the
+exact cell, so a walker one step off its anchor was "not at post": freeze,
+walk back, release, wander a step, walk back. In Fuchsia that made the
+town deader than Gen 1. Anywhere within three cells now counts as being
+at your post, and inside that leash the engine's own wander is untouched.
+The night doorway stays exact -- standing near it is standing in the street.
 
 ## 1.23.0-mobile
 

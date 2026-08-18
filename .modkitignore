@@ -80,6 +80,7 @@ tests/bagpockets_probe.lua
 tests/battlescreen_probe.lua
 tests/flock_size_probe.lua
 tests/walkers_probe.lua
+tests/agenda_shot_probe.lua
 
 # NOTE: twenty older probes are still NOT listed here and therefore still
 # ship (ambient_beds, ambsound_cost, carry_headless, coexist, ds_z_anchor,
