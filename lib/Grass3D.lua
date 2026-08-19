@@ -27,13 +27,20 @@ local Voxel3D = V.require("Voxel3D")
 
 local Grass3D = {}
 
--- mesh first = default when the bake ships with the mod
+-- DISCONTINUED (2026-08-18, by request): the authored 3D tuft path is
+-- retired and tall grass is always the classic voxel slab. The GRASS row
+-- is off the menu (main.lua), and wantsMesh answers false regardless of
+-- any "mesh" a save still carries -- available() reads through it, so
+-- Structures.buildGrass falls to the slab everywhere. The bake loaders,
+-- the meadow build and the crush machinery below are kept dormant rather
+-- than deleted: crush/wear still run against the slab, and tearing the
+-- module out would take those seams with it.
 Grass3D.setting = ModSetting.new("grass3d", "GRASS",
                                  { "mesh", "voxel" },
                                  { "3D", "VOXEL" })
 
 function Grass3D.wantsMesh()
-  return Grass3D.setting:get() == "mesh"
+  return false
 end
 
 -- Triangles a single tuft may cost, and it is a SMALL number on purpose.

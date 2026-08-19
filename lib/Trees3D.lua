@@ -50,8 +50,57 @@
 local V = ...
 
 local Voxel3D = V.require("Voxel3D")
+local ModSetting = V.require("ModSetting")
 
 local Trees3D = {}
+
+-- The TREES options row picks the path:
+--   3D     the authored bake on every round-tree site (default)
+--   VOXEL  the classic outline-hulled ball, even with the bake on disk
+-- available() answers false on VOXEL, which is the single gate the mesher
+-- consults -- so the row decides at chunk-build time, and flipping it has
+-- to drop the built meshes (remesh below) or the forest keeps the shape it
+-- was built with.
+Trees3D.setting = ModSetting.new("trees3d", "TREES",
+                                 { "3d", "voxel" },
+                                 { "3D", "VOXEL" })
+
+function Trees3D.wants3D()
+  return Trees3D.setting:get() == "3d"
+end
+
+-- Remesh every map when the row flips: hull quads vs recorded sites are
+-- chosen at Structures build time (treesAuthored), so a live toggle has to
+-- drop the cached chunk meshes AND this module's combined tree meshes.
+local function remesh()
+  pcall(function()
+    V.require("ChunkMesher").invalidate()
+  end)
+  pcall(function()
+    Trees3D.invalidate()
+  end)
+end
+
+-- OPTIONS row: cycle then rebuild. The manager page writes through
+-- mod.options_changed (main.lua), which calls onOptionsChanged for this key.
+function Trees3D.setting:row()
+  local self_ = self
+  return {
+    id = ((V.mod and V.mod.id) or "TERRARIUM") .. ":" .. self.key,
+    label = self.label,
+    value = function() return self_.labels[self_:read()] end,
+    step = function(game, dir)
+      self_:cycle(game, dir)
+      remesh()
+      return true
+    end,
+  }
+end
+
+function Trees3D.onOptionsChanged(value)
+  Trees3D.setting:sync(value)
+  remesh()
+end
 
 Trees3D.ASSET_DIR = "assets/ground/tree/"
 
@@ -406,6 +455,9 @@ function Trees3D.loaded()
 end
 
 function Trees3D.available()
+  -- the row first: VOXEL means the hulls whatever is on disk, and it costs
+  -- nothing here -- the bake loaders never run
+  if not Trees3D.wants3D() then return false end
   return #Trees3D.loaded() > 0
 end
 

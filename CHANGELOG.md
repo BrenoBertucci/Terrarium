@@ -25,6 +25,27 @@ Tags and packages:
 
 ## Unreleased
 
+### TREES options row — the forest, back to voxel on demand
+
+New **TREES** row (3D / VOXEL), sitting with the other look rows. 3D is
+the authored tree bake on every round-tree site, as before; VOXEL hands
+the forest back to the classic outline-hulled balls carved from the
+tileset art — the pre-Trees3D look — even with the bake on disk. The
+row decides at chunk-build time (`Trees3D.available()` is the single
+gate the mesher consults), so flipping it drops the cached chunk meshes
+and the combined tree meshes and the map rebuilds over the next frames,
+from the OPTIONS row and the mod manager's page alike.
+
+### 3D grass discontinued
+
+The authored 3D grass tuft path (GRASS row) is retired: tall grass is
+always the classic voxel slab now. The row is off both menus and
+`Grass3D.wantsMesh()` answers false regardless of what a save still
+carries, so `Structures.buildGrass` falls to the slab everywhere. The
+slab keeps the wind sway and the foot-crush it already had. The module
+and its bake loaders stay in the tree, dormant, because the crush/wear
+seams live there.
+
 ## 1.26.0-mobile
 
 ### Pokemon Gold (Gen 2) — early first pass. Play Gen 1.
