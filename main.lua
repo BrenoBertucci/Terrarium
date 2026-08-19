@@ -122,7 +122,7 @@ local DayNight = V.require("DayNight")
 local DayTint = V.require("DayTint")
 local Quality = V.require("Quality")
 local Wind = V.require("Wind")
-local Grass3D = V.require("Grass3D")
+local Trees3D = V.require("Trees3D")
 local Water = V.require("Water")
 local WaterBody = V.require("WaterBody")
 local FloorArt = V.require("FloorArt")
@@ -583,15 +583,15 @@ local SETTINGS = {
     .. "down and damps it, settled snow bows it over, feet flatten it and "
     .. "it springs back.",
     full = true },
-  -- Grass shape is not a camera preset: both FULL and a light RES need to
-  -- be able to pick the cheap slab if the authored tufts are too heavy.
-  { Grass3D.setting,
-    "How tall grass is built in the diorama. 3D stamps the authored tuft "
-    .. "bake under assets/ground/grass/ (real triangles, wind and "
-    .. "foot-crush on a mesh with thickness). VOXEL is the classic "
-    .. "tileset slab extruded from the grass graphic -- lighter, closer to "
-    .. "Gen 1. If the bake is missing, the slab is used either way. "
-    .. "Changing the row rebuilds the meadow on the next frames.",
+  -- Tree shape is not a camera preset either: both FULL and a light RES
+  -- need to be able to hand the forest back to the free hulls.
+  { Trees3D.setting,
+    "How trees are built in the diorama. 3D stamps the authored tree bake "
+    .. "under assets/ground/tree/ (real triangles, a real canopy, wind in "
+    .. "the crown) on every round-tree site. VOXEL is the classic "
+    .. "outline-hulled ball carved from the tileset art -- lighter, closer "
+    .. "to Gen 1. If the bake is missing, the hulls are used either way. "
+    .. "Changing the row rebuilds the map's meshes on the next frames.",
     full = true },
   { Water.setting,
     "The water surface as geometry rather than a scrolling picture: it "
@@ -1219,10 +1219,10 @@ mod.events:on("mod.options_changed", function(payload)
   for _, entry in ipairs(SETTINGS) do
     if payload.key == entry[1].key then entry[1]:sync(payload.value) end
   end
-  -- GRASS flipped from the manager page: rebuild meadows (OPTIONS row
-  -- remeshes inside Grass3D.setting:row already).
-  if payload.key == "grass3d" then
-    pcall(Grass3D.onOptionsChanged, payload.value)
+  -- TREES flipped from the manager page: rebuild the chunk meshes (OPTIONS
+  -- row remeshes inside Trees3D.setting:row already).
+  if payload.key == "trees3d" then
+    pcall(Trees3D.onOptionsChanged, payload.value)
   end
   -- 3D-BTL switched on from the manager's page pins BATTLE LAYOUT exactly as
   -- the OPTIONS row does. The manager persists its own value; this is the one
