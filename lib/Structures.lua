@@ -225,7 +225,7 @@ function Structures.forMap(map)
         hideBareRing = hullRingOnly or nil,
         runs = {}, skip = {}, ground = {}, doorFold = {}, objectQuads = {},
         grassQuads = {}, grassInstances = {}, flowerQuads = {},
-        roundStamps = {}, figures = {} }
+        roundStamps = {}, figures = {}, roadInstances = {}, groundInstances = {} }
   Buildings.build(S, map, pixels(tileset), perRow)
 
   -- Fold doors into their buildings. A door cell is WALKABLE (the player
@@ -2504,10 +2504,104 @@ local function isDecorGrassTile(map, tileId)
   return (set and set[tileId]) or false
 end
 
+-- ------- CUSTOM 3D SURFACES: ROAD AND GROUND -------
+-- Tiles that will be rendered as custom 3D surfaces with specific heights and colors
+-- Road: gray/dark gray, flat surface, 0.05 grass height, uses road.png
+-- Ground: brown/dark brown, flat surface, 0.1 grass height, uses ground.png
+
+local CUSTOM_ROAD_TILES = {
+  OVERWORLD = {},
+}
+
+local CUSTOM_GROUND_TILES = {
+  CAVERN = {},
+}
+
+local CUSTOM_GROUND_TILES = {
+  OVERWORLD = {},
+}
+
+-- Helper function to convert pixel coordinates to tile IDs
+local function pixelCoordsToTileIds(px, py, width, height, pixelsPerRow, tileSize)
+  pixelsPerRow = pixelsPerRow or 16
+  tileSize = tileSize or 8
+  
+  local startTileX = math.floor(px / tileSize)
+  local startTileY = math.floor(py / tileSize)
+  local endTileX = math.floor((px + width - 1) / tileSize)
+  local endTileY = math.floor((py + height - 1) / tileSize)
+  
+  local tileIds = {}
+  for ty = startTileY, endTileY do
+    for tx = startTileX, endTileX do
+      local tileId = ty * pixelsPerRow + tx
+      tileIds[#tileIds + 1] = tileId
+    end
+  end
+  return tileIds
+end
+
+-- Add road tiles by pixel coordinates
+function Structures.addRoadByPixelCoords(tilesetName, px, py, width, height, pixelsPerRow, tileSize)
+  if not CUSTOM_ROAD_TILES[tilesetName] then
+    CUSTOM_ROAD_TILES[tilesetName] = {}
+  end
+  
+  local tileIds = pixelCoordsToTileIds(px, py, width, height, pixelsPerRow, tileSize)
+  for _, tileId in ipairs(tileIds) do
+    CUSTOM_ROAD_TILES[tilesetName][tileId] = true
+  end
+  
+  return tileIds
+end
+
+-- Add ground tiles by pixel coordinates
+function Structures.addGroundByPixelCoords(tilesetName, px, py, width, height, pixelsPerRow, tileSize)
+  if not CUSTOM_GROUND_TILES[tilesetName] then
+    CUSTOM_GROUND_TILES[tilesetName] = {}
+  end
+  
+  local tileIds = pixelCoordsToTileIds(px, py, width, height, pixelsPerRow, tileSize)
+  for _, tileId in ipairs(tileIds) do
+    CUSTOM_GROUND_TILES[tilesetName][tileId] = true
+  end
+  
+  return tileIds
+end
+
+-- Check if a tile is a custom road tile
+local function isCustomRoadTile(map, tileId)
+  local def = map.def
+  local tid = (def and def.tileset) or (map.tileset and map.tileset.id)
+  local set = CUSTOM_ROAD_TILES[tid]
+  return (set and set[tileId]) or false
+end
+
+-- Check if a tile is a custom ground tile
+local function isCustomGroundTile(map, tileId)
+  local def = map.def
+  local tid = (def and def.tileset) or (map.tileset and map.tileset.id)
+  local set = CUSTOM_GROUND_TILES[tid]
+  return (set and set[tileId]) or false
+end
+
+-- ADD YOUR PIXEL COORDINATES HERE:
+-- Road tiles (using Grass3D with road texture)
+Structures.addRoadByPixelCoords("OVERWORLD", 24, 16, 8, 8)   -- square road 1: 24,16 to 31,23
+Structures.addRoadByPixelCoords("OVERWORLD", 72, 24, 8, 8)   -- square road 2: 72,24 to 79,31
+
+-- Ground tiles (using Grass3D with ground texture)
+Structures.addGroundByPixelCoords("CAVERN", 0, 16, 8, 8)   -- square ground: 0,16 to 7,23
+
 function Structures.buildGrass(S, map, x0, x1, y0, y1, data)
   local templates = {}
   local quads = S.grassQuads
   local instances = S.grassInstances
+  local roadInstances = S.roadInstances or {}  -- Road instances with 0.05 height
+  S.roadInstances = roadInstances
+  local groundInstances = S.groundInstances or {}  -- Ground instances with 0.1 height
+  S.groundInstances = groundInstances
+  
   -- Prefer the authored 3D tuft (assets/ground/grass/) when the bake is
   -- present. One instance per grass tile, random yaw/scale; the mesher
   -- stamps the triangle mesh. Falls back to the classic tileset slab when
@@ -2517,7 +2611,7 @@ function Structures.buildGrass(S, map, x0, x1, y0, y1, data)
     local ok, G = pcall(V.require, "Grass3D")
     if ok and G and G.available and G.available() then Grass3D = G end
   end
-  local dbgDecor, dbgLogged = 0, {}
+  
   for ty = y0, y1 do
     for tx = x0, x1 do
       Budget.tick()
@@ -2525,12 +2619,9 @@ function Structures.buildGrass(S, map, x0, x1, y0, y1, data)
       local s = S.shapeAt[k]
       local tileId = S.tileAt[k]
       local decor = isDecorGrassTile(map, tileId)
-      if decor then
-        dbgDecor = dbgDecor + 1
-        if #dbgLogged < 8 then
-          dbgLogged[#dbgLogged + 1] = ("(%d,%d)=%d"):format(tx, ty, tileId)
-        end
-      end
+      local road = isCustomRoadTile(map, tileId)
+      local ground = isCustomGroundTile(map, tileId)
+      
       -- tufts only where the CELL is tall grass by the engine's own rule
       -- (isGrassCell: the cell's collision tile). The grass GRAPHIC also
       -- appears as decorative filler inside ordinary ground blocks, and a
@@ -2566,11 +2657,24 @@ function Structures.buildGrass(S, map, x0, x1, y0, y1, data)
           end
         end
       end
+      
+      -- Road tiles using Grass3D mesh with road texture and 0.05 height
+      if road and Grass3D then
+        local instance = Grass3D.instanceForTile(tx, ty)
+        instance.heightScale = 0.05  -- 0.05 grass height for roads
+        instance.texture = "road"  -- Mark as road texture
+        roadInstances[#roadInstances + 1] = instance
+      end
+      
+      -- Ground tiles using Grass3D mesh with ground texture and 0.1 height
+      if ground and Grass3D then
+        local instance = Grass3D.instanceForTile(tx, ty)
+        instance.heightScale = 0.1  -- 0.1 grass height for ground
+        instance.texture = "ground"  -- Mark as ground texture
+        groundInstances[#groundInstances + 1] = instance
+      end
     end
   end
-  print(("[STRUCT_DECOR] buildGrass: %s decor-grass tile(s) matched (of %d checked); samples: %s")
-    :format(dbgDecor, (x1 - x0 + 1) * (y1 - y0 + 1),
-            #dbgLogged > 0 and table.concat(dbgLogged, " ") or "(none)"))
 end
 
 -- ---- flowers ----

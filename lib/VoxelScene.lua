@@ -1637,6 +1637,38 @@ function VoxelScene.render(state, w, h, vw, vh, paletteFor, eyes)
       end
     end
 
+    -- road mesh using Grass3D with road texture at 0.05 height
+    local roadMesh = ChunkMesher.road(state.map)
+    if roadMesh then
+      local roadTex = Grass3D and Grass3D.roadTexture() or nil
+      Voxel3D.draw(roadMesh, roadTex, nil, pull, nil, 0)  -- No sway for road
+    end
+    for i, nb in ipairs(state.neighbors or {}) do
+      if neighborLimit == nil or i <= neighborLimit then
+        local nbRoad = ChunkMesher.road(nb.map)
+        if nbRoad then
+          local roadTex = Grass3D and Grass3D.roadTexture() or nil
+          Voxel3D.draw(nbRoad, roadTex, Mat4.translate(nb.ox, 0, nb.oy), pull, nil, 0)
+        end
+      end
+    end
+
+    -- ground mesh using Grass3D with ground texture at 0.1 height
+    local groundMesh = ChunkMesher.ground(state.map)
+    if groundMesh then
+      local groundTex = Grass3D and Grass3D.groundTexture() or nil
+      Voxel3D.draw(groundMesh, groundTex, nil, pull, nil, 0)  -- No sway for ground
+    end
+    for i, nb in ipairs(state.neighbors or {}) do
+      if neighborLimit == nil or i <= neighborLimit then
+        local nbGround = ChunkMesher.ground(nb.map)
+        if nbGround then
+          local groundTex = Grass3D and Grass3D.groundTexture() or nil
+          Voxel3D.draw(nbGround, groundTex, Mat4.translate(nb.ox, 0, nb.oy), pull, nil, 0)
+        end
+      end
+    end
+
     -- The crush stays ON through the flowers. They are the other thing out
     -- here with a base in the ground and a top free to give, they grow in
     -- the same beds people walk through, and a boot that lays the grass flat

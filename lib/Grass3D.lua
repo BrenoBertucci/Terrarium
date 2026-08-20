@@ -222,6 +222,35 @@ function Grass3D.texture()
   return loadTexture()
 end
 
+function Grass3D.roadTexture()
+  local ok, R = pcall(V.require, "Road3D")
+  if ok and R and R.texture then
+    return R.texture()
+  end
+  return nil
+end
+
+function Grass3D.groundTexture()
+  local ok, R = pcall(V.require, "Road3D")
+  if ok and R and R.texture then
+    -- Load ground.png from the same directory as road.png
+    local Road3D = R
+    local path = V.path .. "/" .. Road3D.ASSET_DIR .. "ground.png"
+    local okA, Assets = pcall(require, "src.render.Assets")
+    if okA and Assets then
+      local okE, exists = pcall(Assets.exists, path)
+      if okE and exists then
+        local ok, img = pcall(Assets.image, path)
+        if ok and img then
+          pcall(img.setFilter, img, "nearest", "nearest")
+          return img
+        end
+      end
+    end
+  end
+  return nil
+end
+
 function Grass3D.meta()
   loadTemplate()
   return meta
@@ -260,25 +289,83 @@ local function stamp(verts, indices, tplV, tplI, ox, oz, yaw, scale, heightScale
 end
 
 -- Build the whole-map grass mesh from instance records
--- `{ wx, wz [, yaw, scale, heightScale] }` (world-pixel tile origin, not cell centre).
+-- `{ wx, wz [, yaw, scale, heightScale, texture] }` (world-pixel tile origin, not cell centre).
 function Grass3D.meshFromInstances(instances)
   local t = loadTemplate()
   if not t or not instances or #instances == 0 then return nil end
   local verts, indices = {}, {}
   local tplV, tplI = t.verts, t.indices
+  
+  -- Build grass mesh (only non-road/ground instances)
+  for i = 1, #instances do
+    if instances[i].texture ~= "road" and instances[i].texture ~= "ground" then
+      local inst = instances[i]
+      local wx = inst.wx or 0
+      local wz = inst.wz or 0
+      local yaw = inst.yaw or 0
+      local scale = inst.scale or 1
+      local heightScale = inst.heightScale or nil
+      stamp(verts, indices, tplV, tplI, wx + 4, wz + 4, yaw, scale, heightScale)
+    end
+  end
+  
+  local mesh = Voxel3D.newMesh(verts, indices)
+  if mesh and loadTexture() then
+    pcall(mesh.setTexture, mesh, loadTexture())
+  end
+  return mesh
+end
+
+-- Build road mesh from road instances
+function Grass3D.roadMeshFromInstances(instances)
+  local t = loadTemplate()
+  if not t or not instances or #instances == 0 then return nil end
+  local verts, indices = {}, {}
+  local tplV, tplI = t.verts, t.indices
+  
   for i = 1, #instances do
     local inst = instances[i]
     local wx = inst.wx or 0
     local wz = inst.wz or 0
     local yaw = inst.yaw or 0
     local scale = inst.scale or 1
-    local heightScale = inst.heightScale or nil  -- Optional height scale for decorative grass
-    -- centre the tuft in its 8x8 tile
+    local heightScale = inst.heightScale or 0.05  -- Roads always 0.05 height
     stamp(verts, indices, tplV, tplI, wx + 4, wz + 4, yaw, scale, heightScale)
   end
+  
   local mesh = Voxel3D.newMesh(verts, indices)
-  if mesh and loadTexture() then
-    pcall(mesh.setTexture, mesh, loadTexture())
+  if mesh then
+    local roadTex = Grass3D.roadTexture()
+    if roadTex then
+      pcall(mesh.setTexture, mesh, roadTex)
+    end
+  end
+  return mesh
+end
+
+-- Build ground mesh from ground instances
+function Grass3D.groundMeshFromInstances(instances)
+  local t = loadTemplate()
+  if not t or not instances or #instances == 0 then return nil end
+  local verts, indices = {}, {}
+  local tplV, tplI = t.verts, t.indices
+  
+  for i = 1, #instances do
+    local inst = instances[i]
+    local wx = inst.wx or 0
+    local wz = inst.wz or 0
+    local yaw = inst.yaw or 0
+    local scale = inst.scale or 1
+    local heightScale = inst.heightScale or 0.1  -- Ground always 0.1 height
+    stamp(verts, indices, tplV, tplI, wx + 4, wz + 4, yaw, scale, heightScale)
+  end
+  
+  local mesh = Voxel3D.newMesh(verts, indices)
+  if mesh then
+    local groundTex = Grass3D.groundTexture()
+    if groundTex then
+      pcall(mesh.setTexture, mesh, groundTex)
+    end
   end
   return mesh
 end

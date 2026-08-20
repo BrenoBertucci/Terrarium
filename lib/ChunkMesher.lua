@@ -1057,6 +1057,30 @@ local function buildGrassMesh(map)
   return quadsMesh(S.grassQuads)
 end
 
+-- Road mesh using Grass3D with road texture and 0.05 height
+local function buildRoadMesh(map)
+  local S = Structures.forMap(map)
+  if S.roadInstances and #S.roadInstances > 0 then
+    local ok, G = pcall(V.require, "Grass3D")
+    if ok and G and G.roadMeshFromInstances then
+      return G.roadMeshFromInstances(S.roadInstances)
+    end
+  end
+  return nil
+end
+
+-- Ground mesh using Grass3D with ground texture and 0.1 height
+local function buildGroundMesh(map)
+  local S = Structures.forMap(map)
+  if S.groundInstances and #S.groundInstances > 0 then
+    local ok, G = pcall(V.require, "Grass3D")
+    if ok and G and G.groundMeshFromInstances then
+      return G.groundMeshFromInstances(S.groundInstances)
+    end
+  end
+  return nil
+end
+
 -- The flower billboards as their own mesh, for the same reason as the
 -- grass one: it draws AFTER the characters WITH the same camera-ward
 -- pull, so a flower south of a walker occludes their feet and one north
@@ -1067,6 +1091,15 @@ end
 -- tufts.
 local function buildFlowerMesh(map)
   return quadsMesh(Structures.forMap(map).flowerQuads)
+end
+
+-- Custom surfaces (road and ground) as their own mesh
+local function buildCustomSurfaceMesh(map)
+  local S = Structures.forMap(map)
+  if S.customSurfaceMesh then
+    return S.customSurfaceMesh
+  end
+  return nil
 end
 
 -- Authored FIGURES (a person drawn into furniture) as one mesh each, in
@@ -1115,7 +1148,7 @@ local function entry(id)
 end
 
 local function releaseEntry(c)
-  for _, slot in ipairs({ "full", "body", "grass", "flowers" }) do
+  for _, slot in ipairs({ "full", "body", "grass", "flowers", "custom", "road", "ground" }) do
     local mesh = c[slot]
     if mesh and mesh.release then pcall(mesh.release, mesh) end
     c[slot] = nil
@@ -1160,21 +1193,31 @@ end
 local function runJob(job)
   local map = job.map
   local c = entry(job.id)
-  if c.grass == nil or c.flowers == nil or c.figures == nil
+  if c.grass == nil or c.flowers == nil or c.figures == nil or c.custom == nil or c.road == nil or c.ground == nil
      or (c.stale and c.stale.aux) then
     local okG, grass = pcall(buildGrassMesh, map)
     local okF, flowers = pcall(buildFlowerMesh, map)
     local okX, figures = pcall(buildFigureMeshes, map)
+    local okC, custom = pcall(buildCustomSurfaceMesh, map)
+    local okR, road = pcall(buildRoadMesh, map)
+    local okGnd, ground = pcall(buildGroundMesh, map)
     if (gen[job.id] or 0) ~= job.gen then
       if okG and grass and grass.release then pcall(grass.release, grass) end
       if okF and flowers and flowers.release then
         pcall(flowers.release, flowers)
       end
       if okX then releaseFigures(figures) end
+      if okC and custom and custom.release then pcall(custom.release, custom) end
+      if okR and road and road.release then pcall(road.release, road) end
+      if okGnd and ground and ground.release then pcall(ground.release, ground) end
       return
     end
     swapSlot(c, "grass", (okG and grass) or false)
     swapSlot(c, "flowers", (okF and flowers) or false)
+    swapSlot(c, "figures", (okX and figures) or false)
+    swapSlot(c, "custom", (okC and custom) or false)
+    swapSlot(c, "road", (okR and road) or false)
+    swapSlot(c, "ground", (okGnd and ground) or false)
     releaseFigures(c.figures)
     c.figures = (okX and figures) or false
     if c.stale then c.stale.aux = nil end
@@ -1331,11 +1374,17 @@ end
 function ChunkMesher.get(map, bodyOnly, masks)
   local slot = bodyOnly and "body" or "full"
   local c = entry(map.id)
-  if c.grass == nil or c.flowers == nil or (c.stale and c.stale.aux) then
+  if c.grass == nil or c.flowers == nil or c.custom == nil or c.road == nil or c.ground == nil or (c.stale and c.stale.aux) then
     local okG, grass = pcall(buildGrassMesh, map)
     local okF, flowers = pcall(buildFlowerMesh, map)
+    local okC, custom = pcall(buildCustomSurfaceMesh, map)
+    local okR, road = pcall(buildRoadMesh, map)
+    local okGnd, ground = pcall(buildGroundMesh, map)
     swapSlot(c, "grass", (okG and grass) or false)
     swapSlot(c, "flowers", (okF and flowers) or false)
+    swapSlot(c, "custom", (okC and custom) or false)
+    swapSlot(c, "road", (okR and road) or false)
+    swapSlot(c, "ground", (okGnd and ground) or false)
     if c.stale then c.stale.aux = nil end
   end
   if c[slot] == nil or (c.stale and c.stale[slot]) then
@@ -1373,6 +1422,21 @@ end
 function ChunkMesher.flowers(map)
   local c = cache[map.id]
   return c and c.flowers or nil
+end
+
+function ChunkMesher.custom(map)
+  local c = cache[map.id]
+  return c and c.custom or nil
+end
+
+function ChunkMesher.road(map)
+  local c = cache[map.id]
+  return c and c.road or nil
+end
+
+function ChunkMesher.ground(map)
+  local c = cache[map.id]
+  return c and c.ground or nil
 end
 
 -- Authored figures as `{ mesh, wx, wz, y }` records -- each placed by its
