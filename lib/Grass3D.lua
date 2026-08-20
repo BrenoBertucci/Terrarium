@@ -236,12 +236,16 @@ local function unit(tx, ty, salt)
 end
 
 -- Append one rotated/scaled instance of the template into verts/indices.
-local function stamp(verts, indices, tplV, tplI, ox, oz, yaw, scale)
+local function stamp(verts, indices, tplV, tplI, ox, oz, yaw, scale, heightScale)
   local c, s = math.cos(yaw), math.sin(yaw)
   local base = #verts
   for i = 1, #tplV do
     local v = tplV[i]
     local x, y, z = v[1] * scale, v[2] * scale, v[3] * scale
+    -- Apply height scale only to Y component (height), not X/Z (width)
+    if heightScale then
+      y = v[2] * scale * heightScale
+    end
     local rx = x * c - z * s
     local rz = x * s + z * c
     -- VertexShade: magnitude is cel shade, sign is face-up (snow). Positive
@@ -256,7 +260,7 @@ local function stamp(verts, indices, tplV, tplI, ox, oz, yaw, scale)
 end
 
 -- Build the whole-map grass mesh from instance records
--- `{ wx, wz [, yaw, scale] }` (world-pixel tile origin, not cell centre).
+-- `{ wx, wz [, yaw, scale, heightScale] }` (world-pixel tile origin, not cell centre).
 function Grass3D.meshFromInstances(instances)
   local t = loadTemplate()
   if not t or not instances or #instances == 0 then return nil end
@@ -268,8 +272,9 @@ function Grass3D.meshFromInstances(instances)
     local wz = inst.wz or 0
     local yaw = inst.yaw or 0
     local scale = inst.scale or 1
+    local heightScale = inst.heightScale or nil  -- Optional height scale for decorative grass
     -- centre the tuft in its 8x8 tile
-    stamp(verts, indices, tplV, tplI, wx + 4, wz + 4, yaw, scale)
+    stamp(verts, indices, tplV, tplI, wx + 4, wz + 4, yaw, scale, heightScale)
   end
   local mesh = Voxel3D.newMesh(verts, indices)
   if mesh and loadTexture() then

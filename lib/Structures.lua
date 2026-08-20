@@ -2466,6 +2466,44 @@ local function grassTemplate(map, data, tileId)
   return quads
 end
 
+-- Plain decorative grass tiles that should get the same 3D tufts as
+-- real tall grass, without being encounter cells: two tileset
+-- rectangles picked out by pixel coordinate, each 8px wide by 16px
+-- tall (one tile column, two rows), each row a different grass
+-- variant --
+--   104,0  - 111,15  -> tiles 13, 29
+--   96,16  - 103,31  -> tiles 44, 60
+-- (tilesPerRow 16, 8px tiles: tile = floor(py/8)*16 + floor(px/8))
+-- Matched purely by raw tile id, with NO isGrassCell requirement --
+-- these are ground art the engine never treats as tall grass, so
+-- there's no encounter collision riding along and no risk of the
+-- town-plaza bug the comment in buildGrass describes below (that bug
+-- came from matching the ONE shared tall-grass tile id everywhere;
+-- this matches a different, deliberately-picked set of ids instead).
+-- Scoped to OVERWORLD: 13/29 are that tileset's LEDGE tiles in
+-- data/voxel_heights.lua, a coincidence worth keeping contained to one
+-- tileset rather than letting it leak into any other.
+local DECOR_GRASS_TILES = {
+  OVERWORLD = {
+    [13] = true, [29] = true,
+    [44] = true, [60] = true,
+  },
+}
+
+-- Add additional grass tiles based on pixel coordinates
+-- Rectangle 1: 104,0 to 111,15 (8x16 pixels = 1x2 tiles) -> tiles 13, 29
+-- Rectangle 2: 96,16 to 103,31 (8x16 pixels = 1x2 tiles) -> tiles 44, 60
+-- These are already included above, but let's add more if needed
+-- To add more grass areas, simply add more tile IDs here:
+-- DECOR_GRASS_TILES.OVERWORLD[tileId] = true
+
+local function isDecorGrassTile(map, tileId)
+  local def = map.def
+  local tid = (def and def.tileset) or (map.tileset and map.tileset.id)
+  local set = DECOR_GRASS_TILES[tid]
+  return (set and set[tileId]) or false
+end
+
 function Structures.buildGrass(S, map, x0, x1, y0, y1, data)
   local templates = {}
   local quads = S.grassQuads
@@ -2479,21 +2517,38 @@ function Structures.buildGrass(S, map, x0, x1, y0, y1, data)
     local ok, G = pcall(V.require, "Grass3D")
     if ok and G and G.available and G.available() then Grass3D = G end
   end
+  local dbgDecor, dbgLogged = 0, {}
   for ty = y0, y1 do
     for tx = x0, x1 do
       Budget.tick()
       local k = keyOf(tx, ty)
       local s = S.shapeAt[k]
+      local tileId = S.tileAt[k]
+      local decor = isDecorGrassTile(map, tileId)
+      if decor then
+        dbgDecor = dbgDecor + 1
+        if #dbgLogged < 8 then
+          dbgLogged[#dbgLogged + 1] = ("(%d,%d)=%d"):format(tx, ty, tileId)
+        end
+      end
       -- tufts only where the CELL is tall grass by the engine's own rule
       -- (isGrassCell: the cell's collision tile). The grass GRAPHIC also
       -- appears as decorative filler inside ordinary ground blocks, and a
       -- tile-level test sprouted tufts all over town plazas.
-      if s and s.art == "grass"
-         and map:isGrassCell(math.floor(tx / 2), math.floor(ty / 2)) then
+      --
+      -- Exception: DECOR_GRASS_TILES above, matched purely by tile id,
+      -- no isGrassCell needed -- see the comment on that table.
+      if (s and s.art == "grass"
+          and map:isGrassCell(math.floor(tx / 2), math.floor(ty / 2)))
+         or decor then
         if Grass3D then
-          instances[#instances + 1] = Grass3D.instanceForTile(tx, ty)
+          local instance = Grass3D.instanceForTile(tx, ty)
+          -- Make decorative grass half height (not half scale)
+          if decor then
+            instance.heightScale = 0.5  -- Custom height scale for decorative grass
+          end
+          instances[#instances + 1] = instance
         else
-          local tileId = S.tileAt[k]
           local tpl = templates[tileId]
           if not tpl then
             tpl = grassTemplate(map, data, tileId)
@@ -2513,6 +2568,9 @@ function Structures.buildGrass(S, map, x0, x1, y0, y1, data)
       end
     end
   end
+  print(("[STRUCT_DECOR] buildGrass: %s decor-grass tile(s) matched (of %d checked); samples: %s")
+    :format(dbgDecor, (x1 - x0 + 1) * (y1 - y0 + 1),
+            #dbgLogged > 0 and table.concat(dbgLogged, " ") or "(none)"))
 end
 
 -- ---- flowers ----
