@@ -57,13 +57,13 @@ BattleDOF.SPACING = 0.0095
 BattleDOF.SATURATION = 1.12
 
 local SHADER = [[
-  uniform highp vec2 dir;        // one texel step along the axis being blurred
-  uniform highp float focusY;
-  uniform highp float band;
-  uniform highp float range;
-  uniform highp float spacing;
-  uniform highp float boost;     // 0 = plain blur pass, 1 = final pass (colour pop)
-  uniform highp float saturation;
+  uniform vec2 dir;        // one texel step along the axis being blurred
+  uniform float focusY;
+  uniform float band;
+  uniform float range;
+  uniform float spacing;
+  uniform float boost;     // 0 = plain blur pass, 1 = final pass (colour pop)
+  uniform float saturation;
   vec4 effect(vec4 color, Image tex, vec2 tc, vec2 sc) {
     float d = abs(tc.y - focusY) - band;
     float s = clamp(d / range, 0.0, 1.0);
@@ -85,10 +85,17 @@ local SHADER = [[
 local shader = nil            -- nil = untried, false = unavailable
 local ping, pong, cw, ch = nil, nil, 0, 0
 
+-- Cache the shader availability to prevent repeated re-checking during
+-- route/scene changes. Once the shader is successfully compiled, we assume
+-- the hardware capabilities don't change during gameplay (context loss is
+-- handled elsewhere).
+local shaderCache = nil  -- nil = untried, true = available, false = unavailable
+
 local function getShader()
   if shader == nil then
     local ok, sh = pcall(love.graphics.newShader, SHADER)
     shader = (ok and sh) or false
+    shaderCache = (ok and sh) and true or false
   end
   return shader or nil
 end
@@ -182,6 +189,8 @@ end
 -- Drop the GPU objects (window resize, hot reload).
 function BattleDOF.invalidate()
   ping, pong, cw, ch = nil, nil, 0, 0
+  shader = nil
+  shaderCache = nil
 end
 
 return BattleDOF

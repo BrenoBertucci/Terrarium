@@ -101,6 +101,13 @@ function BattleCam.rigFor(arena)
   return BattleCam.RIGS[want] or BattleCam.RIGS[BattleCam.DEFAULT_RIG]
 end
 
+-- The frameH for a given arena's rig, used by BattleScene to size the sun
+-- frustum.
+function BattleCam.frameH(arena)
+  local R = BattleCam.rigFor(arena)
+  return R and R.frameH or BattleCam.RIGS[BattleCam.DEFAULT_RIG].frameH
+end
+
 -- ------- the drift
 --
 -- A slow orbit about the arena's vertical axis. Rotating about a point

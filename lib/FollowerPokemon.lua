@@ -1,186 +1,179 @@
--- FOLLOWER POKEMON: Stadium models that follow the player character.
+-- STADIUM FOLLOWER: Replace Yellow's Pikachu follower with any Stadium Pokémon.
 --
--- This module handles loading and rendering Stadium models that follow
--- the player around the map, similar to Pikachu in Pokémon Yellow.
-
+-- This module extends the gen1recomp Pikachu follower system to use 3D Stadium
+-- models instead of 2D sprites. It hooks into the overworld rendering to draw
+-- Stadium models for the follower NPC.
+--
 -- the mod namespace (see main.lua): V.require loads a sibling module
 local V = ...
 
 local Mat4 = V.require("Mat4")
-local Voxel3D = V.require("Voxel3D")
 local StadiumPack = V.require("StadiumPack")
 local StadiumRig = V.require("StadiumRig")
+local StadiumMon = V.require("StadiumMon")
+local Voxel3D = V.require("Voxel3D")
 
-local FollowerPokemon = {}
+local StadiumFollower = {}
 
--- Cache for loaded follower rigs to avoid reloading
+-- Cache for loaded follower rigs
 local rigCache = {}
 
--- Current follower data
+-- Current follower species (nil = disabled, 1-151 = dex number)
+local currentSpecies = nil
+
+-- Current rig and model
 local currentRig = nil
-local currentStadiumModel = nil
-local currentDex = nil
-local currentFilename = nil
+local currentModel = nil
 
--- Follower positioning
-local followerOffset = { x = 0, y = 0, z = -2 }  -- Behind player by 2 tiles
-local followerScale = 0.8  -- Slightly smaller than player
+-- Animation state
+local animTime = 0
+local currentAnim = 1  -- 1 = idle
 
--- Load a Stadium model by dex number as a follower
-function FollowerPokemon.load(dex)
-  if not dex then return false, "no dex number" end
+-- ------- Configuration
+
+-- Scale for the follower model (smaller than player)
+local FOLLOWER_SCALE = 0.9  -- 0.3 * 3 = 0.9 (3x larger)
+
+-- ------- Species Management
+
+-- Set the follower species by dex number (1-151)
+function StadiumFollower.setSpecies(dex)
+  if dex == currentSpecies then return true end
   
-  print("FollowerPokemon.load: Attempting to load dex", dex)
+  -- Clear current rig
+  if currentRig then
+    currentRig:release()
+    currentRig = nil
+  end
+  currentModel = nil
+  currentSpecies = nil
+  
+  if not dex or dex < 1 or dex > 151 then
+    return true  -- Disabled
+  end
   
   -- Check cache first
   if rigCache[dex] then
     currentRig = rigCache[dex]
-    currentStadiumModel = currentRig and currentRig.model
-    currentDex = dex
-    currentFilename = "follower_" .. dex
-    print("FollowerPokemon.load: Loaded from cache")
+    currentModel = currentRig.model
+    currentSpecies = dex
     return true
   end
   
   -- Load the Stadium model
   local model = StadiumPack.load(dex)
   if not model then
-    print("FollowerPokemon.load: Failed to load Stadium model for dex", dex)
-    return false, "could not load stadium model"
+    print("StadiumFollower: Failed to load model for dex", dex)
+    return false
   end
   
   if model.staticPose then
-    print("FollowerPokemon.load: Model has static pose, declining")
-    return false, "model has static pose"
+    print("StadiumFollower: Model has static pose, declining dex", dex)
+    return false
   end
   
   -- Create the rig
   local rig = StadiumRig.new(model)
   if not rig then
-    print("FollowerPokemon.load: Failed to create rig")
-    return false, "could not create rig"
-  end
-  
-  -- Cache the rig
-  rigCache[dex] = rig
-  currentRig = rig
-  currentStadiumModel = model
-  currentDex = dex
-  currentFilename = "follower_" .. dex
-  
-  -- Start idle animation
-  rig:pose(1, 0, true)  -- Animation 1 is idle, time 0, loop true
-  rig:skin(0)  -- No rotation initially
-  
-  print("FollowerPokemon.load: Successfully loaded Stadium model")
-  return true
-end
-
--- Clear the current follower
-function FollowerPokemon.clear()
-  if currentRig then
-    currentRig:release()
-    currentRig = nil
-  end
-  currentStadiumModel = nil
-  currentDex = nil
-  currentFilename = nil
-end
-
--- Check if a follower is currently loaded
-function FollowerPokemon.loaded()
-  return currentRig ~= nil and currentStadiumModel ~= nil
-end
-
--- Get the dex number of the currently loaded follower
-function FollowerPokemon.dex()
-  return currentDex
-end
-
--- Get the filename of the currently loaded follower
-function FollowerPokemon.filename()
-  return currentFilename
-end
-
--- Draw the follower at the player's position
-function FollowerPokemon.draw(px, py, y, facing, mirror)
-  if not (currentRig and currentStadiumModel) then
+    print("StadiumFollower: Failed to create rig for dex", dex)
     return false
   end
   
-  -- Update animation time
-  local dt = 1 / 60  -- Assume 60 FPS for simplicity
-  currentRig:pose(1, (currentRig.frameAt or 0) + dt, true)  -- Idle animation
-  currentRig:anchor(0.75, dt)  -- Anchor to prevent drifting
-  currentRig:textures(nil)  -- Update textures (eyes blinking)
+  -- Cache and set current
+  rigCache[dex] = rig
+  currentRig = rig
+  currentModel = model
+  currentSpecies = dex
   
-  -- Calculate follower position based on player facing
-  local offsetX, offsetZ = 0, -2  -- Default: behind player
-  local followerYaw = 0
+  -- Start idle animation
+  rig:pose(1, 0, true)
+  rig:skin(0)
+  
+  print("StadiumFollower: Loaded follower dex", dex)
+  return true
+end
+
+-- Get the current follower species
+function StadiumFollower.getSpecies()
+  return currentSpecies
+end
+
+-- ------- Rendering
+
+-- Update animation state
+function StadiumFollower.update(dt)
+  if not currentRig then return end
+  
+  animTime = animTime + dt
+  currentRig:pose(currentAnim, animTime * 30, true)  -- 30 FPS
+  currentRig:anchor(0.75, dt)
+  currentRig:textures(nil)
+end
+
+-- Draw the follower at the given position
+-- x, y: world coordinates (pixel position)
+-- facing: direction the follower is facing ("up", "down", "left", "right")
+function StadiumFollower.draw(x, y, facing)
+  if not currentRig or not currentModel then return false end
+  
+  -- Calculate the model matrix
+  local m = Mat4.translate(x, 0, y)
   
   -- Check if we're in free-roam mode (1st or 3rd person)
   local FirstPerson = V.require("FirstPerson")
   local b = FirstPerson.cardBlend()
   
+  -- Apply rotation based on facing direction
+  local yaw = 0
   if b > 0 then
     -- In free-roam mode, use camera-relative rotation like the player model
     if facing == "down" then
       -- When moving backwards, face the camera
-      followerYaw = FirstPerson.cardYaw(px + 8, py + 8) * b
+      yaw = FirstPerson.cardYaw(x, y) * b
     else
       -- When moving in other directions, face forward (away from camera)
-      followerYaw = (FirstPerson.cardYaw(px + 8, py + 8) + math.pi) * b
+      yaw = (FirstPerson.cardYaw(x, y) + math.pi) * b
     end
-    -- In free-roam mode, calculate offset based on camera direction
-    local camYaw = FirstPerson.cardYaw(px + 8, py + 8)
-    offsetX = -math.sin(camYaw) * 2
-    offsetZ = math.cos(camYaw) * 2
   else
     -- In other modes, rotate based on movement direction
     if facing == "right" then
-      offsetX, offsetZ = -2, 0
-      followerYaw = math.pi / 2
+      yaw = math.pi / 2
     elseif facing == "up" then
-      offsetX, offsetZ = 0, 2
-      followerYaw = math.pi
+      yaw = math.pi
     elseif facing == "left" then
-      offsetX, offsetZ = 2, 0
-      followerYaw = -math.pi / 2
+      yaw = -math.pi / 2
     end
   end
   
-  -- Calculate the model matrix based on player position and offset
-  local m = Mat4.translate(px + 8 + offsetX, y, py + 8 + offsetZ)
-  
-  -- Apply rotation based on facing direction
-  if followerYaw ~= 0 then
-    m = Mat4.mul(m, Mat4.rotateY(followerYaw))
+  if yaw ~= 0 then
+    m = Mat4.mul(m, Mat4.rotateY(yaw))
   end
   
-  -- Apply mirroring if needed
-  if mirror then
-    m = Mat4.mul(m, Mat4.scale(-1, 1, 1))
-  end
-  
-  -- Apply scaling for follower model
-  local model = currentStadiumModel
-  local root = model.rootScale or 1
-  local h = model.height or 52.25
-  local k = root * 14 / math.max(h, 1e-6)  -- REF_HEIGHT = 14 from StadiumMon
-  local scale = k * followerScale
+  -- Apply scaling
+  local model = currentModel
+  local scale = StadiumMon.scaleFor(model) * FOLLOWER_SCALE
   m = Mat4.mul(m, Mat4.scale(scale, scale, scale))
   
-  -- Skin the mesh with the calculated yaw
-  currentRig:skin(followerYaw)
+  -- Stand the model on its own lowest point and give back HOVER_CAP of any
+  -- authored hover, same as StadiumWilds/PlayerModel/battle Pokemon --
+  -- otherwise a hovering or origin-centred species renders sunk into the
+  -- ground instead of standing on it.
+  local lift = StadiumMon.liftFor(model)
+  if lift ~= 0 then
+    m = Mat4.mul(m, Mat4.translate(0, -lift, 0))
+  end
   
-  -- Draw using the rig's built-in draw method
+  -- Skin and draw
+  currentRig:skin(yaw)
   currentRig:draw(m)
   
   return true
 end
 
--- Clear the follower cache to free memory
-function FollowerPokemon.clearCache()
+-- ------- Cleanup
+
+-- Clear all cached rigs
+function StadiumFollower.clearCache()
   for dex, rig in pairs(rigCache) do
     if rig then
       pcall(function() rig:release() end)
@@ -188,9 +181,14 @@ function FollowerPokemon.clearCache()
   end
   rigCache = {}
   currentRig = nil
-  currentStadiumModel = nil
-  currentDex = nil
-  currentFilename = nil
+  currentModel = nil
+  currentSpecies = nil
+  animTime = 0
 end
 
-return FollowerPokemon
+-- Check if a follower is currently loaded
+function StadiumFollower.loaded()
+  return currentRig ~= nil and currentModel ~= nil
+end
+
+return StadiumFollower

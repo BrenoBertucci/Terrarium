@@ -400,50 +400,22 @@ function PlayerModel.draw(px, py, y, facing, mirror)
     
     -- Apply rotation based on facing direction
     local yaw = 0
-    -- Normalize the facing string to lowercase to prevent case-sensitive fall-throughs
-    local face = type(facing) == "string" and string.lower(facing) or facing
-    
-    -- Get camera yaw from Voxel3D if available (works for normal camera yaw too)
-    local okVoxel3D, Voxel3D = pcall(V.require, "Voxel3D")
-    local cameraYaw = 0
-    local useCameraRotation = false
-    
-    if okVoxel3D and Voxel3D and Voxel3D.camera and Voxel3D.camera.yaw then
-      cameraYaw = Voxel3D.camera.yaw
-      useCameraRotation = true
-    elseif b > 0 then
-      -- Fall back to FirstPerson camera yaw
-      cameraYaw = FirstPerson.cardYaw(px, py)
-      useCameraRotation = true
-    end
-
-    if useCameraRotation then
-      local blend = b > 0 and b or 1
-      
-      if face == "down" then
-        -- Moving backwards: face the camera
-        yaw = cameraYaw * blend
-
-      elseif face == "up" then
-        -- Moving forward: face away from the camera
-        yaw = (cameraYaw + math.pi) * blend
-
-      elseif face == "left" then
-        -- Moving left: turn 90 degrees left
-        yaw = (cameraYaw + math.pi / 2) * blend
-
-      elseif face == "right" then
-        -- Moving right: turn 90 degrees right
-        yaw = (cameraYaw - math.pi / 2) * blend
+    if b > 0 then
+      -- In free-roam mode
+      if facing == "down" then
+        -- When moving backwards, face the camera
+        yaw = FirstPerson.cardYaw(px + 8, py + 8) * b
+      else
+        -- When moving in other directions, face forward (away from camera)
+        yaw = (FirstPerson.cardYaw(px + 8, py + 8) + math.pi) * b
       end
-
     else
       -- In other modes, rotate based on movement direction
-      if face == "right" then
+      if facing == "right" then
         yaw = math.pi / 2
-      elseif face == "up" then
+      elseif facing == "up" then
         yaw = math.pi
-      elseif face == "left" then
+      elseif facing == "left" then
         yaw = -math.pi / 2
       end
     end
