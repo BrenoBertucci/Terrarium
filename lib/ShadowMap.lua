@@ -567,9 +567,9 @@ end
 function ShadowMap.draw(mesh, texture, model)
   if not (drawing and mesh) then return end
   local sh = getShader()
-  if texture then mesh:setTexture(texture) end
+  if texture then pcall(mesh.setTexture, mesh, texture) end
   pcall(sh.send, sh, "model", "row", model or IDENTITY)
-  love.graphics.draw(mesh)
+  pcall(love.graphics.draw, mesh)
 end
 
 -- Close the pass and stamp it with the signature it was drawn for.

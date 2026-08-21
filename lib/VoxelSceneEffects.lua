@@ -1281,6 +1281,20 @@ function VoxelScene.render(state, w, h, vw, vh, paletteFor)
                  Mat4.translate(nb.ox, 0, nb.oy), pull, nil, sway)
   end
 
+  -- decorative grass mesh (no effects)
+  local decorMesh = ChunkMesher.decor(state.map)
+  if decorMesh then
+    Voxel3D.draw(decorMesh, grassTex, nil, pull, nil, 0)  -- No sway for decorative grass
+  end
+  for i, nb in ipairs(state.neighbors or {}) do
+    if neighborLimit == nil or i <= neighborLimit then
+      local nbDecor = ChunkMesher.decor(nb.map)
+      if nbDecor then
+        Voxel3D.draw(nbDecor, grassTex, Mat4.translate(nb.ox, 0, nb.oy), pull, nil, 0)
+      end
+    end
+  end
+
   -- road mesh using Grass3D with road texture at 0.05 height
   local roadMesh = ChunkMesher.road(state.map)
   if roadMesh then

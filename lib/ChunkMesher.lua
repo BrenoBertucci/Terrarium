@@ -1057,6 +1057,18 @@ local function buildGrassMesh(map)
   return quadsMesh(S.grassQuads)
 end
 
+-- Decorative grass mesh (no effects)
+local function buildDecorMesh(map)
+  local S = Structures.forMap(map)
+  if S.decorInstances and #S.decorInstances > 0 then
+    local ok, G = pcall(V.require, "Grass3D")
+    if ok and G and G.decorMeshFromInstances then
+      return G.decorMeshFromInstances(S.decorInstances)
+    end
+  end
+  return nil
+end
+
 -- Road mesh using Grass3D with road texture and 0.05 height
 local function buildRoadMesh(map)
   local S = Structures.forMap(map)
@@ -1148,7 +1160,7 @@ local function entry(id)
 end
 
 local function releaseEntry(c)
-  for _, slot in ipairs({ "full", "body", "grass", "flowers", "custom", "road", "ground" }) do
+  for _, slot in ipairs({ "full", "body", "grass", "flowers", "custom", "road", "ground", "decor" }) do
     local mesh = c[slot]
     if mesh and mesh.release then pcall(mesh.release, mesh) end
     c[slot] = nil
@@ -1193,7 +1205,7 @@ end
 local function runJob(job)
   local map = job.map
   local c = entry(job.id)
-  if c.grass == nil or c.flowers == nil or c.figures == nil or c.custom == nil or c.road == nil or c.ground == nil
+  if c.grass == nil or c.flowers == nil or c.figures == nil or c.custom == nil or c.road == nil or c.ground == nil or c.decor == nil
      or (c.stale and c.stale.aux) then
     local okG, grass = pcall(buildGrassMesh, map)
     local okF, flowers = pcall(buildFlowerMesh, map)
@@ -1201,6 +1213,7 @@ local function runJob(job)
     local okC, custom = pcall(buildCustomSurfaceMesh, map)
     local okR, road = pcall(buildRoadMesh, map)
     local okGnd, ground = pcall(buildGroundMesh, map)
+    local okD, decor = pcall(buildDecorMesh, map)
     if (gen[job.id] or 0) ~= job.gen then
       if okG and grass and grass.release then pcall(grass.release, grass) end
       if okF and flowers and flowers.release then
@@ -1210,6 +1223,7 @@ local function runJob(job)
       if okC and custom and custom.release then pcall(custom.release, custom) end
       if okR and road and road.release then pcall(road.release, road) end
       if okGnd and ground and ground.release then pcall(ground.release, ground) end
+      if okD and decor and decor.release then pcall(decor.release, decor) end
       return
     end
     swapSlot(c, "grass", (okG and grass) or false)
@@ -1218,6 +1232,7 @@ local function runJob(job)
     swapSlot(c, "custom", (okC and custom) or false)
     swapSlot(c, "road", (okR and road) or false)
     swapSlot(c, "ground", (okGnd and ground) or false)
+    swapSlot(c, "decor", (okD and decor) or false)
     releaseFigures(c.figures)
     c.figures = (okX and figures) or false
     if c.stale then c.stale.aux = nil end
@@ -1374,17 +1389,19 @@ end
 function ChunkMesher.get(map, bodyOnly, masks)
   local slot = bodyOnly and "body" or "full"
   local c = entry(map.id)
-  if c.grass == nil or c.flowers == nil or c.custom == nil or c.road == nil or c.ground == nil or (c.stale and c.stale.aux) then
+  if c.grass == nil or c.flowers == nil or c.custom == nil or c.road == nil or c.ground == nil or c.decor == nil or (c.stale and c.stale.aux) then
     local okG, grass = pcall(buildGrassMesh, map)
     local okF, flowers = pcall(buildFlowerMesh, map)
     local okC, custom = pcall(buildCustomSurfaceMesh, map)
     local okR, road = pcall(buildRoadMesh, map)
     local okGnd, ground = pcall(buildGroundMesh, map)
+    local okD, decor = pcall(buildDecorMesh, map)
     swapSlot(c, "grass", (okG and grass) or false)
     swapSlot(c, "flowers", (okF and flowers) or false)
     swapSlot(c, "custom", (okC and custom) or false)
     swapSlot(c, "road", (okR and road) or false)
     swapSlot(c, "ground", (okGnd and ground) or false)
+    swapSlot(c, "decor", (okD and decor) or false)
     if c.stale then c.stale.aux = nil end
   end
   if c[slot] == nil or (c.stale and c.stale[slot]) then
@@ -1437,6 +1454,11 @@ end
 function ChunkMesher.ground(map)
   local c = cache[map.id]
   return c and c.ground or nil
+end
+
+function ChunkMesher.decor(map)
+  local c = cache[map.id]
+  return c and c.decor or nil
 end
 
 -- Authored figures as `{ mesh, wx, wz, y }` records -- each placed by its

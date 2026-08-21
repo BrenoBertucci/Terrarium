@@ -2574,7 +2574,7 @@ function Voxel3D.draw(mesh, texture, model, pull, sunModel, sway, waterBody)
   -- sending a uniform to the other shader would go nowhere
   local sh = activeShader
   if not sh then return end
-  if texture and mesh.setTexture then mesh:setTexture(texture) end
+  if texture then pcall(mesh.setTexture, mesh, texture) end
   -- LOVE defaults matrix uniforms to column-major; Mat4 is row-major
   pcall(sh.send, sh, "model", "row", model or IDENTITY)
   pcall(sh.send, sh, "sunModel", "row", sunModel or model or IDENTITY)

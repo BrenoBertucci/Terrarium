@@ -225,7 +225,7 @@ function Structures.forMap(map)
         hideBareRing = hullRingOnly or nil,
         runs = {}, skip = {}, ground = {}, doorFold = {}, objectQuads = {},
         grassQuads = {}, grassInstances = {}, flowerQuads = {},
-        roundStamps = {}, figures = {}, roadInstances = {}, groundInstances = {} }
+        roundStamps = {}, figures = {}, roadInstances = {}, groundInstances = {}, decorInstances = {} }
   Buildings.build(S, map, pixels(tileset), perRow)
 
   -- Fold doors into their buildings. A door cell is WALKABLE (the player
@@ -2506,8 +2506,9 @@ end
 
 -- ------- CUSTOM 3D SURFACES: ROAD AND GROUND -------
 -- Tiles that will be rendered as custom 3D surfaces with specific heights and colors
--- Road: gray/dark gray, flat surface, 0.05 grass height, uses road.png
--- Ground: brown/dark brown, flat surface, 0.1 grass height, uses ground.png
+-- Road: gray/dark gray, flat surface, 0.05 grass height, uses road.png, no effects
+-- Ground: brown/dark brown, flat surface, 0.1 grass height, uses ground.png, no effects
+-- Decorative Grass: 0.5 grass height, uses grass.png, no effects
 
 local CUSTOM_ROAD_TILES = {
   OVERWORLD = {},
@@ -2597,9 +2598,11 @@ function Structures.buildGrass(S, map, x0, x1, y0, y1, data)
   local templates = {}
   local quads = S.grassQuads
   local instances = S.grassInstances
-  local roadInstances = S.roadInstances or {}  -- Road instances with 0.05 height
+  local decorInstances = S.decorInstances or {}  -- Decorative grass instances with 0.5 height, no effects
+  S.decorInstances = decorInstances
+  local roadInstances = S.roadInstances or {}  -- Road instances with 0.05 height, no effects
   S.roadInstances = roadInstances
-  local groundInstances = S.groundInstances or {}  -- Ground instances with 0.1 height
+  local groundInstances = S.groundInstances or {}  -- Ground instances with 0.1 height, no effects
   S.groundInstances = groundInstances
   
   -- Prefer the authored 3D tuft (assets/ground/grass/) when the bake is
@@ -2637,8 +2640,11 @@ function Structures.buildGrass(S, map, x0, x1, y0, y1, data)
           -- Make decorative grass half height (not half scale)
           if decor then
             instance.heightScale = 0.5  -- Custom height scale for decorative grass
+            instance.texture = "decor"  -- Mark as decorative (no effects)
+            decorInstances[#decorInstances + 1] = instance
+          else
+            instances[#instances + 1] = instance
           end
-          instances[#instances + 1] = instance
         else
           local tpl = templates[tileId]
           if not tpl then

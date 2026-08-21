@@ -296,9 +296,9 @@ function Grass3D.meshFromInstances(instances)
   local verts, indices = {}, {}
   local tplV, tplI = t.verts, t.indices
   
-  -- Build grass mesh (only non-road/ground instances)
+  -- Build grass mesh (only non-road/ground/decor instances)
   for i = 1, #instances do
-    if instances[i].texture ~= "road" and instances[i].texture ~= "ground" then
+    if instances[i].texture ~= "road" and instances[i].texture ~= "ground" and instances[i].texture ~= "decor" then
       local inst = instances[i]
       local wx = inst.wx or 0
       local wz = inst.wz or 0
@@ -307,6 +307,30 @@ function Grass3D.meshFromInstances(instances)
       local heightScale = inst.heightScale or nil
       stamp(verts, indices, tplV, tplI, wx + 4, wz + 4, yaw, scale, heightScale)
     end
+  end
+  
+  local mesh = Voxel3D.newMesh(verts, indices)
+  if mesh and loadTexture() then
+    pcall(mesh.setTexture, mesh, loadTexture())
+  end
+  return mesh
+end
+
+-- Build decorative grass mesh (no effects)
+function Grass3D.decorMeshFromInstances(instances)
+  local t = loadTemplate()
+  if not t or not instances or #instances == 0 then return nil end
+  local verts, indices = {}, {}
+  local tplV, tplI = t.verts, t.indices
+  
+  for i = 1, #instances do
+    local inst = instances[i]
+    local wx = inst.wx or 0
+    local wz = inst.wz or 0
+    local yaw = inst.yaw or 0
+    local scale = inst.scale or 1
+    local heightScale = inst.heightScale or 0.5  -- Decorative grass half height
+    stamp(verts, indices, tplV, tplI, wx + 4, wz + 4, yaw, scale, heightScale)
   end
   
   local mesh = Voxel3D.newMesh(verts, indices)
