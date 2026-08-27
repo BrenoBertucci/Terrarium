@@ -60,6 +60,17 @@ local KEY_SKYLINE = "k"  -- HORIZON far silhouettes
 -- next on each press -- the only way to SEE the pack without a fight, and
 -- the way to tell "the row is off" apart from "the sheet did not decode".
 local KEY_FX = "j"
+-- The SM64 camera and its own controls. `r` is SM64's own R button, kept
+-- deliberately; `q`/`e` are the C-left/C-right pair, `f` walks the three
+-- zoom rungs and `m` cycles the row itself. All five are free of the
+-- engine's 2-5, of upstream DRAMATIC_SHAPE's 3/5/6/7/8/9, of every other
+-- key above, and -- the one that matters -- of the Game Boy bindings in
+-- src/core/Input.lua, every one of which the GAME needs.
+local KEY_SM64  = "m"   -- SM64CAM ON / OFF
+local KEY_CAML  = "q"   -- C-left
+local KEY_CAMR  = "e"   -- C-right
+local KEY_CAMR2 = "r"   -- R: the alternate (8-direction) camera
+local KEY_CAMZ  = "f"   -- C-down: the zoom ladder
 V.KEYS = {
   voxel = KEY_VOXEL, grid = KEY_GRID, tilt = KEY_TILT,
   curve = KEY_CURVE, battle = KEY_BATTLE, wild = KEY_WILD, map = KEY_MAP,
@@ -93,6 +104,14 @@ function V.data(name)
   local value = chunkFor("data/" .. name .. ".lua")(V)
   dataFiles[name] = value
   return value
+end
+
+-- Forget one cached data file so the next V.data re-reads it from disk.
+-- The shot editor's reload lives on this (see MarioCam.reloadShots): with
+-- both caches held, editing camera_shots.lua on disk changes nothing until
+-- a restart, which is exactly the authoring loop this exists to kill.
+function V.uncacheData(name)
+  dataFiles[name] = nil
 end
 
 -- ------- generation bridge
@@ -132,6 +151,9 @@ local Anime = V.require("Anime")
 local Vfx = V.require("Vfx")
 local AmbientLife = V.require("AmbientLife")
 local WindFX = V.require("WindFX")
+local StepFX = V.require("StepFX")
+local VegFX = V.require("VegFX")
+local SprayFX = V.require("SprayFX")
 local Weather = V.require("Weather")
 local Sky = V.require("Sky")
 local GroundFX = V.require("GroundFX")
@@ -150,6 +172,7 @@ local ExpShare = V.require("ExpShare")
 local Comforts = V.require("Comforts")
 local MiniMap = V.require("MiniMap")
 local StartMenuXY = V.require("StartMenuXY")
+local MarioCam = V.require("MarioCam")
 
 -- Forward declaration: the voxel pipeline's update hook (registered below)
 -- calls this, and it is defined further down with the settings it drives.
@@ -177,6 +200,22 @@ local applyFull
 -- is ALREADY in pixels per world pixel (Zoom.scale over Renderer:fitScale,
 -- which measures the drawable), so the closures ctx.drawFx runs were being
 -- scaled for a canvas 2.6x bigger than the one they drew into.
+-- The world-pixel scale the last drawWorld ran at, so the weather can be
+-- re-painted after the blur (see the T-SHIFT worldPresent) at the same
+-- scale the diorama under it was drawn at. worldPresent is handed a canvas
+-- and not the frame's context, and inventing a scale there would put the
+-- splashes at a different size from the world they are landing on.
+local weatherScale = 1
+
+-- The world-pixel VIEW HEIGHT the last drawWorld ran at, for the same
+-- reason weatherScale exists: the SM64 camera's distance ladder is
+-- expressed as a multiple of it (see MarioCam.ZOOMS) so the framing holds
+-- across the wheel zoom and the window shape, and update() is not handed a
+-- context to read it from. 144 until the first frame has drawn, which is
+-- the Game Boy view and the size every constant in that file was solved
+-- against.
+local lastViewH = 144
+
 local function sceneSize(ctx)
   if love.graphics and love.graphics.getPixelDimensions then
     local pw, ph = love.graphics.getPixelDimensions()
@@ -229,6 +268,12 @@ mod.content.render_pipelines:register(PIPE_VOXEL, {
     -- would fight anyone who changed one deliberately.
     applyFull(level)
     Voxel.update(dt, level)
+    -- The SM64 camera, immediately behind the ladder tween because it reads
+    -- Voxel.angle for its pitch and must see THIS frame's value rather than
+    -- last frame's -- a rung change and a camera that lags it by a frame
+    -- would ease at visibly different rates. It gates itself on the row and
+    -- on free-roam being live, so this call costs nothing while it is off.
+    MarioCam.update(dt, lastViewH)
     -- the day/night clock, on the same always-running tick: Pipelines.update
     -- runs whatever the level, so time passes with the mode off, through
     -- battles and menus, and a CYCLE evening falls mid-fight exactly as it
@@ -284,6 +329,19 @@ mod.content.render_pipelines:register(PIPE_VOXEL, {
     -- meadow is a DRAWING, not a fact about Kanto, and there is nothing for
     -- it to blow across on the flat 2D path.
     WindFX.update(dt, Voxel.active())
+    -- and what a boot does to the ground it crosses. BEHIND WindFX so the
+    -- air its motes read (Wind.step ran inside Weather's tick above) is
+    -- this frame's; its own field, because WindFX clears when the wind
+    -- drops under FLOOR and a footstep makes dust in dead calm.
+    StepFX.update(dt, Voxel.active())
+    -- and what the wind takes off the plants. Behind WindFX because it
+    -- emits INTO that module's field, which the update above has just
+    -- capped, cleared or stepped for this frame.
+    VegFX.update(dt, Voxel.active())
+    -- and what it tears off the water. Same field, same reason, and the
+    -- water's own size (WaterBody.sizeAt) is the emission probability --
+    -- a harbour whips spray, a fountain pond does not.
+    SprayFX.update(dt, Voxel.active())
     -- and what it sounds like out there. Also ahead of the gate, and for a
     -- plainer reason than the weather's: a sound needs no camera, so the
     -- crickets come out at night on the flat 2D world too.
@@ -364,6 +422,7 @@ mod.content.render_pipelines:register(PIPE_VOXEL, {
     -- a magnified low-res image, while the FX closures keep drawing in
     -- world-pixel units.
     local sw, sh = sceneSize(ctx)
+    lastViewH = ctx.vh or lastViewH
     local canvas = VoxelScene.render(ctx.state, sw, sh,
                                      ctx.vw, ctx.vh, ctx.paletteFor)
     if not canvas then return nil end   -- fall back to the 2D path
@@ -399,7 +458,22 @@ mod.content.render_pipelines:register(PIPE_VOXEL, {
       -- the whole diorama, so they have to be painted over it. The canvas
       -- size goes with them -- the streaks are screen-space and the surface
       -- they cross is this one, not the window (see sceneSize).
-      Weather.draw(Voxel3D.project, ctx.scale, sw, sh)
+      --
+      -- ------- UNLESS THE TILT-SHIFT IS ABOUT TO BLUR THIS CANVAS
+      --
+      -- In which case the rain is painted after the blur instead, in the
+      -- T-SHIFT worldPresent below, and this pass skips it. A raindrop is a
+      -- hard-edged needle and a needle through a depth-of-field is a
+      -- smudge: measured, the blur costs the streaks three quarters of
+      -- their edge and triples their apparent width (see the header on
+      -- Weather.present, and tests/rain_look_probe.lua).
+      --
+      -- The radar and the start menu are already handled exactly this way
+      -- and for exactly this reason. The rain is the third of them.
+      weatherScale = ctx.scale
+      if not TiltShift.blurring() then
+        Weather.draw(Voxel3D.project, ctx.scale, sw, sh)
+      end
       Voxel3D.endOverlay()
     end
     -- Orientation radar on the finished (upscaled) world canvas. Screen-
@@ -452,6 +526,10 @@ mod.content.render_pipelines:register(PIPE_TILT, {
   worldPresent = function(canvas)
     canvas = TiltShift.apply(canvas)
     if (TiltShift.level or 0) > 0 then
+      -- The weather, on the blurred diorama rather than inside it. drawWorld
+      -- skipped it precisely so this can happen here; between them exactly
+      -- one of the two paints per frame.
+      canvas = Weather.present(canvas, Voxel3D.project, weatherScale)
       canvas = MiniMap.present(canvas)
       -- the menu goes back on for the same reason the radar does: it is UI,
       -- and the blur belongs on the diorama behind it. Without this it is
@@ -566,6 +644,16 @@ local SETTINGS = {
     "LOW keeps real cast shadows on a smaller map with a harder edge and "
     .. "no neighbouring maps casting. OFF drops the sun pass entirely and "
     .. "puts the flat drop shadows back under people's feet.",
+    full = true },
+  { Quality.particleSetting,
+    "How much air there is: the dust and the seeds on the wind, the rain's "
+    .. "own falling shafts, the splashes it lands in, the snow, and the "
+    .. "water still coming off the eaves after a shower. Its own row "
+    .. "because it used to hang off RES, which meant asking for more "
+    .. "weather also asked the grass, the shadows and the cloud raymarch "
+    .. "to get heavier. ON is exactly what every rung already had; HIGH "
+    .. "doubles the counts and MAX quadruples them, both without the rest "
+    .. "of the picture changing at all. LOW gives the frame back.",
     full = true },
   -- `full = true` as well, and for a plainer reason than the two above:
   -- FULL is the preset most people arrive at, and taking the wind off the
@@ -855,6 +943,26 @@ local SETTINGS = {
   { VoxelGrid.setting, "One-pixel wireframe along every voxel edge." },
   { WorldCurve.setting,
     "Bend the world down over the horizon, Animal Crossing style." },
+  -- `full = true` -- FULL owns the rows that describe the LOOK, and this is
+  -- not one: it changes how the camera MOVES, and it is the one row on this
+  -- menu the player may want to reach while a preset is on. Hiding it under
+  -- FULL would strand whoever turned it on.
+  { MarioCam.setting,
+    "The Super Mario 64 camera. A camera operator rather than a fixed "
+    .. "mount: it turns to look at you far faster than it flies to where "
+    .. "it wants to stand, takes its height from the GROUND under you so "
+    .. "steps do not bob the frame, leads the way you are walking, and "
+    .. "slides around a wall that gets between you instead of zooming "
+    .. "through it. The camera ORBITS THE MAP -- it swings round the "
+    .. "town's own centre rather than trailing your back, the way it "
+    .. "orbits Bob-omb Battlefield's mountain. Q and E turn it, R locks "
+    .. "it to 45-degree steps, F walks the zoom, and the right stick "
+    .. "turns it freely. MOVEMENT TURNS WITH IT, as in Mario 64: the "
+    .. "D-pad walks you AWAY FROM THE CAMERA rather than due north, and "
+    .. "characters are drawn from the side the camera is actually on. "
+    .. "This is the one row in the mod that changes how the game "
+    .. "CONTROLS and not only how it looks.",
+    full = true },
   { Aerial.setting,
     "Distance haze: far ground fades into the hour's own sky colour, so "
     .. "the map edge reads as far away instead of as a wall." },
@@ -965,6 +1073,11 @@ mod.options:define(schema)
 --   b  3D-BTL   toggle overworld battles
 --   n  WILD     cycle ROAM / MIX / OFF
 --   p  MAP      minimap ON / FULL / OFF
+--   m  SM64CAM  the Mario 64 camera, ON / OFF
+--   q  camera left      (SM64's C-left)
+--   e  camera right     (SM64's C-right)
+--   r  camera lock      (SM64's R: 45-degree steps)
+--   f  camera zoom      (SM64's C-down: three rungs)
 --
 -- Upstream DRAMATIC_SHAPE still uses 3/5/6/7/8/9. These letter keys are the
 -- independence surface: both mods can load and neither steals the other's
@@ -994,12 +1107,119 @@ local HOTKEYS = {
   [KEY_WILD]   = WildRoamers.setting,
   [KEY_MAP]    = MiniMap.setting,
   [KEY_FX]     = "vfxdemo",
+  [KEY_SM64]   = MarioCam.setting,
+  -- the four camera controls. Not settings and not pipelines, so they get
+  -- their own claim and are dispatched by name below.
+  [KEY_CAML]   = "cam:left",
+  [KEY_CAMR]   = "cam:right",
+  [KEY_CAMR2]  = "cam:alt",
+  [KEY_CAMZ]   = "cam:zoom",
 }
+
+-- ------- the shot editor, which players never see
+--
+-- Authoring a camera_shots.lua entry by hand is guess-a-number, restart,
+-- look, repeat. These two keys exist so it is walk-there, frame-it, press.
+-- They are added to HOTKEYS only when TERRARIUM_SHOT_EDITOR is set in the
+-- environment: for everyone else the keys stay unclaimed and this block
+-- might as well not exist.
+--
+--   o   dump the current pose as a paste-ready camera_shots.lua entry --
+--       to the console and appended to camera_shots_scratch.txt beside
+--       the game, in both spellings (a parked "fixed" and a pinned orbit)
+--   u   re-read camera_shots.lua without restarting: edit, save, press,
+--       look. Busts both caches (V.data's and MarioCam's).
+--
+-- The gate reads the environment THROUGH pcall because the mod sandbox may
+-- stub `os` (Perf.lua reads env the same defensive way) -- and falls back
+-- to a marker FILE beside the game (shot_editor.on), because an authoring
+-- session that cannot see the environment still needs a way in. Both are
+-- invisible to a player: no variable, no file, no keys.
+local SHOT_EDITOR = (function()
+  local ok, v = pcall(function() return os.getenv("TERRARIUM_SHOT_EDITOR") end)
+  if ok and v and v ~= "" then return true end
+  if io and io.open then
+    local f = io.open("shot_editor.on", "r")
+    if f then f:close() return true end
+  end
+  return false
+end)()
+if SHOT_EDITOR then
+  HOTKEYS["o"] = "shot:dump"
+  HOTKEYS["u"] = "shot:reload"
+end
 
 -- Which sheet the demo key fires next. Kept here rather than in Vfx because
 -- it is a property of the KEY, not of the effect player -- nothing else in
 -- the mod should care that a human is walking the list one press at a time.
 local vfxDemoIndex = 0
+
+-- ------- CAMERA-RELATIVE MOVEMENT
+--
+-- THE ONE PLACE THIS MOD TOUCHES CONTROL. Everything else in it is
+-- presentational and says so; this is not, and it is here deliberately.
+--
+-- SM64 makes the stick camera-relative -- push away from yourself and
+-- Mario runs away from you, whatever the camera is doing. Without it an
+-- orbiting camera is not a camera, it is a puzzle: the world turns
+-- underneath you and Up keeps meaning north, so walking a straight line
+-- means re-deriving which button is "forward" every time the camera
+-- swings. The first cut of this port refused to do it for the sake of the
+-- "purely presentational" line, and refusing was the wrong call.
+--
+-- What is remapped is only WHICH BUTTON the movement loop consults for a
+-- given world direction. The world itself is untouched and still speaks
+-- compass in every direction that matters: collision, ledges, warps,
+-- scripted walks and the sprite sheet all still take "north" to mean
+-- north. Press up under a quarter turn and the player genuinely walks
+-- west -- the same walk, through the same collision, as if west had been
+-- pressed.
+--
+-- Gated three ways, and each gate earns its place:
+--
+--   the rung        SOFT pins the camera, so there is nothing to correct
+--                   for and the controls are left exactly alone. OFF, the
+--                   same. Only a camera that can TURN rotates input.
+--   the free-roam   no diorama, no rotation. The flat 2D world is drawn
+--                   north-up and always was.
+--   the stack top   a menu is not the overworld. Screens read the same
+--                   four buttons for their cursors, and a bag that scrolls
+--                   sideways because the camera is pointed east would be
+--                   an unambiguous bug.
+--
+-- Wrapped at Input:isDown rather than inside the controller because the
+-- controller's movement loop is one `for` over the four names in the
+-- middle of a long function, with no seam of its own -- and because this
+-- way the shape of the change is exactly one sentence: the four direction
+-- queries answer about a rotated world, and every other button is passed
+-- through untouched.
+do
+  local Input = require("src.core.Input")
+  local Game = require("src.core.Game")
+  local innerIsDown = Input.isDown
+
+  function Input:isDown(btn)
+    if MarioCam.DIR_INDEX[btn] and MarioCam.rotatesInput() then
+      local top = Game.stack and Game.stack:top()
+      if top and top == Game.overworld then
+        return innerIsDown(self, MarioCam.buttonFor(btn))
+      end
+    end
+    return innerIsDown(self, btn)
+  end
+
+  -- The camera may not change what a held button MEANS (see
+  -- MarioCam.quadrant), and to enforce that it has to know whether one is
+  -- held -- physically, on the unwrapped state, because asking the wrapped
+  -- isDown above would recurse through buttonFor. The live Input instance
+  -- keeps that state as a plain table, which is also what the probes
+  -- drive, so a synthetic hold latches exactly like a real one.
+  MarioCam.setSteeringProbe(function()
+    local st = Game.input and Game.input.state
+    if not st then return false end
+    return (st.up or st.down or st.left or st.right) and true or false
+  end)
+end
 
 
 do
@@ -1048,6 +1268,56 @@ do
           self:writeOptions()
           return
         end
+      elseif type(claim) == "string" and claim:sub(1, 4) == "cam:" then
+        -- The SM64 camera's own four controls, behind the same free-roam
+        -- gate as everything else here -- there is no camera to turn while
+        -- a warp or a cutscene owns the screen.
+        --
+        -- EVERY PRESS IS ANSWERED, ACCEPTED OR NOT. SM64 plays a distinct
+        -- sound for each camera input it takes (play_sound_cbutton_side,
+        -- play_sound_rbutton_changed) and a buzz for each one it refuses
+        -- (play_camera_buzz_if_cbutton), so the player never has to wonder
+        -- whether the button registered. The source document calls that out
+        -- as the detail that is cheap to add and expensive to notice
+        -- missing, and it is not decoration here: turning is refused on the
+        -- SOFT rung BY DESIGN, which is precisely the case that has to say
+        -- so out loud or it reads as a broken key.
+        --
+        -- The game's own three sounds, not invented ones: Tink for a C
+        -- press, Switch for the R button, Denied for a refusal. A camera
+        -- that spoke in a voice the rest of the game does not have would be
+        -- worse than one that said nothing.
+        if Pipelines.canToggle(PIPE_VOXEL, top, self.overworld)
+           and MarioCam.enabled() then
+          local what = claim:sub(5)
+          local voice = "Tink"
+          if what == "left" then MarioCam.rotateLeft()
+          elseif what == "right" then MarioCam.rotateRight()
+          elseif what == "alt" then MarioCam.toggleAlt() voice = "Switch"
+          elseif what == "zoom" then MarioCam.cycleZoom() end
+          if MarioCam.consumeBuzz() then voice = "Denied" end
+          pcall(require("src.core.Sound").play, self.data, voice)
+        end
+        return
+      elseif type(claim) == "string" and claim:sub(1, 5) == "shot:" then
+        -- the editor keys: free-roam only, like every camera key above
+        if Pipelines.canToggle(PIPE_VOXEL, top, self.overworld) then
+          local what = claim:sub(6)
+          if what == "reload" then
+            MarioCam.reloadShots()
+            print("[shot editor] camera_shots.lua reloaded")
+            pcall(require("src.core.Sound").play, self.data, "Switch")
+          elseif what == "dump" and MarioCam.enabled() then
+            local s = MarioCam.editorDump(lastViewH)
+            if s then
+              print("[shot editor]\n" .. s)
+              local f = io.open("camera_shots_scratch.txt", "a")
+              if f then f:write(s, "\n\n") f:close() end
+              pcall(require("src.core.Sound").play, self.data, "Tink")
+            end
+          end
+        end
+        return
       elseif claim == "vfxdemo" then
         -- Behind the voxel pass's own free-roam gate like every key below:
         -- these draw through Voxel3D.project, so firing one with no camera
@@ -1700,7 +1970,7 @@ end)
 -- first so this cannot drift again: this literal sat five minors behind the
 -- manifest, and in a feature-encoded form the versioning rules in CHANGELOG.md
 -- forbid outright (`.snow.1` -- features live in the changelog, not here).
-mod.exports.version = mod.version or "1.26.0-mobile"
+mod.exports.version = mod.version or "1.27.0-mobile"
 -- exposed so a companion mod can pin its own tiles' shapes or read the
 -- camera without reaching into this mod's file layout
 mod.exports.lib = V

@@ -29,7 +29,7 @@ living in it.
 > It ships under its own mod id `TERRARIUM` and its own folder, so it can
 > sit **beside** the original without overwriting it. Both can be installed;
 > both can be installed and enabled together: this fork uses letter hotkeys
-> (v/g/t/c/b/n/p) and its own pipeline ids, so it does not fight upstream's
+> (v/g/t/c/m/b/n/p) and its own pipeline ids, so it does not fight upstream's
 > 3/5/6/7/8/9. Still only one world pipeline should own the frame at a time.
 
 A mod for the [PokÃ©mon Gen 1 Recompilation
@@ -282,7 +282,7 @@ different folder, different pipeline registry keys (`terrarium_voxel` /
 or both. The diorama design remains DramaticShape's work â€” see the fork note
 at the top of this file.
 
-**Letter hotkeys (TERRARIUM):** `v` VOXEL | `g` V-GRID | `t` T-SHIFT | `c` V-CURVE | `b` 3D-BTL | `n` WILD | `p` MAP. Upstream still uses digits.
+**Letter hotkeys (TERRARIUM):** `v` VOXEL | `g` V-GRID | `t` T-SHIFT | `c` V-CURVE | `m` SM64CAM | `b` 3D-BTL | `n` WILD | `p` MAP. Upstream still uses digits.
 `c` V-CURVE | `b` 3D-BTL | `n` WILD | `p` MAP. Upstream still uses digits.
 
 ## Quiver / launcher packaging

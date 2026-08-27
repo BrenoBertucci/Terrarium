@@ -2452,7 +2452,20 @@ function Voxel3D.beginScene(w, h, cx, cy, vw, vh, sky, slot)
   -- downstream is going to ask it questions (see depthCanvas above), and
   -- the plain internal one otherwise -- including whenever the readable
   -- kind could not be bound, which is a driver fact rather than a frame's.
-  local depth = RayFX.wanted() and depthCanvas(name, rw, rh) or nil
+  -- ------- AND A SECOND CALLER FOR THE READABLE DEPTH BUFFER
+  --
+  -- It used to be RayFX alone, so at RTX OFF nothing was allocated and
+  -- nothing could read the frame's own depth. The weather wants it for a
+  -- different reason: its impacts and its shafts are drawn as SCREEN-SPACE
+  -- quads through their own shader (they are procedural rings, jets and
+  -- needles, not sprites, and the refraction reads the frame behind them),
+  -- so they cannot be handed to the depth test as geometry the way the
+  -- wind field was. What they can do is ask the buffer, per fragment,
+  -- whether something in the world is already in front of them.
+  --
+  -- One buffer, whichever of the two asked for it.
+  local depth = (RayFX.wanted() or Voxel3D.wantDepth)
+                and depthCanvas(name, rw, rh) or nil
   local ok = false
   if depth then
     ok = pcall(love.graphics.setCanvas, { canvas, depthstencil = depth })
@@ -2767,9 +2780,22 @@ function Voxel3D.beginScene(w, h, cx, cy, vw, vh, sky, slot)
   -- is in view-heights, and a staged shot's framing comes from its arena
   -- rather than from `vh` -- so the numbers that put the haze on the horizon
   -- out here would put it across the middle of a battle.
-  local haze = (not placed) and Aerial.color(Voxel3D.skyFill) or nil
-  local fogNear, fogInv = nil, nil
-  if haze then fogNear, fogInv = Aerial.range(vh) end
+  -- ...UNLESS the placed camera brought its own air (MarioCam's per-map
+  -- atmosphere, data/atmosphere.lua): an entry there rides in on
+  -- placed.atmo with its own colour, range and cap, through these same
+  -- uniforms. Lavender Town's violet is the first tenant.
+  local placedAtmo = placed and placed.atmo or nil
+  local haze = (placedAtmo and placedAtmo.color)
+               or ((not placed) and Aerial.color(Voxel3D.skyFill))
+               or nil
+  local fogNear, fogInv, fogAmt = nil, nil, nil
+  if placedAtmo then
+    fogNear, fogInv, fogAmt =
+      placedAtmo.near, placedAtmo.inv, placedAtmo.strength
+  elseif haze then
+    fogNear, fogInv = Aerial.range(vh)
+    fogAmt = Aerial.amount()
+  end
   if haze and fogNear then
     local eye, focus = Voxel3D.eye, Voxel3D.focus
     local ex = eye[1] - focus[1]
@@ -2777,11 +2803,15 @@ function Voxel3D.beginScene(w, h, cx, cy, vw, vh, sky, slot)
     local ez = eye[3] - focus[3]
     local eyeDist = math.sqrt(ex * ex + ey * ey + ez * ez)
     pcall(sh.send, sh, "fog",
-          { eyeDist + fogNear, fogInv, Aerial.amount(), Aerial.RUNGS })
+          { eyeDist + fogNear, fogInv, fogAmt, Aerial.RUNGS })
     pcall(sh.send, sh, "fogColor", haze)
     pcall(sh.send, sh, "fogEye", eye)
+    Voxel3D.lastFog = { eyeDist + fogNear, fogInv, fogAmt }
+    Voxel3D.lastFogColor = haze
   else
     pcall(sh.send, sh, "fog", { 0, 0, 0, Aerial.RUNGS })
+    Voxel3D.lastFog = nil
+    Voxel3D.lastFogColor = nil
   end
   -- clip w at the focus point, the reference depth project() reports scale
   -- against (so scale == 1 for anything standing at the view centre)
@@ -3261,6 +3291,76 @@ function Voxel3D.drawGroup(group, texture, model, pull, sunModel, b)
   end
 end
 
+-- Draw a particle field: ONE mesh, many colours, one set of uniforms.
+--
+-- The batches come from lib/ParticleMesh.lua and are ranges of a single
+-- stream mesh, each carrying its own flat colour. Colour cannot ride the
+-- vertices -- Voxel3D.FORMAT is position, UV and one shade float, shared
+-- with terrain and characters, and widening it for particles would touch
+-- every mesh in the mod -- so it comes from setColor, which is per draw,
+-- which is why the field is bucketed by colour before it gets here.
+--
+-- Same saving drawGroup makes and for the same reason: the model, sun and
+-- lean uniforms are identical for every particle in the field, and sending
+-- them per batch would hand most of the batching back.
+--
+-- The pass leaves nothing set: it restores white and hands the depth mode
+-- back the way endDecals does, because everything drawn after a particle
+-- field in this scene is drawn by somebody who did not ask for it.
+--
+-- Depth WRITES are the caller's call, and both answers are wanted. A cel
+-- particle is a hard cutout -- the shader discards its transparent surround
+-- before anything else happens -- so writing depth is correct and gives the
+-- field sorting for free, including particle against particle. Anything
+-- genuinely translucent has to come second with writes OFF, or it files its
+-- own depth in front of whatever should have shown through it.
+function Voxel3D.drawParticles(mesh, texture, batches, write)
+  if not (active and mesh and batches and #batches > 0) then return 0 end
+  local sh = activeShader
+  if not sh then return 0 end
+  local g = love.graphics
+
+  -- the cards arrive already in world space: the billboard lean is baked
+  -- into the vertices, so there is no per-field transform left to send
+  pcall(sh.send, sh, "model", "row", IDENTITY)
+  pcall(sh.send, sh, "sunModel", "row", IDENTITY)
+  -- No camera-ward pull. Pull exists to keep a standing thing from
+  -- z-fighting the ground it stands on; a particle is in the air, and
+  -- pulling it would be pulling it OUT of the occlusion this whole pass
+  -- exists to give it.
+  pcall(sh.send, sh, "pull", 0)
+  pcall(sh.send, sh, "sway", 0)
+  pcall(sh.send, sh, "grassH", Voxel3D.GRASS_H)
+  pcall(sh.send, sh, "grassLoad", { 0, 0, 0 })
+  pcall(sh.send, sh, "crushN", sendCrush(sh, nil))
+  sendCrushMap(sh, nil)
+  sendWearMap(sh, nil)
+  -- particles do not collect snow
+  pcall(sh.send, sh, "snowTop", 0)
+  pcall(sh.send, sh, "snowColor", Voxel3D.SNOW_COLOR)
+  pcall(sh.send, sh, "snowSide", Voxel3D.SNOW_SIDE)
+
+  pcall(g.setDepthMode, "lequal", write and true or false)
+  if texture then mesh:setTexture(texture) end
+
+  local drawn = 0
+  for i = 1, #batches do
+    local b = batches[i]
+    if b.count and b.count > 0 then
+      if b.img and b.img ~= texture then mesh:setTexture(b.img) end
+      g.setColor(b.r or 1, b.g or 1, b.b or 1, b.a or 1)
+      pcall(mesh.setDrawRange, mesh, b.first, b.count)
+      g.draw(mesh)
+      drawn = drawn + 1
+    end
+  end
+
+  pcall(mesh.setDrawRange, mesh)
+  pcall(g.setDepthMode, "lequal", true)
+  g.setColor(1, 1, 1, 1)
+  return drawn
+end
+
 -- Project a world point to canvas pixels: returns (x, y, scale), or nil
 -- when the point is behind the camera. `scale` is how much bigger a thing
 -- at that depth appears than one at the focus point, so a caller can size
@@ -3292,6 +3392,47 @@ end
 -- Re-bind the scene canvas for ordinary 2D drawing (no depth test), so
 -- screen-space overlays can be composited into the same image the 3D pass
 -- just filled. Pairs with endScene, which unbinds it.
+-- Ask for the readable depth buffer even when the screen-space pass is
+-- off. Set once at load by whoever needs it; read by beginScene.
+--
+-- It is a flag rather than an argument because beginScene is called from
+-- one place and the callers who care are elsewhere entirely, and it is
+-- checked per frame rather than latched so a row that turns the weather
+-- off can stop paying for it.
+Voxel3D.wantDepth = false
+
+-- The depth buffer this frame was drawn into, as a readable texture, or
+-- nil -- when the driver refused the format, when nobody asked for it, or
+-- outside a pass. Alive through the overlay: beginScene sets it and only
+-- invalidate() clears it, which is what lets an overlay draw test against
+-- the diorama it is being painted over.
+function Voxel3D.sceneDepthTex()
+  return sceneDepth
+end
+
+-- The DEVICE depth of a world point -- the same number the buffer above
+-- stores, in the same space, so a caller can compare the two directly.
+--
+-- Separate from project() rather than a fourth return, because project is
+-- on the hot path of every FX closure in the mod and none of them want
+-- this: the z row of the matrix is three multiplies those callers would
+-- pay on every call to ignore the result.
+--
+-- The mapping is GL's and is written down in two places already:
+-- Mat4.perspective builds clip z in [-1, 1], and RayFX reverses it with
+-- `d * 2.0 - 1.0` when it reconstructs a world position. This is that same
+-- relation the other way round.
+function Voxel3D.projectDepth(wx, wy, wz)
+  local m = Voxel3D.vp
+  if not m then return nil end
+  wy = wy - WorldCurve.drop(Voxel3D.curveK or 0, Voxel3D.curveX or 0,
+                            Voxel3D.curveZ or 0, wx, wz, Voxel3D.curveCap)
+  local cz = m[9] * wx + m[10] * wy + m[11] * wz + m[12]
+  local cw = m[13] * wx + m[14] * wy + m[15] * wz + m[16]
+  if cw <= 1e-6 then return nil end
+  return (cz / cw) * 0.5 + 0.5
+end
+
 function Voxel3D.beginOverlay()
   if not canvas then return false end
   love.graphics.setShader()

@@ -119,6 +119,162 @@ Wind.liveAmount = 1.2
 -- rather than a slider that happens to be high.
 Wind.gustNow = 0
 
+-- ------- TURBULENCE: THE AIR'S OWN EDDIES, AS A PRECOMPUTED FIELD
+--
+-- The band above is LAMINAR: every point on a crest moves the same way,
+-- and what breaks that up today is a per-particle pair of sines -- a
+-- wander in TIME, not in SPACE, so two motes a cell apart still march in
+-- step and the field reads as a parade. Real air has structure: eddies a
+-- couple of cells wide that neighbouring particles fall into differently.
+--
+-- The structure is PRECOMPUTED, per the task's own decision: two small
+-- lattices of 2D vectors built once at first step, sampled bilinearly.
+-- Analytic noise per particle per frame is the alternative, and at a
+-- couple of thousand flowAt calls a frame on two cores it is the
+-- expensive way to buy the same picture.
+--
+-- ------- WHY THE FIELD IS A CURL, AND WHY THE WAVENUMBERS ARE INTEGERS
+--
+-- Each lattice is the CURL of a scalar stream function: u = dPSI/dz,
+-- w = -dPSI/dx. A curl field has zero divergence by construction, and
+-- that is not a nicety -- a field with sources and sinks HERDS particles:
+-- dust drains out of one patch of air and piles up in another, and after
+-- ten seconds the field is a texture of clumps. Divergence-free eddies
+-- stir without herding.
+--
+-- PSI itself is a sum of sines with INTEGER wavenumbers on the lattice
+-- period, which makes the tile seamless by construction -- no lattice
+-- interpolation at the wrap, no seam to blend. (The water spectrum
+-- taught the adjacent lesson: fields sampled by ACCUMULATED phase decay
+-- into noise far from the origin. This one is sampled by WRAPPED
+-- position -- world coords modulo the tile -- so there is no distance
+-- from the origin to decay with.)
+--
+-- ------- HOW IT MOVES
+--
+-- Two independent lattices, blended half and half, ADVECTED with the wind
+-- at two different fractions of its speed. The differential slip is what
+-- keeps the composite from ever repeating -- the classic two-layer trick
+-- -- and it is also true to the thing modelled: turbulence rides the mean
+-- flow and lags it. The travel accumulates in Wind.step (bearing meanders,
+-- so it has to be integrated, not derived from absolute time) and wraps
+-- modulo the tile so the accumulator never grows.
+Wind.TURB_MUL = 1        -- master knob; probes flip it to 0 for an A/B
+Wind.TURB_FLOW = 0.35    -- share of the mean flow flowAt's own callers get
+local TURB_N = 64        -- lattice edge, in cells
+local TURB_CELL = 8      -- world px per cell: tile = 512 px
+local TURB_TILE = TURB_N * TURB_CELL
+local TURB_INV_CELL = 1 / TURB_CELL
+local turbA, turbB = nil, nil
+
+local function buildTurbGrid(seed)
+  -- a private LCG: deterministic across runs, and the global RNG stays
+  -- exactly where the game left it
+  local s = seed
+  local function rnd()
+    s = (s * 1103515245 + 12345) % 2147483648
+    return s / 2147483648
+  end
+  -- The spectrum: fourteen waves, wavenumbers 1..10, amplitude ~ k^-0.5.
+  -- The first cut used 1..6 at 1/k and put nearly all the energy in
+  -- 300-500px eddies -- which a mote crosses at ~0.25Hz, slow enough
+  -- that even the heaviest kind follows them at 95% and the mass task
+  -- had nothing to bite on (its accel ratio read x1.38 against a x1.5
+  -- gate). Flatter and wider moves real energy into 50-100px eddies:
+  -- forcing at 1-2Hz at mote speed, where a leaf still answers in full
+  -- and a dense grain's first-order filter visibly does not. The RMS
+  -- normalisation below absorbs the reshape, so every envelope number
+  -- downstream keeps its meaning.
+  local waves = {}
+  while #waves < 14 do
+    local a = math.floor(rnd() * 21) - 10
+    local b = math.floor(rnd() * 21) - 10
+    local k2 = a * a + b * b
+    if k2 > 0 and k2 <= 104 then
+      waves[#waves + 1] = { a = a, b = b,
+                            amp = k2 ^ -0.25,
+                            ph = rnd() * 6.2831853 }
+    end
+  end
+  local TAU_N = (2 * math.pi) / TURB_N
+  local psi = {}
+  for j = 0, TURB_N - 1 do
+    for i = 0, TURB_N - 1 do
+      local v = 0
+      for k = 1, #waves do
+        local w = waves[k]
+        v = v + w.amp * math.sin((w.a * i + w.b * j) * TAU_N + w.ph)
+      end
+      psi[j * TURB_N + i + 1] = v
+    end
+  end
+  -- central differences with wrap: discretely divergence-free
+  local ux, uz = {}, {}
+  local sum2 = 0
+  for j = 0, TURB_N - 1 do
+    local jm, jp = (j - 1) % TURB_N, (j + 1) % TURB_N
+    for i = 0, TURB_N - 1 do
+      local im, ip = (i - 1) % TURB_N, (i + 1) % TURB_N
+      local n = j * TURB_N + i + 1
+      local du = (psi[jp * TURB_N + i + 1] - psi[jm * TURB_N + i + 1]) * 0.5
+      local dw = -(psi[j * TURB_N + ip + 1] - psi[j * TURB_N + im + 1]) * 0.5
+      ux[n], uz[n] = du, dw
+      sum2 = sum2 + du * du + dw * dw
+    end
+  end
+  -- normalised to RMS 1: every amplitude decision lives in the per-frame
+  -- envelope, not in the lattice
+  local rms = math.sqrt(sum2 / (TURB_N * TURB_N))
+  local inv = (rms > 0) and (1 / rms) or 0
+  for n = 1, TURB_N * TURB_N do
+    ux[n] = ux[n] * inv
+    uz[n] = uz[n] * inv
+  end
+  return { ux = ux, uz = uz }
+end
+
+-- bilinear with wrap; x,z in CELL units. Allocates nothing.
+local function turbSample(g, x, z)
+  local i0 = math.floor(x)
+  local j0 = math.floor(z)
+  local fx = x - i0
+  local fz = z - j0
+  i0 = i0 % TURB_N
+  j0 = j0 % TURB_N
+  local i1 = (i0 + 1) % TURB_N
+  local j1 = (j0 + 1) % TURB_N
+  local n00 = j0 * TURB_N + i0 + 1
+  local n10 = j0 * TURB_N + i1 + 1
+  local n01 = j1 * TURB_N + i0 + 1
+  local n11 = j1 * TURB_N + i1 + 1
+  local ux, uz = g.ux, g.uz
+  local a = ux[n00] + (ux[n10] - ux[n00]) * fx
+  local b = ux[n01] + (ux[n11] - ux[n01]) * fx
+  local sx = a + (b - a) * fz
+  a = uz[n00] + (uz[n10] - uz[n00]) * fx
+  b = uz[n01] + (uz[n11] - uz[n01]) * fx
+  return sx, a + (b - a) * fz
+end
+
+-- The eddy vector at a world point: both lattices, half and half, each
+-- under its own accumulated travel, scaled by the frame's envelope.
+-- (0, 0) when the air is calm, the row is OFF, or the knob is zero --
+-- callers add it blind. RMS of the return is about turbEnv.
+function Wind.turbAt(wx, wz)
+  local f = Wind.flow
+  local env = f.turbEnv or 0
+  if env <= 0 or not turbA then return 0, 0 end
+  wx, wz = wx or 0, wz or 0
+  local ax, az = turbSample(turbA, (wx - f.tax) * TURB_INV_CELL,
+                                   (wz - f.taz) * TURB_INV_CELL)
+  local bx, bz = turbSample(turbB, (wx - f.tbx) * TURB_INV_CELL,
+                                   (wz - f.tbz) * TURB_INV_CELL)
+  -- 1/sqrt(2), not 1/2: the layers are independent RMS-1 fields, and the
+  -- factor that keeps the BLEND at RMS 1 is the root of the count -- so
+  -- "RMS of the return is about turbEnv" stays a true sentence
+  return (ax + bx) * 0.7071068 * env, (az + bz) * 0.7071068 * env
+end
+
 local function clamp01(n)
   n = tonumber(n) or 0
   if n < 0 then return 0 end
@@ -189,6 +345,10 @@ function Wind.step(dt)
     Wind.liveAmount = 0
     Wind.gustNow = 0
     Wind.RATE_LIVE = Wind.RATE
+    -- still air has no eddies; the rest of the flow packet keeps its
+    -- pre-OFF values, which is the shipping behaviour left untouched
+    Wind.flow.turbEnv = 0
+    Wind.flow.turbV = 0
     return
   end
 
@@ -243,6 +403,114 @@ function Wind.step(dt)
   local ang = base + meander + front
   Wind.DIR[1] = math.cos(ang)
   Wind.DIR[2] = math.sin(ang)
+
+  -- ------- and the field everything airborne reads (Wind.flowAt)
+  --
+  -- The per-frame half of it. The band travels along the bearing at the
+  -- same rate the grass ripple does -- one phase, one clock -- so the gust
+  -- that bends the meadow is the gust that slants the rain over it rather
+  -- than a second gust on its own schedule.
+  local amount = Wind.liveAmount or 0
+  local v = amount * Wind.FLOW
+  local gust = clamp01(Wind.gustNow)
+  local f = Wind.flow
+  f.vx, f.vz = Wind.DIR[1] * v, Wind.DIR[2] * v
+  f.fx, f.fz = Wind.FREQ[1] * Wind.BAND, Wind.FREQ[2] * Wind.BAND
+  f.p0 = -Wind.phase() * 0.37
+  -- A squall does not merely blow harder, it blows harder IN PLACES: the
+  -- envelope lifts the mean and deepens the trough at the same time, so a
+  -- gale is a field of fast air with slow holes in it and not a uniformly
+  -- faster calm.
+  f.base = 0.74 + 0.55 * gust
+  f.amp = 0.26 + 0.34 * gust
+
+  -- ------- and the eddies' frame half (see the turbulence block up top)
+  --
+  -- Built here, lazily, so a session that never turns the wind on never
+  -- pays the one-time lattice build.
+  if not turbA then
+    turbA = buildTurbGrid(7)
+    turbB = buildTurbGrid(9241)
+  end
+  -- Advected with the wind at two different fractions of its speed: the
+  -- slip between the layers is what keeps the composite from repeating.
+  -- Integrated, not derived from time -- the bearing meanders -- and
+  -- wrapped so the accumulator never grows past a tile.
+  local adv = amount * Wind.FLOW * dt
+  f.tax = (f.tax + Wind.DIR[1] * adv * 0.55) % TURB_TILE
+  f.taz = (f.taz + Wind.DIR[2] * adv * 0.55) % TURB_TILE
+  f.tbx = (f.tbx + Wind.DIR[1] * adv * 0.78) % TURB_TILE
+  f.tbz = (f.tbz + Wind.DIR[2] * adv * 0.78) % TURB_TILE
+  -- The envelope: calm air still has a little texture, a squall churns.
+  -- Kept here so every consumer -- the solver's motes, the rain's slant,
+  -- the weather's own world motes -- breathes on the one clock.
+  f.turbEnv = Wind.TURB_MUL * (0.55 + 0.75 * gust)
+  f.turbV = amount * Wind.FLOW * Wind.TURB_FLOW
+end
+
+-- ------- THE AIR ITSELF, AND WHY THE RAIN HAS TO ASK FOR IT
+--
+-- `leanAt` answers how far something ROOTED is pushed at a point. That is a
+-- displacement, and it is the right answer for a blade of grass. Anything
+-- actually CARRIED by the air -- a raindrop, a flake, a seed, a scrap of
+-- grit -- needs the other half of the same field: how fast the air at that
+-- point is moving, and which way.
+--
+-- It has to be the SAME field, and that is the whole reason this lives
+-- here rather than as a private sine in each caller. Wind arrives in
+-- BANDS: a gust is a wave travelling along the bearing, and the meadow
+-- already rides that wave (the `front` term in leanAt, and its twin in
+-- Voxel3D's vertex sway). A rain system that rolls its own noise instead
+-- produces a frame where a visible gust crosses the grass while the rain
+-- above it goes on falling at one flat angle -- two effects in one
+-- picture. Sharing the field is what makes a squall read as ONE thing
+-- arriving, and it is the same rule the roamers already follow.
+--
+-- Returns (vx, vz, band): the air's horizontal velocity in world pixels
+-- per second, and the band factor that produced it -- around 0.4 in a lull
+-- and 1.6 in the crest -- for a caller that wants to size or brighten by
+-- it. Zero on both under WIND OFF.
+--
+-- CHEAP ON PURPOSE. This is called once per raindrop per frame, a couple
+-- of hundred times, on a machine with two cores. Everything that does not
+-- depend on the POSITION is computed once in Wind.step (which already runs
+-- once per frame, from Weather's tick) and only the two sines are paid per
+-- call. Reading the setting through a pcall two hundred times a frame,
+-- which is what the obvious version of this does, is most of a millisecond.
+Wind.FLOW = 17          -- world px/s of air per unit of Wind.amount
+-- How much longer the gust band's wave is than the grass ripple it rides
+-- on. A band has to be many cells across or the rain sorts itself into
+-- stripes you can count; this is the number that makes it weather rather
+-- than a barcode.
+Wind.BAND = 0.21
+
+-- Filled by Wind.step. The fallback values are the ones a caller gets if
+-- it asks before the first step ever ran, and they are deliberately a dead
+-- calm rather than a guess. tax..tbz are the two lattices' accumulated
+-- travels; turbEnv is the eddies' strength this frame and turbV the world
+-- px/s flowAt's own callers convert them at.
+Wind.flow = { vx = 0, vz = 0, fx = 0, fz = 0, p0 = 0, amp = 0, base = 0,
+              tax = 0, taz = 0, tbx = 0, tbz = 0,
+              turbEnv = 0, turbV = 0 }
+
+function Wind.flowAt(wx, wz)
+  local f = Wind.flow
+  if f.amp <= 0 then return f.vx, f.vz, 0 end
+  local p = (wx or 0) * f.fx + (wz or 0) * f.fz + f.p0
+  local band = f.base + f.amp * (math.sin(p) + 0.58 * math.sin(p * 2.7 + 1.1))
+  if band < 0 then band = 0 end
+  local vx, vz = f.vx * band, f.vz * band
+  -- the eddies, on top of the band: same field for the rain that slants
+  -- through them and the weather's world motes that ride them. The share
+  -- is deliberately below the solver's own -- a raindrop crosses an eddy
+  -- in a frame and only its angle should shiver, not its lane.
+  local tv = f.turbV or 0
+  if tv > 0 then
+    local ux, uz = Wind.turbAt(wx, wz)
+    vx = vx + ux * tv
+    vz = vz + uz * tv
+  end
+  return vx, vz, band
 end
 
 function Wind.amount()

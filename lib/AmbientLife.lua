@@ -55,10 +55,54 @@ local V = ...
 local ModSetting = V.require("ModSetting")
 local DayNight = V.require("DayNight")
 local Wind = V.require("Wind")
+local ParticleMesh = V.require("ParticleMesh")
+local Voxel3D = V.require("Voxel3D")
 
 local Map = require("src.world.Map")
 
 local AmbientLife = {}
+
+-- ------- WHICH PASS THE CRITTERS ARE PAINTED IN
+--
+-- true  = geometry inside the scene pass, depth-tested (drawWorld)
+-- false = the old overlay paint, in front of everything (draw)
+--
+-- A switch rather than a deletion, because the two paths differ only in
+-- whether the world may hide a creature -- which makes flipping it in one
+-- build the whole proof that occlusion arrived and nothing else moved.
+--
+-- ------- ON, AND WHAT TURNING IT ON TOOK
+--
+-- This shipped false for a while over two readings the probe could not
+-- explain, one of them sold as "firefly and sparrow build geometry but
+-- put no pixel". Both were the PROBE's fault, not this file's: its shot()
+-- yielded twice and walked on, but a yield is an UPDATE and at
+-- POKEPORT_SPEED=4 there are four of those to a present -- so on the
+-- unlucky phase of that cycle the capture was still pending when the
+-- probe called pinNone, and the file it wrote was a photograph of the
+-- frame AFTER the creature was removed. Which kinds "failed" was decided
+-- by which iteration slot they sat in: tests/ambient_kindorder_probe.lua
+-- ran the suspects at both parities and the failure followed the slot,
+-- not the kind. The shot now waits for its own callback, and all five
+-- kinds paint here at the overlay's own position and size (centroids
+-- within a pixel, tests/ambient_occlusion_probe.lua).
+--
+-- The two passes do NOT match byte-for-byte, and are not meant to: the
+-- scene shader shades a card like everything else in the pass (hour
+-- tint, sun shadow), and the post pass edges it like any other geometry.
+-- What has to match -- and does -- is where, how big, and which way up.
+AmbientLife.WORLD_PASS = true
+
+-- How many colour batches the last scene-pass draw issued. Zero with a
+-- non-empty critter list is a different failure from an empty list.
+AmbientLife.lastBatches = -1
+
+local glowMesh = nil
+
+-- Freeze the population: no spawning, no ageing, no culling. Probes set
+-- this after placing their own fixture with pinOne, because the ordinary
+-- update would age it out and refill the map around it within seconds.
+AmbientLife.HOLD = false
 
 AmbientLife.setting = ModSetting.new("ambient", "AMBIENT",
                                      { "on", "off" }, { "ON", "OFF" })
@@ -591,7 +635,94 @@ end
 -- pitched over -- ambience under a menu or on the flat 2D world would be
 -- simulation nobody sees. The glance is the one part that runs on the FLAT
 -- world too: a turned head is a facing, and facings draw in every mode.
-function AmbientLife.update(dt, voxelOn)
+-- ------- a seam the weather probe needs
+--
+-- How many of a kind are in the air. The meadow going quiet as a front
+-- comes in is a claim about a COUNT, and counting it is the only way to
+-- tell an empty meadow from a meadow whose critters have been deleted --
+-- the two are the same screenshot and only one of them is the feature.
+--
+-- Kindless returns everything with wings, which is the number the shower
+-- is actually squeezing (leaves and fireflies ride their own caps).
+-- ------- ONE CRITTER, PARKED, FOR A PROBE TO LOOK AT
+--
+-- The scene-pass migration rewrote every kind's screen rectangles as cards
+-- in the camera's plane. That translation is where the risk is: screen y
+-- points down and a card's axis points up, so one missed minus sign is a
+-- sparrow drawn upside down or a dragonfly with its wings on its tail --
+-- and nothing else in the frame would look wrong.
+--
+-- A real map gives three critters scattered over a town, which is nowhere
+-- near enough to see any of that. This places exactly one, of a chosen
+-- kind, at a chosen point, aged to the middle of its life so no fade is
+-- running, and AmbientLife.HOLD keeps it there while both passes are
+-- photographed.
+-- Empty the population outright, for the BLANK frame a comparison needs.
+--
+-- Two captures agreeing tells you nothing on its own: identical is what
+-- you get both when the two paths draw the same thing and when neither
+-- draws anything. A third frame with no creature in it is what separates
+-- those, and it is the control the first version of this comparison
+-- lacked -- which is how scenery at the fixture's position (a window, a
+-- door) got read as a firefly and a sparrow.
+function AmbientLife.pinNone()
+  for i = #critters, 1, -1 do critters[i] = nil end
+end
+
+-- `size` is optional and probe-only: a shipping leaf spawns at 1, but a
+-- pinned one at 1 is a two-pixel card at fixture distance -- under any
+-- diff threshold, which reads as "the world pass dropped it" when nothing
+-- did. Both draw paths scale by c.size the same way, so a bigger fixture
+-- is the same translation, just measurable.
+function AmbientLife.pinOne(kind, x, y, z, size)
+  for i = #critters, 1, -1 do critters[i] = nil end
+  critters[1] = {
+    kind = kind, x = x, z = z, hx = x, hz = z, y = y,
+    -- ------- AND THE PHASE HAS TO BE CHOSEN, NOT LEFT AT ZERO
+    --
+    -- A firefly is mostly OFF: blink is sin(t*2.2 + seed) shifted by 0.35
+    -- and clamped at zero, so it is dark for well over half its cycle. A
+    -- fixture parked at t=5, seed=0 lands squarely in the dark half and
+    -- draws nothing -- which reads exactly like a broken emitter, and did.
+    -- 0.714 puts sin at its peak, and t*2 is still past 1 so the fade is
+    -- full. Every other kind is happy at 5.
+    dir = 0, seed = 0, ttl = 1e6,
+    t = (kind == "firefly") and 0.714 or 5,
+    -- ------- `tint` MEANS TWO DIFFERENT THINGS
+    --
+    -- For a butterfly it is an INDEX into BUTTERFLY_TINTS; for a leaf it is
+    -- the colour TABLE itself. Both draw paths have always read it that
+    -- way. A fixture that set it to 1 for every kind therefore handed the
+    -- leaf branch a number to index, which threw -- and because a throw in
+    -- a draw takes the render pipeline down, that one bad fixture field
+    -- then froze every reading for the three kinds tested after it, and
+    -- read as "four of five kinds build no geometry".
+    tint = (kind == "leaf") and { 0.55, 0.72, 0.32 } or 1,
+    spin = 2, flip = 1, frame = 0, size = size or 1,
+    -- a sparrow only grows wings in the air, and the wings are half of
+    -- what there is to get wrong about it
+    mode = "fly",
+    vx = 1, vz = 0, scale = 1, species = nil,
+  }
+  return true
+end
+
+function AmbientLife.count(kind)
+  local n = 0
+  for i = 1, #critters do
+    local c = critters[i]
+    if kind then
+      if c.kind == kind then n = n + 1 end
+    elseif c.kind ~= "leaf" and c.kind ~= "firefly" then
+      n = n + 1
+    end
+  end
+  return n
+end
+
+-- The real body; AmbientLife.update below wraps it. See the note there.
+local function updateBody(dt, voxelOn)
+  if AmbientLife.HOLD then return end
   local Game = game()
   local ow = Game and Game.overworld
 
@@ -635,15 +766,80 @@ function AmbientLife.update(dt, voxelOn)
   local windy = windAmtNow > LEAF_WIND_FLOOR
   local leavesWant = leafCap(windAmtNow, canopy)
 
+  -- ------- AND NOTHING WITH WINGS IS OUT IN THAT
+  --
+  -- This file did not know the weather existed, and in a downpour that is
+  -- the loudest wrong thing in the frame: butterflies working the meadow
+  -- through a squall, dragonflies holding station in it, sparrows crossing
+  -- it. An insect cannot fly in rain -- a raindrop is a substantial
+  -- fraction of its own mass -- so what actually happens is that the air
+  -- EMPTIES, minutes before the rain arrives, and stays empty until after
+  -- it stops. That emptying is a weather cue in its own right, and it is
+  -- free: the shower already has a number for how hard it is going.
+  --
+  -- Not a switch, a squeeze. The cap falls with the shower's power rather
+  -- than snapping to zero, so the meadow thins out as the front comes in
+  -- and fills back up as it clears -- and because the critters already
+  -- expire on their own, nothing has to be deleted for the field to drain.
+  --
+  -- FIREFLIES ARE EXEMPT, and deliberately: their cap already rides
+  -- DayNight.starAmount, which has the weather in it (see fireflyCap
+  -- above), so squeezing them here would be the same shower counted twice.
+  local dry = 1
+  do
+    local okW, Weather = pcall(V.require, "Weather")
+    if okW and Weather and Weather.falling then
+      local okF, kind, power = pcall(Weather.falling)
+      if okF and kind then
+        -- Snow is flyable in a way rain is not -- but nothing much is out
+        -- in it either, because it is cold. Both squeeze; rain harder.
+        local hit = (kind == "snow") and 0.75 or 1.0
+        dry = 1 - math.min(1, (power or 0) * hit)
+      end
+    end
+  end
+  local wingCap = function(n) return math.floor(n * dry) end
+
+  -- ------- AND THE ONES ALREADY OUT THERE LEAVE
+  --
+  -- Squeezing the CAP only stops new ones arriving, and that is not what
+  -- happens when a front comes in: a butterfly caught in the open does not
+  -- hover there until it happens to expire, it goes. With the cap alone the
+  -- meadow took as long to empty as a butterfly takes to time out, so a
+  -- two-minute shower could run its whole length over a field still full of
+  -- them -- which the probe caught, and which no screenshot would have.
+  --
+  -- Culled a few at a time rather than all at once, on the same reasoning
+  -- as the leaf cull below: the field should DRAIN as the front arrives.
+  -- Nothing is deleted permanently -- the spawner refills the moment the
+  -- cap comes back up, which is the half the probe checks by reading the
+  -- count a third time, after.
+  if dry < 0.999 then
+    local over = count(nil) - wingCap(MAX_BUTTERFLY + MAX_SPARROW + MAX_DRAGONFLY)
+    if over > 0 then
+      -- a couple a tick: at SPAWN_EVERY this empties a full meadow over a
+      -- few seconds, which is about how long a front takes to arrive
+      local drop = math.min(over, 2)
+      for i = #critters, 1, -1 do
+        if drop <= 0 then break end
+        local k = critters[i].kind
+        if k ~= "leaf" and k ~= "firefly" then
+          table.remove(critters, i)
+          drop = drop - 1
+        end
+      end
+    end
+  end
+
   -- one spawn attempt per half second for critters; leaves refill harder
   -- under a gale so the stream stays full as old ones land.
   state.spawnTick = state.spawnTick + dt
   if state.spawnTick >= SPAWN_EVERY then
     state.spawnTick = 0
-    if day and count("butterfly") < MAX_BUTTERFLY then spawnButterfly(ow) end
+    if day and count("butterfly") < wingCap(MAX_BUTTERFLY) then spawnButterfly(ow) end
     if glowTime and count("firefly") < fireflyCap() then spawnFirefly(ow) end
-    if day and count("sparrow") < MAX_SPARROW then spawnSparrow(ow) end
-    if day and count("dragonfly") < MAX_DRAGONFLY then spawnDragonfly(ow) end
+    if day and count("sparrow") < wingCap(MAX_SPARROW) then spawnSparrow(ow) end
+    if day and count("dragonfly") < wingCap(MAX_DRAGONFLY) then spawnDragonfly(ow) end
   end
   -- Leaves: refill hard under a gale; cull when the wind dies so a calm
   -- field is not still full of tumblers from the last squall.
@@ -850,14 +1046,288 @@ local BUTTERFLY_TINTS = {
   { 0.65, 0.78, 0.95 },     -- pale blue
 }
 
-function AmbientLife.draw(project, scale)
+
+-- ------- AND THE SAME CRITTERS, AS GEOMETRY IN THE SCENE PASS
+--
+-- AmbientLife.draw paints into main.lua's overlay, which has no depth test
+-- at all, so a butterfly crossing in front of the Mart was drawn over its
+-- roof and a dragonfly over the pond was in front of the tree behind it,
+-- always. This hands the same creatures to the scene pass as cards, and
+-- the depth buffer answers it.
+--
+-- ------- FROM SCREEN RECTANGLES TO CARDS
+--
+-- Every critter here is drawn as a handful of axis-aligned SCREEN
+-- rectangles measured in multiples of `s`, and `s` is `scale * ps` -- the
+-- projection's own factor. So one unit of `s` is one WORLD pixel at the
+-- focus plane, and a rectangle written as (sx + a*s, sy + b*s, w*s, h*s)
+-- is a card of half-extents (w/2, h/2) sitting at offset (a + w/2) across
+-- and (b + h/2) DOWN from the creature's own point.
+--
+-- Down, and the card's own axis points up, which is where the minus signs
+-- below come from and the single easiest thing in this file to get
+-- backwards: a sparrow whose breast is above its back is a sparrow drawn
+-- upside down, and nothing else about the frame would look wrong.
+--
+-- ------- WHAT STAYS BEHIND
+--
+-- The flock does. A bird crossing the sky is never wrongly in front of
+-- anything -- there is nothing between it and the camera to be wrong about
+-- -- and giving it the depth test would mean it disappears behind the
+-- skyline the horizon row stands on the far edge of the map. That is a
+-- change to how the flock READS, not a bug fix, so it is not made here.
+
+local worldMesh = nil
+
+-- One white texel. The scene shader samples a texture and discards
+-- anything under half alpha before it does anything else; an untextured
+-- card therefore needs something opaque to sample, and the colour comes
+-- from setColor as it always did.
+local whiteTex = nil
+local function white()
+  if whiteTex ~= nil then return whiteTex or nil end
+  if not (love.image and love.graphics) then whiteTex = false return nil end
+  local ok, data = pcall(love.image.newImageData, 1, 1)
+  if not ok then whiteTex = false return nil end
+  data:setPixel(0, 0, 1, 1, 1, 1)
+  local okI, img = pcall(love.graphics.newImage, data)
+  if not okI then whiteTex = false return nil end
+  pcall(img.setFilter, img, "nearest", "nearest")
+  whiteTex = img
+  return img
+end
+
+-- Kept out of the geometry pass, deliberately: see the note above.
+local IN_OVERLAY = { bird = true }
+
+-- ------- AND WHY THIS ONE IS WRAPPED
+--
+-- main.lua runs the whole particle chain -- ambient life, Vfx, weather,
+-- ground, wind, sound -- inside ONE pipeline update hook, and the engine
+-- calls that hook through a pcall. So a throw anywhere in this function
+-- does not crash: it silently takes out every module BELOW it in that list
+-- for the rest of the session, with the game still running and the
+-- overworld still on top.
+--
+-- That is exactly what happened. A probe found the wind field frozen at a
+-- count above its own budget and the weather's shafts unchanging over four
+-- hundred frames; the tick counters put the stop 196 frames after arriving
+-- on a grassy route, which is when the first critter spawns, and turning
+-- AMBIENT off made the freeze disappear. Nothing about it was visible from
+-- the outside -- no crash, no log, no missing critters, just four other
+-- systems quietly not running.
+--
+-- So the error is caught HERE, where it can be attributed, and recorded
+-- instead of thrown. The rest of the chain keeps its tick.
+AmbientLife.lastError = nil
+AmbientLife.errorCount = 0
+
+function AmbientLife.update(dt, voxelOn)
+  local ok, err = pcall(updateBody, dt, voxelOn)
+  if ok then return end
+  AmbientLife.errorCount = AmbientLife.errorCount + 1
+  AmbientLife.lastError = tostring(err)
+end
+
+local function drawWorldBody()
+  if not AmbientLife.WORLD_PASS then return 0 end
+  if #critters == 0 then return 0 end
+  local tex = white()
+  if not tex then return 0 end
+  worldMesh = worldMesh or ParticleMesh.newBuilder(256)
+
+  local function emit(c, push)
+    if IN_OVERLAY[c.kind] then return end
+    local fade = math.min(1, c.t * 2, (c.ttl - c.t) * 2)
+    if fade <= 0.02 then return end
+
+    -- a plain rectangle, in the same units the overlay wrote it in
+    local function rect(a, b, w, h, r, g2, bl, al)
+      push(tex, 0, 0, 1, 1, w * 0.5, h * 0.5, 0, r, g2, bl, al,
+           a + w * 0.5, -(b + h * 0.5))
+    end
+
+    if c.kind == "butterfly" then
+      local tint = BUTTERFLY_TINTS[c.tint] or BUTTERFLY_TINTS[1]
+      local flap = math.abs(math.sin(c.t * 16 + c.seed))
+      local w = 0.5 + flap
+      local a = 0.9 * fade
+      rect(-w, -0.5, w, 1, tint[1], tint[2], tint[3], a)
+      rect(0, -0.5, w, 1, tint[1], tint[2], tint[3], a)
+
+    elseif c.kind == "firefly" then
+      -- the additive half is drawn in its own pass; this is the hard core
+      local blink = math.sin(c.t * 2.2 + c.seed)
+      blink = math.max(0, blink - 0.35) / 0.65
+      if blink > 0.01 then
+        rect(-0.5, -0.5, 1, 1, 1.0, 0.95, 0.55, 0.9 * blink * fade)
+      end
+
+    elseif c.kind == "leaf" then
+      local img, quads = leafArt()
+      local ang = c.t * (c.spin or 2) + c.seed
+      local bob = math.sin(c.t * 4 + c.seed) * 0.25
+      local flip = math.sin(ang * 0.5)
+      local squash = 0.55 + 0.45 * math.abs(flip)
+      local tint = c.tint or { 1, 1, 1 }
+      if img and quads then
+        local n = math.max(1, math.floor(img:getWidth() / 16))
+        local f = (c.frame or 0) % n
+        local sc = math.max(0.40, 0.62 * (c.size or 1))
+        -- the overlay turns the leaf OVER by drawing with a negative x
+        -- scale whenever the spin's sine (times the per-leaf handedness)
+        -- goes negative; a card mirrors the same way by swapping its U
+        -- corners. Without this the 3D leaf flattens and reopens showing
+        -- the same face -- orbiting, not tumbling.
+        local u0, u1 = f / n, (f + 1) / n
+        if flip * (c.flip or 1) < 0 then u0, u1 = u1, u0 end
+        push(img, u0, 0, u1, 1,
+             sc * 0.5, sc * squash * 0.5, ang,
+             tint[1], tint[2], tint[3], 0.92 * fade,
+             0, -bob)
+      else
+        rect(-0.35, -0.25 + bob, 0.7, 0.5,
+             tint[1] * 0.45, tint[2] * 0.62, tint[3] * 0.25, 0.85 * fade)
+      end
+
+    elseif c.kind == "sparrow" then
+      local a = 0.95 * fade
+      rect(-1, -1, 2, 1.4, 0.42, 0.30, 0.18, a)
+      rect(-0.5, -0.2, 1, 0.6, 0.72, 0.62, 0.45, a)
+      if c.mode == "fly" then
+        local flap = math.sin(c.t * 22)
+        rect(-2.2, -1 - flap, 1.2, 0.5, 0.42, 0.30, 0.18, a)
+        rect(1, -1 - flap, 1.2, 0.5, 0.42, 0.30, 0.18, a)
+      end
+
+    elseif c.kind == "dragonfly" then
+      rect(-0.4, -0.3, 0.8, 1.6, 0.25, 0.68, 0.62, 0.95 * fade)
+      local shimmer = 0.25 + 0.35 * math.abs(math.sin(c.t * 30 + c.seed))
+      rect(-1.6, -0.2, 1.2, 0.5, 0.75, 0.88, 0.92, shimmer * fade)
+      rect(0.4, -0.2, 1.2, 0.5, 0.75, 0.88, 0.92, shimmer * fade)
+    end
+  end
+
+  local mesh, batches = worldMesh:buildCards(
+    #critters, function(i) return critters[i] end, emit)
+  -- what the builder actually saw, so "it drew nothing" can be told apart
+  -- from "it was asked to draw nothing"
+  AmbientLife.lastEmit = worldMesh.nEmit
+  AmbientLife.lastPush = worldMesh.nPush
+  AmbientLife.lastDropped = worldMesh.nDropped
+  AmbientLife.lastKind = critters[1] and critters[1].kind or "none"
+  if not mesh then AmbientLife.lastBatches = 0 return 0 end
+  local drew = Voxel3D.drawParticles(mesh, nil, batches, true)
+
+  -- ------- AND THE FIREFLY'S GLOW, WHICH IS LIGHT AND NOT A THING
+  --
+  -- Added light, so it composites rather than covering: it has to brighten
+  -- the leaf behind it, not replace it. Depth WRITES off for the same
+  -- reason -- a glow is not an object and must not file a depth that hides
+  -- what it is glowing over. The test still applies, so a firefly behind
+  -- the Mart does not light up its wall.
+  if glowMesh == nil then glowMesh = ParticleMesh.newBuilder(128) end
+  local gm, gb = glowMesh:buildCards(#critters,
+    function(i) return critters[i] end,
+    function(c, push)
+      if c.kind ~= "firefly" then return end
+      local fade = math.min(1, c.t * 2, (c.ttl - c.t) * 2)
+      local blink = math.sin(c.t * 2.2 + c.seed)
+      blink = math.max(0, blink - 0.35) / 0.65
+      if blink <= 0.01 or fade <= 0.02 then return end
+      push(tex, 0, 0, 1, 1, 1.5, 1.5, 0,
+           0.95, 0.85, 0.35, 0.22 * blink * fade, 0, 0)
+    end)
+  if gm then
+    local g = love.graphics
+    local pm, pa = g.getBlendMode()
+    g.setBlendMode("add", "alphamultiply")
+    drew = drew + Voxel3D.drawParticles(gm, nil, gb, false)
+    g.setBlendMode(pm, pa)
+  end
+
+  AmbientLife.lastBatches = drew
+  return drew
+end
+
+-- ------- BOTH DRAWS ARE WRAPPED, FOR THE SAME REASON THE UPDATE IS
+--
+-- A throw in EITHER of these takes the render pipeline down, and with it
+-- the tick of every particle system below this one in main.lua's list. It
+-- has now happened twice from this file. Catching it here turns "the wind
+-- and the weather silently stopped" into a named error against a named
+-- function, which is the whole difference between an hour and a minute.
+AmbientLife.drawError = nil
+AmbientLife.drawErrors = 0
+
+-- One tick per scene render that reached this module, and the batch count
+-- each of those renders produced, newest last. Together they answer the
+-- question the single lastBatches cannot: "was the FRAME THE CAPTURE
+-- LANDED ON one that built geometry, or did only a later frame?" -- which
+-- is the difference between a broken emitter and a probe photographing
+-- the wrong frame.
+AmbientLife.worldCalls = 0
+AmbientLife.worldTrace = ""
+
+function AmbientLife.drawWorld()
+  AmbientLife.worldCalls = AmbientLife.worldCalls + 1
+  local ok, err = pcall(drawWorldBody)
+  if ok then
+    AmbientLife.worldTrace =
+      (AmbientLife.worldTrace .. tostring(err or 0) .. "."):sub(-48)
+    return err or 0
+  end
+  AmbientLife.drawErrors = AmbientLife.drawErrors + 1
+  AmbientLife.drawError = "drawWorld: " .. tostring(err)
+  AmbientLife.worldTrace = (AmbientLife.worldTrace .. "E."):sub(-48)
+  return 0
+end
+
+-- Same instrument that found the last two silent failures: a count of
+-- what this function was ASKED to do against what it actually painted.
+-- "Nothing on screen" has three causes -- not called, called and skipped,
+-- called and painted somewhere else -- and only a counter tells them apart.
+AmbientLife.drawCalls = 0
+AmbientLife.drawSeen = 0
+AmbientLife.drawPainted = 0
+AmbientLife.drawLastXY = "none"
+
+local function drawBody(project, scale)
+  AmbientLife.drawCalls = AmbientLife.drawCalls + 1
+  -- everything but the flock now goes through the scene pass; this
+  -- paints what is left (see drawWorld and IN_OVERLAY)
   if #critters == 0 then return end
   local g = love.graphics
   local prevBlend, prevAlpha = g.getBlendMode()
 
   for _, c in ipairs(critters) do
-    local sx, sy, ps = project(c.x, c.y, c.z)
+    -- With the scene pass on, everything but the flock is drawn there and
+    -- must NOT be painted a second time here: two copies of a butterfly,
+    -- one occluded and one not, is worse than the bug this replaced.
+    --
+    -- ------- AND THIS IS AN `if`, NOT AN `and ... or`
+    --
+    -- It was written as `local sx, sy, ps = mine and project(...) or nil`,
+    -- which reads fine and is wrong: `and`/`or` are expressions, and an
+    -- expression takes ONE value from a call. So sx got the x and sy and ps
+    -- came back nil, and the first `sy - s * 0.5` below threw.
+    --
+    -- What that cost is the reason this comment is long. The throw happens
+    -- in a DRAW, main.lua runs every particle system from one pipeline hook,
+    -- and the engine takes the pipeline down when it faults -- so a missing
+    -- pair of return values here silently stopped the wind, the weather, the
+    -- ground and the ambient sound for the rest of the session, with the
+    -- game still running and nothing in any log. It took tick counters
+    -- inside four modules to find.
+    local mine = (not AmbientLife.WORLD_PASS) or IN_OVERLAY[c.kind]
+    local sx, sy, ps
+    if mine then
+      AmbientLife.drawSeen = AmbientLife.drawSeen + 1
+      sx, sy, ps = project(c.x, c.y, c.z)
+    end
     if sx then
+      AmbientLife.drawPainted = AmbientLife.drawPainted + 1
+      AmbientLife.drawLastXY = math.floor(sx) .. "," .. math.floor(sy)
       local s = math.max(1, scale * (ps or 1))
       -- ease in over the first half second and out over the last, so
       -- nothing pops into a frame it was not in
@@ -962,6 +1432,13 @@ function AmbientLife.draw(project, scale)
 
   g.setBlendMode(prevBlend or "alpha", prevAlpha)
   g.setColor(1, 1, 1, 1)
+end
+
+function AmbientLife.draw(project, scale)
+  local ok, err = pcall(drawBody, project, scale)
+  if ok then return end
+  AmbientLife.drawErrors = AmbientLife.drawErrors + 1
+  AmbientLife.drawError = "draw: " .. tostring(err)
 end
 
 return AmbientLife

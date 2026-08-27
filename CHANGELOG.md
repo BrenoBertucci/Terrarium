@@ -19,11 +19,556 @@ MAJOR.MINOR.PATCH[-CHANNEL]
 
 Tags and packages:
 
-- Git tag: `v1.26.0-mobile`
-- Zip asset: `TERRARIUM-1.26.0-mobile.zip`
-- `manifest.json` / catalog `version` field: `1.26.0-mobile`
+- Git tag: `v1.27.0-mobile`
+- Zip asset: `TERRARIUM-1.27.0-mobile.zip`
+- `manifest.json` / catalog `version` field: `1.27.0-mobile`
 
 ## Unreleased
+
+## 1.27.0-mobile
+
+The air has physics, the rain stops falling through the world, trees
+can go back to voxel hulls, and the camera can be Mario 64's.
+
+### The Super Mario 64 camera (SM64CAM row, `m`)
+
+A port of SM64's camera onto the overworld, from the decomp
+(`n64decomp/sm64`, `src/game/camera.c`). Off by default. All of it is
+`lib/MarioCam.lua`, which keeps the decomp's own names so the two can be read
+side by side.
+
+- **Two layers, as there.** A mode function writes where the camera *ought*
+  to be -- pure geometry, no inertia, no history -- and a second layer chases
+  it (`struct Camera` and `struct LakituState`). The four chase constants are
+  the decomp's own, and the asymmetry between them is the feature: the focus
+  closes 0.8 of its gap per frame and the body 0.3, so the camera turns to
+  look at you about four times faster than it flies to where it wants to
+  stand. Corrected to the real frame rate with `k' = 1 - (1-k)^(dt*30)` rather
+  than by dividing, and measured both ways: a unit probe reads 95% against 63%
+  closed over a tenth of a second, and in the running game the body's
+  steady-state lag is 6-12x the gaze's.
+- **It orbits the MAP, not the player's back** -- a fixed point of the area,
+  which here is the map's own centre. Walking round a town slides the camera
+  along the town's edge with the buildings between you and it, which is what
+  makes Bob-omb Battlefield feel the way it does and what a hand-drawn Gen 1
+  rectangle happens to be exactly the right shape for.
+- **The rest of the rig**: height from the floor under the player rather than
+  from the player, so steps do not bob the frame; `pan_ahead_of_player`; a
+  dead zone just under a cell that absorbs the grid staircase while walking
+  and recentres at rest; occlusion resolved by **rotating** to a direction
+  parallel to the wall rather than by pulling the camera in; mode transitions
+  interpolated in spherical coordinates so the camera arcs instead of cutting
+  through the building; `CAM_FLAG_SMOOTH_MOVEMENT` cleared on warps and map
+  changes; shake as a damped cosine applied after the smoothing and attenuated
+  by distance from its source; the FOV as a swappable function (`SET_` vs
+  `APP_`). Controls on `q`/`e`/`r`/`f` and the right stick, each answering
+  with the game's own sound -- and a refusal answering with `Denied`, because
+  turning is refused on SOFT by design and that has to say so.
+- **`data/camera_shots.lua`**: the authoring surface for hand-placed shots
+  (the decomp's `CameraTrigger` volumes, `boundsYaw` included). Ships empty.
+
+### The D-pad turns with the camera, and the ladder collapses to ON/OFF
+
+SM64 makes the stick camera-relative in one line, and the first cut of this
+port refused to:
+
+    m->intendedYaw = atan2s(-stickY, stickX) + m->area->camera->yaw;
+
+The refusal was wrong. An orbiting camera without it is not a camera, it is a
+puzzle -- the world turns under you while Up keeps meaning north -- and the
+four-rung ladder that shipped instead (OFF / SOFT / RADIAL / FREE) existed
+entirely to let the player ration how much of that puzzle to accept. Fix the
+cause and the ladder has nothing left to ration, so the row is now **ON/OFF**
+and ON is the whole camera, unclamped.
+
+Up means **away from the camera** at every angle. What is remapped is only
+which BUTTON the movement loop consults for a given world direction; the walk
+itself is an ordinary walk through ordinary collision, and press Up under a
+quarter turn and the player genuinely walks west exactly as if west had been
+pressed. Wrapped at `Input:isDown` and gated three ways -- the row, free-roam,
+and the stack top, so a bag does not scroll sideways because the camera is
+pointed east.
+
+This is the one thing in the mod that changes how the game CONTROLS rather
+than how it looks, and it now says so in the row's own help text.
+
+Measured by pressing UP at six camera angles and projecting the resulting
+world displacement onto the camera's forward: **83-100% along it at every
+angle**, with the row OFF still walking due north.
+
+One consequence worth stating because it is not a bug and cannot be fixed
+without giving up the mode: since the camera orbits the map's centre, UP walks
+you toward the middle of the map. Down goes outward, left and right go around.
+SM64 has exactly this -- in Bob-omb Battlefield, pushing away from the camera
+runs you at the mountain.
+
+### Sprite by angle, and the moonwalk
+
+The other half of the same problem, and the one that is unmissable in motion.
+
+A sprite frame was chosen by the character's COMPASS facing, which is right
+for a camera that cannot turn -- north is always away from you, so the north
+drawing is always the back. Turn the camera and stand north of someone walking
+north, and the sheet hands you their back while they advance toward you. A
+figure moving one way and facing the other is a moonwalk.
+
+`frameFor` now asks `MarioCam.relativeFacing`, which turns the compass facing
+by whatever quarter turn the camera is under. The mirror rides the relative
+facing too -- leaving it on the compass would show a profile facing the wrong
+way, the same defect in a smaller hat. Nothing about the world changes: the
+character still walks, collides and takes ledges north.
+
+**Four positions from three drawings is the ROM's ceiling, not a choice.**
+SpriteRenderer's rows are down / up / left with right a mirror of left, and no
+Gen 1 sheet has a diagonal in it. So the reading quantises to a quarter turn,
+and `MarioCam.QUADRANT_HYST` keeps the boundary from flickering under a camera
+hovering near 45 degrees -- without it the button under the player's thumb
+would silently change meaning back and forth.
+
+Measured two ways: walking away from the camera shows the BACK drawing at
+every one of six angles (with samples where the camera moved mid-walk thrown
+out rather than judged), and the rotation is checked to be a BIJECTION --
+four compass facings still map to four different drawings. That second check
+exists because every reading in the first one is "up", which is also what a
+rotation that collapsed everything to "up" would print.
+
+### The card leans by the camera's pitch, not the row's
+
+Found by the card check regressing from 2.1 to 16.2 degrees. `billboardMatrix`
+leaned by `Voxel.angle` -- the rung the player picked -- where what it wants is
+the pitch of the camera actually drawing. Identical for the orbit by
+construction; for a camera with a rig of its own they drift, because MarioCam
+eases its pitch, drops ten degrees over water and clamps. Now taken from
+`Voxel3D.eye`/`focus` like the yaw beside it, and the card sits 2.1 degrees off
+the eye at every angle.
+
+### The characters stand up again
+
+Found by looking at the probe's own screenshots, which is the reason it
+takes them. In the radial shot the player and the Pikachu were not tilted --
+they were **lying flat on the pavement**, smeared diagonally across it.
+
+A character is a flat card, and for the whole life of this mod it faced due
+SOUTH and only leaned back by the camera's pitch. That is exactly right for a
+camera that cannot turn, and `VoxelScene`'s own note said so in as many words
+("the character cards themselves never yaw -- they face south and lean, like
+the flat game"). The moment the camera could turn, the card kept facing south
+while the camera looked east, so it was seen edge-on: at 90 degrees a person
+is a vertical line, and at more than that they are face-down.
+
+`billboardMatrix` and `figureMatrix` now turn the card to face the eye before
+leaning it. The turn goes OUTSIDE the lean -- anchor, mirror, lean about the
+card's own X, then spin about the vertical -- so the lean axis turns with the
+card and it always tips back along the direction the camera is actually
+looking from. Yawing first and leaning second would tip every card along the
+world's north-south axis whatever the camera did, which is the same bug in a
+different hat.
+
+The angle comes from `Voxel3D.eye` and `Voxel3D.focus`, not from MarioCam, so
+it is whichever camera drew the frame. The orbit puts its eye due south of its
+focus and therefore answers exactly zero, which multiplies in as an identity:
+with the row off, every card gets the matrix it got before this existed.
+
+Authored figures -- the person the tileset paints into a couch -- turn too,
+and that one is a trade rather than a free win: turning can slide him off the
+chair he was drawn into. Taken anyway, because a figure that does not turn
+goes edge-on and vanishes into a line, and a person slightly off his seat
+still reads as a person.
+
+Measured in `tests/mariocam_probe.lua` as the angle between the card's normal
+and the direction to the eye: **2.1 degrees at every yaw, against up to 101
+degrees for the matrix it replaced**. The first version of that check measured
+the card's on-screen WIDTH instead and nearly passed the bug -- the card's
+local X is a world-X segment, which only foreshortens when the camera happens
+to look along world X, so the old matrix came back at 71% and looked almost
+fine on a frame with a character face-down on the floor. Width was never the
+defect. Facing was.
+
+### The culling box learned about yaw
+
+Not a nicety -- without it the camera above is unusable. `VoxelScene.bounds`
+and `ShadowMap`'s light frustum were both built around a camera that always
+looks north from the south, which is true of the free-roam orbit and false of
+anything that turns. Both now lay the same trapezium along wherever the camera
+actually points and square it off, keeping the old margin on all four sides.
+At yaw zero the four corners land on exactly the four expressions that were
+there before, so the orbit's behaviour is not merely preserved, it is the same
+arithmetic -- checked in the probe against a longhand copy.
+
+`ShadowMap.groundReach` also takes the camera's pitch, lens and distance now
+instead of reading all three off the orbit. Worth recording which way that
+cuts, because the guess is backwards: a **wider** lens sees **further**, since
+the frustum's top ray sits half the FOV above the view direction. So the SM64
+camera's 45 degrees reaches shorter than the orbit's 53, and the callers take
+the **larger** of the two -- a box fitted to the shorter answer replaced the
+far tree line with a detached rectangle of grass hanging over the horizon.
+
+### `tests/mariocam_probe.lua`, and three measurements that were wrong
+
+Worth writing down, because two of them looked like data.
+
+1. Counting sky-coloured pixels in the near field to find culling holes was
+   measuring **Pallet Town's sea**: the beach is blue, the test was
+   "blue-dominant", and the number swung between 3% and 34% purely with how
+   much water the camera faced.
+2. Photographing the frame with the real box and again with the box forced
+   enormous, then diffing, was measuring **everything that moves between two
+   frames** -- the shadow map landing on a different resolution rung, NPCs
+   walking, the follower. It reported 5% of the near field lost on the
+   untouched orbit camera, which cannot be true.
+3. So the box is now asked directly, on one frame, with no pixels involved:
+   for every terrain chunk, does it project into the viewport, is it within
+   the reach the box itself claims, and does the box keep it. Deterministic.
+
+And the check that saved all of it: a **canary** that puts the old north-only
+box back and demands the counter find the holes. The first run of the suite
+passed everything on PALLET_TOWN -- and the canary showed why, which is that
+Pallet is smaller than the culling box, so nothing is ever culled at any yaw
+and every pass was vacuous. The suite moved to CELADON_CITY, and the canary to
+ROUTE_17: the old box culls 2 on-screen chunks at -61 degrees there and the
+new one culls none.
+
+### A counter, and the second silent kill
+
+With the pipeline crash fixed, the ambient life's probe stopped reporting
+the same stale batch count for five different kinds and started reporting
+honest ones -- which said four of the five built no geometry at all. Push
+counters inside the builder (`nEmit`, `nPush`, `nDropped`) named it in one
+run, and the giveaway was a field nobody had thought to print: the builder
+was still seeing a FIREFLY three kinds after the probe had replaced it.
+
+So the builder was frozen, not empty -- the pipeline had gone down again.
+The wrapped draw named the line: `attempt to index local 'tint' (a number
+value)`.
+
+`tint` means two different things depending on the creature. For a
+butterfly it is an INDEX into `BUTTERFLY_TINTS`; for a leaf it is the
+colour TABLE itself. Both draw paths have always read it that way, and the
+test fixture set it to `1` for every kind -- so the leaf branch was handed
+a number to index. One bad field in one probe fixture, and because a throw
+in a draw takes the render pipeline down, it then froze every reading for
+the three kinds tested after it and read as "four of five kinds are
+broken". They were fine.
+
+All five now build exactly what their shape calls for: butterfly 2 cards in
+1 batch, firefly a core and a glow in 2, leaf 1 in 1, sparrow 4 in 2 (body
+and breast are different browns), dragonfly 3 in 2 (a teal body, two pale
+wings).
+
+Also fixed in the fixture: a parked firefly at t=5 sits in the dark half of
+its own blink and draws nothing, which reads exactly like a broken emitter.
+It is pinned to the lit phase now.
+
+**And a real latent bug in the builder, found while reading for this one.**
+`buildCards` reset its batch counts by walking the PREVIOUS frame's order
+list -- but batches live in a persistent map, so any batch whose key was
+absent from that particular list kept a stale count, and the test for
+"already in this frame's order" was `n == 0`, which a stale count fails.
+Such a batch collected cards that were never emitted. Replaced with a
+per-build stamp, which cannot go stale.
+
+Both draws in AmbientLife are now wrapped, like the update: a throw is
+recorded against a named function in `AmbientLife.drawError` instead of
+silently taking the wind, the weather, the ground and the ambient sound
+down with it.
+
+
+### One missing pair of return values, and four systems stopped
+
+A probe found the wind field frozen at 102 motes under a budget of 44 --
+which the per-frame cap makes arithmetically impossible if the update ran
+at all -- and the weather's shafts unchanged over four hundred frames. The
+game was running. The overworld was on top. Nothing was in any log.
+
+**What it was.** A one-line filter added to `AmbientLife.draw`:
+
+    local sx, sy, ps = mine and project(c.x, c.y, c.z) or nil
+
+`and`/`or` are expressions, and an expression takes ONE value from a call.
+So `sx` got the x while `sy` and `ps` came back nil, and the first
+`sy - s * 0.5` threw. It is now an `if`.
+
+**Why it was so quiet.** main.lua runs every particle system from a single
+render-pipeline update hook -- ambient life, impact sheets, weather, ground,
+wind, ambient sound, in that order -- and the engine calls that hook behind
+a pcall. A throw in the ambient life's DRAW took the pipeline down, and with
+it the tick for everything after it in that list. No crash, no message: the
+wind stopped blowing, the rain stopped falling, the ground stopped drying
+and the crickets went quiet, all at once, for the rest of the session.
+
+**How it was found**, because the method is the point. Nothing observable
+from outside distinguishes "the update ran and ignored its budget" from
+"the update never ran" -- so `Weather.ticks`, `Weather.ticksOk`,
+`WindFX.ticks`, `WindFX.ticksLive` and `WindFX.lastGate` now count and
+record. Sampling them per stage put the stop 196 frames after arriving on a
+grassy route, which is when the first critter spawns; turning AMBIENT off
+made it vanish. Three wrong guesses came first -- a battle taking the stack
+(the stack was fine), a RES change tearing down the pass (it froze without
+one), the weather's own `failed` latch (it was false) -- and each was
+cheap only because the counters could rule it out in one run.
+
+`AmbientLife.update` is now wrapped so a throw there is recorded in
+`AmbientLife.lastError` and attributed, rather than silently taking four
+other modules with it.
+
+### PFX: how much air there is, on its own row
+
+New **PFX** row -- LOW / ON / HIGH / MAX. Every particle budget in the mod
+used to hang off RES, so asking for more weather also asked the grass, the
+shadow map and the cloud raymarch to get heavier, and there was no way to
+cut the air without cutting the picture.
+
+It is a MULTIPLIER, not a replacement. ON is 1.00 and reproduces exactly
+the counts each RES rung already had; the row is a second axis over the
+top. Measured with RES held fixed the whole run:
+
+| rung | mul | wind | shafts | splashes | drips |
+|---|---|---|---|---|---|
+| LOW | 0.40 | 44 | 312 | 120 | 28 |
+| ON | 1.00 | 110 | 780 | 300 | 72 |
+| HIGH | 2.00 | 220 | 1560 | 600 | 144 |
+| MAX | 4.00 | 440 | 3120 | 1200 | 288 |
+
+And the live field follows the ceiling rather than merely being given one:
+wind 36 -> 369 live, shafts 281 -> 2815 live, across the same four rungs,
+with `scale` never moving. There is no frame-rate floor these are tuned
+against -- frame time on the machine this was written on is not repeatable
+enough to define one -- so the rungs are defined in counts, which are.
+
+New probe: `tests/pfx_row_probe.lua`.
+
+
+### The rain stops falling through the world
+
+Every rain vertex now carries the device depth of the world point it
+stands for, and both draw paths discard a fragment that is deeper than the
+frame's own depth buffer at that pixel. Measured: **49% of the rain
+fragments in a Pallet Town shower were being drawn in front of things they
+were behind** -- roofs, walls, and the ground itself.
+
+The wind field solved this by becoming geometry. The weather could not.
+Its shafts, crowns, jets and rings are procedural SCREEN-SPACE quads --
+worked out in pixels, pushed through `rainPush`, drawn by a shader that
+reads the frame behind them in order to refract it. Handing those to the
+hardware depth test would have meant rewriting all of it and throwing the
+lens away. So the geometry stays exactly where it was and only gains an
+attribute: `RAIN_FMT` grows a `RainDepth` float, filled from the new
+`Voxel3D.projectDepth`, and the shader compares it against
+`Voxel3D.sceneDepthTex()`. Head and tail carry their own, because a needle
+leaning across a fence can have one end in front of it and the other
+behind.
+
+The readable depth buffer used to be RayFX's alone -- at RTX OFF the pass
+allocated none. `Voxel3D.wantDepth` lets a second caller ask, and the
+weather sets it per frame and only while it has something to draw, so a
+clear sky at RTX OFF costs what it always did. The cheap additive path
+gets a shader of its own whose only job is the test, so occlusion is not a
+reward for leaving the lens on.
+
+**Three things this cost, and each was invisible until something measured
+it.**
+
+`Weather.update` sits at line 2311 and the lazy `voxel3D()` handle was
+first written at 2745 -- four hundred lines below its own caller. Inside
+update the name was a global, the global was nil, and calling it threw on
+every frame: the tick never ran and a probe found the shower with zero
+shafts and zero splashes in it. A total, silent failure of the weather
+system, from a local declared too far down a file. The same mistake was
+then made a second time, with `depthArmed`, and caught by sweeping the
+file for it rather than by noticing.
+
+The test was suppressed under T-SHIFT on the reasoning that the rain is
+painted after the blur onto a different surface. That reasoning was wrong
+-- a blur changes what colour a pixel is, it does not move anything, so
+the depth buffer is still a true statement about the frame. And it
+mattered: the saved options here have T-SHIFT at 3, so the test armed on
+exactly zero frames. What actually has to hold is narrower and checkable --
+the surface being painted must be the same GRID as the depth texture --
+and `sendDepth` now asks the canvas rather than the call path.
+
+And the first measurement was worthless: counting "rain pixels" as the
+difference between two frames of the same state credited every blade of
+grass and every walking NPC to the shower. Setting the bias to -10, which
+discards every fragment by construction, exposed the noise floor at 72% of
+what was being counted. Every figure above is against that floor.
+
+New: `tests/rain_occlusion_probe.lua`, which runs all three states -- test
+off, test on, everything discarded -- from one pinned camera in one build.
+
+
+### The air is IN the diorama now, not painted over it
+
+Wind motes are geometry inside the scene pass. They were painted in
+main.lua's overlay, which sets no depth mode at all -- so dust crossed in
+front of the mountain and blew through every roof, always, and the comment
+in Weather.lua said as much outright.
+
+`lib/ParticleMesh.lua` turns a particle field into one stream mesh.
+`Voxel3D.drawParticles` submits it the way `drawGroup` submits terrain:
+uniforms once, then a draw per colour. Colour cannot ride the vertices --
+`Voxel3D.FORMAT` is position, UV and one shade float, shared with terrain
+and characters -- so the field is bucketed by (image, colour, quantised
+fade) and each bucket is a range of the one mesh. A full gale over Pallet
+Town comes out as 28 buckets.
+
+The billboard is not a look-at. This engine's cards "always face SOUTH and
+only lean back by the camera's pitch", so every card in frame shares one
+orientation, and it is baked straight into the vertices: with t = angle -
+pi/2, a card point (u, v) lands at (x + u, y + v cos t, z + v sin t). Eight
+multiply-adds a vertex and no matrix per particle.
+
+Depth WRITES are on. These sprites are hard cutouts -- `make_wind_sprites.py`
+authors white and fully transparent, nothing between -- and the scene
+shader discards the transparent half before it does anything else, so a
+mote writing its own depth is honest and the field sorts itself, particle
+against particle, with no sort in Lua.
+
+Size changes register, and had to: the overlay sized a mote in SCREEN
+pixels and multiplied by the projection's scale to fake perspective, while
+a card of a given WORLD size shrinks with distance because it genuinely is
+further away.
+
+**Proof, because a hundred random motes over a moving world cannot be
+argued about.** The first attempt at this measurement tried to isolate the
+field by subtracting a WIND OFF frame -- WIND OFF also stops the grass, so
+what it measured was a meadow, and 95% of the frame came back "lit".
+Instead `tests/particles_occlusion_probe.lua` freezes the field
+(`WindFX.HOLD`), parks one magenta mote where it wants it
+(`WindFX.pinOne`), and flips `WindFX.WORLD_PASS` in the same build:
+
+| where the mote is | overlay | scene pass |
+|---|---|---|
+| inside a house, below its roof | 354 px | **2 px** |
+| out in the open, over grass | 858 px | **1834 px** |
+
+The second row is what stops a broken draw from reading as a successful
+occlusion: if the pass were simply failing to paint, the open-ground mote
+would have vanished too. It does not -- it comes out larger, which is the
+world-space sizing above.
+
+Not yet verified: whether a full hundred-mote field LOOKS the way it did.
+The dust is small and pale and could not be told apart from the tileset's
+own dither in the captures taken. Occlusion, batching and mote count are
+measured; the field's appearance at scale is not.
+
+Still on the overlay, deliberately: the weather's screen-space rain
+streaks, which fall between the camera and the whole diorama and are
+correct in front of everything. The weather's WORLD motes and the ambient
+life have not moved yet.
+
+
+### One solver for the air
+
+`lib/Particles.lua`. The integration comes out of WindFX and into a pool
+with a step: the band lookup, the per-kind speed, the two-sine curl, the
+bob, the ground clamp and the reach cull, in one place. WindFX is its first
+client; the weather's world motes are the second, and after that occlusion,
+lighting, turbulence and drag are each one change rather than two.
+
+Per-kind numbers that used to be an if-ladder inside the loop are a table
+now (`WindFX.KINDS`). A kind's speed may be a function rather than a
+constant, which is what a leaf needs -- it stalls, catches and goes again,
+and that pulse was the one rule the old ladder could not write down. `mass`
+and `area` are recorded on every kind and read by nothing: they are the drag
+task's inputs, and having them here means that task edits a solver instead
+of editing every kind.
+
+Dead particles are swap-removed and their tables kept as a freelist, so a
+steady field allocates once. The old code shifted the array with
+`table.remove`, which is why its loop had to walk backwards -- and a loop
+whose direction is load-bearing breaks the next time somebody touches it.
+
+**This is a port, and the point of a port is that nothing moved.**
+`tests/particles_parity_probe.lua` samples the field's statistics over 160
+frames of a pinned gale and prints its own noise floor -- two independent
+windows in the same run -- so the before/after has something to be judged
+against rather than a number to be admired. Across two post-port runs every
+statistic lands inside that floor except one, and it is a different one each
+time: `minY` on the first, `meanSpin` on the second, each by under a point.
+A physics change makes the same field fail in the same direction every time.
+`meanSpin` in particular cannot be the solver's doing -- the step never
+writes `spin`, only accumulates `ang` from it -- so it tracks the kind mix,
+which tracks `Wind.amount()`, which came in at 2.123, 2.005 and 2.065 across
+the three runs.
+
+**And it is not faster.** Measured rather than assumed: with the collector
+stopped, 600 frames of a live 101-mote field allocate 96.585 KB/frame before
+the pool and 96.688 KB/frame after -- a tenth of a percent, which is
+nothing. The arithmetic says why. `Quality.windStreaks` caps the field at
+110 motes at RES FULL, motes live 1.2-5 s, so the field spawns about half a
+table per frame against the ~96 KB the engine allocates per frame anyway.
+The pool is the right shape and buys no measurable time; the reason to do it
+was never the milliseconds.
+
+### Dust, leaves and spray from the world itself
+
+The solver grew clients that emit FROM the map rather than from a random
+sky box.
+
+- **Turbulence and mass.** `Wind.turbAt` is one precomputed air field
+  shared by the solver, the rain and the weather motes. Particle velocity
+  is state that converges on that air with `tau = Particles.TAU · mass/area`
+  -- a leaf dances every eddy, a dash slides the same trip smoothed.
+- **Footsteps** (`lib/StepFX.lua`): every walker (you, Pikachu, NPCs)
+  kicks a dense grain backward every 8 px and a light puff that takes the
+  air. Mud and snow kill it; interiors too. Lives in its own field so
+  calm air still makes dust.
+- **Vegetation** (`lib/VegFX.lua`): leaves, seeds and petals shed from
+  real tree / tuft / flower sites (`TileShape.at`). A gust strips a
+  crown in a burst. Calm air sheds nothing -- that is the wind floor.
+- **Spray** (`lib/SprayFX.lua`): wind over water pulls spray off the
+  shoreline. How much comes from `WaterBody.sizeAt` four cells out to
+  sea, so Route 19 throws ~7x what Viridian's pond does, with no
+  per-map table.
+
+New art: `assets/vfx/rain_droplets.png`, `rain_impact.png`, `rain_mist.png`,
+`rain_ripple.png`, `leaf_water.png`.
+
+### The after-rain actually drips
+
+The minutes after a shower were drawing nothing. Measured on a pixel A/B --
+three captures from one pinned camera in Pallet Town, plus a second capture of
+the same state as a noise floor -- a dry frame and an after-rain frame differed
+by 7.86% of pixels against a noise floor of 7.50%. A ratio of 1.0: the
+after-rain was, to the eye, a dry frame.
+
+Two separate causes, and the first one had been hiding the second.
+
+**The window was never actually open in any test.** Every probe that has ever
+measured the after-rain sets `Weather.setting:sync("rain")` in its setup. With
+the WEATHER row still saying RAIN, `tick()` drives `state.kind` back to `"rain"`
+every frame, and the branch that clears `after.untilAbs` whenever a kind is set
+above 0.08 power wipes the window the tick after it is armed. So every
+"after-rain" figure ever recorded -- including the 18.1 live drips this project
+wrote down as proof the feature worked -- was rain still falling. Arming the
+window with the row set to OFF reads `afterRain = 0.99` and **five** drips.
+
+**And the eave rate was sized as a supplement, then left holding the whole
+effect.** While it rains the gutters have two sources: every roof splash spawns
+a drip at `EAVE_CHANCE`, and an ambient dart runs at `EAVE_RATE`. With ~194
+roof splashes live, the splash source is most of what is on screen -- 35 drips
+in a pinned downpour. When the sky stops, that source is gone outright and the
+dart is left alone at a rate that only ever had to top it up: 26 attempts/s,
+of which ~23% land on a lid, each drip alive under a second, is about three.
+
+So the after-rain regime gets its own rate. `EAVE_RATE_AFTER = 190`, chosen to
+land back on the during-rain density it stands in for; the shower keeps 26,
+because the shower still has its roof hits and raising one number for both
+would have bought a heavier storm to fix a problem the storm does not have.
+`DRIP_MAX` still caps it at 72 live.
+
+Also worth writing down, because it cost a measurement: `GroundFX.SOAK` is **55
+seconds** of downpour to a saturated ground. A four-second test shower leaves
+`wet = 0.065` and no puddles, and then the after-rain has nothing to show
+because it never rained. The probe now soaks for seventy seconds.
+
+After both: drips 5 -> 21, landing splashes 1 -> 17, and the dry-vs-after-rain
+pixel difference goes from 1.0x the noise floor to **3.5x**. Puddles and the
+falling drips both read in the difference image.
+
+New probe: `tests/t0_baseline_probe.lua` -- frame cost at both RES rungs, plus
+the three-capture pixel A/B with a same-state control frame as its noise floor.
+
 
 ### TREES options row — the forest, back to voxel on demand
 
