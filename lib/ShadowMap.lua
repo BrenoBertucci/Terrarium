@@ -285,15 +285,35 @@ ShadowMap.FAR_CAP = 2.5     -- multiples of the view height
 -- is lost is shadows nobody was looking at. GEOMETRY cannot: terrain culled
 -- at the cap is terrain that visibly is not there, so VoxelScene asks for a
 -- box twice as deep before it drops a chunk (see VoxelScene.bounds).
-local function groundReach(vh, capMul)
-  local a = Voxel.angle or 0
+-- ------- A CAMERA THAT IS NOT THE ORBIT
+--
+-- Every term below used to be read off the orbit: its pitch from
+-- Voxel.angle, its lens and its distance from Voxel.FOCAL. That is right
+-- for the orbit and wrong for anything else, and lib/MarioCam.lua is
+-- something else in all three at once -- it stands at its own distance, it
+-- drops ten degrees below the ladder over water, and it shoots on SM64's
+-- 45-degree lens rather than the orbit's 53.
+--
+-- The lens is the one that surprises, and it surprises the other way
+-- round from the guess: a WIDER field of view sees FURTHER. The top ray of
+-- the frustum sits half the FOV above the view direction, so opening the
+-- lens tips that ray toward horizontal and it lands further out. The
+-- orbit's 53 degrees therefore reaches about a quarter further than SM64's
+-- 45 at the same pitch -- which is why the callers below take the LARGER
+-- of the two answers rather than simply the one for the camera in use.
+--
+-- So the three are parameters, defaulting to the orbit's own answers. A
+-- caller that passes nothing gets exactly the arithmetic this function had
+-- before they existed.
+local function groundReach(vh, capMul, angle, halfFov, camDist)
+  local a = angle or Voxel.angle or 0
   local cap = (capMul or ShadowMap.FAR_CAP) * vh
   -- half the vertical field of view: the same FOCAL the camera projects
   -- with, so the two frusta agree about what is on screen
-  local half = math.atan(1 / (2 * Voxel.FOCAL))
+  local half = halfFov or math.atan(1 / (2 * Voxel.FOCAL))
   local below = (math.pi / 2 - a) - half     -- top ray, below horizontal
   if below <= 0.02 then return cap end
-  local dist = Voxel.FOCAL * vh
+  local dist = camDist or (Voxel.FOCAL * vh)
   local horizon = dist * math.cos(a) / math.tan(below)
   return math.max(vh / 2, math.min(cap, horizon - dist * math.sin(a)))
 end
@@ -344,9 +364,20 @@ local function fit(cx, cy, vw, vh)
   local f = sunDir()
   local view = Mat4.lookAt({ 0, 0, 0 }, f, { 0, 0, -1 })
 
+  local MarioCam = V.require("MarioCam")
+  local camYaw = MarioCam.viewYaw()
   local reach = ShadowMap.HEIGHT
                 * math.max(math.abs(ShadowMap.KX), math.abs(ShadowMap.KZ)) + 24
+  local mcHalf, mcDist = MarioCam.lens()
   local north = groundReach(vh)
+  if mcHalf then
+    -- bigger, never smaller -- for the reason spelled out where
+    -- VoxelScene.bounds does the same thing: a frustum fitted shorter than
+    -- the one the look was tuned against is a band of unshadowed world,
+    -- and the sun pass has less margin to give than the geometry does
+    local mine = groundReach(vh, nil, MarioCam.orbitAngle(), mcHalf, mcDist)
+    if mine > north then north = mine end
+  end
   -- the view widens with distance, so the far ground spans more than the
   -- near ground does; half the depth is a serviceable stand-in for the
   -- frustum's true spread and costs a good deal less resolution
@@ -354,6 +385,32 @@ local function fit(cx, cy, vw, vh)
   local xs = { cx - vw / 2 - spread, cx + vw / 2 + spread + reach }
   local ys = { -32, ShadowMap.HEIGHT }         -- -32 covers recessed water
   local zs = { cy - north, cy + vh / 2 + reach }
+  -- A CAMERA WITH A YAW covers a different patch of ground, and a light
+  -- frustum fitted to the wrong patch is not a performance problem, it is
+  -- a band of unshadowed world down the side of the frame. Same rotated
+  -- trapezium VoxelScene.bounds builds, for the same reason and to the
+  -- same numbers at yaw zero; the caster margin stays on the two fixed
+  -- sides the sun actually hangs on.
+  if camYaw ~= 0 then
+    local fx, fz = math.sin(camYaw), -math.cos(camYaw)
+    local rx, rz = math.cos(camYaw), math.sin(camYaw)
+    local back, nearW, farW = vh / 2, vw / 2, vw / 2 + spread
+    local x0, z0, x1, z1
+    local function corner(along, across)
+      local x = cx + fx * along + rx * across
+      local z = cy + fz * along + rz * across
+      x0 = x0 and math.min(x0, x) or x
+      x1 = x1 and math.max(x1, x) or x
+      z0 = z0 and math.min(z0, z) or z
+      z1 = z1 and math.max(z1, z) or z
+    end
+    corner(-back, -nearW)
+    corner(-back, nearW)
+    corner(north, -farW)
+    corner(north, farW)
+    xs = { x0, x1 + reach }
+    zs = { z0, z1 + reach }
+  end
 
   local l, r, b, t, zn, zf
   for _, x in ipairs(xs) do

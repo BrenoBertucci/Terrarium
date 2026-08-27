@@ -150,6 +150,21 @@ function TiltShift.levelLabel(level)
   return TiltShift.LABELS[(level or TiltShift.level) + 1] or "OFF"
 end
 
+-- ------- WHETHER THIS PASS IS GOING TO SMEAR WHAT IS UNDER IT
+--
+-- Asked by main.lua, once per frame, to decide WHERE the weather is
+-- painted: inside the diorama when nothing is going to blur it, and after
+-- the blur when something is. A raindrop is a hard-edged needle and a
+-- needle through a depth-of-field is a smudge -- the same reason the radar
+-- and the start menu are already re-painted on the far side of this pass.
+--
+-- Deliberately the same test the worldPresent below gates its own repaints
+-- on, rather than a second opinion about it: if these two ever disagreed
+-- the rain would be painted twice in one frame or not at all.
+function TiltShift.blurring()
+  return (TiltShift.level or 0) > 0
+end
+
 function TiltShift.active()
   return TiltShift.level > 0
 end

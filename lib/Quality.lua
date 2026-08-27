@@ -76,6 +76,47 @@ Quality.shadowSetting = ModSetting.new("shadowQuality", "SHADOWS",
                                        { "low", "off", "high", "soft" },
                                        { "LOW", "OFF", "HIGH", "SOFT" })
 
+-- ------- HOW MUCH AIR THERE IS, ON ITS OWN ROW
+--
+-- Every particle budget in this mod used to hang off RES: the wind field
+-- through windStreaks below, the rain's shafts through Weather's own
+-- ladder. Which meant there was no way to ask for MORE weather without
+-- also asking the grass, the shadows, the fog and the cloud raymarch to
+-- get heavier -- and no way to cut the air without cutting the picture.
+--
+-- ------- IT IS A MULTIPLIER, NOT A REPLACEMENT
+--
+-- The obvious design is for this row to name the counts outright. It is
+-- the wrong one: the counts that exist were tuned per RES rung for good
+-- reasons (a quarter-resolution frame does not want a full-resolution
+-- field), and replacing them would hand everyone at 1/3 a field sized for
+-- FULL the first time they launched.
+--
+-- So ON is 1.0 and reproduces exactly what is there today at every RES
+-- rung, and the row is a second axis over the top of it. Somebody at RES
+-- 1/2 who wants a squall gets four times the air without the grass or the
+-- shadow map noticing, which is the thing that could not be done before.
+--
+-- MAX is deliberately more than the machine this was written on enjoys.
+-- That is what a MAX rung is for -- there is no frame-rate floor this has
+-- to clear, because frame time on that machine is not repeatable enough to
+-- define one (two runs of the same probe disagreed by five to seven fps).
+-- What IS repeatable is the count, so the rungs are defined in counts.
+Quality.particleSetting = ModSetting.new("particleFx", "PFX",
+                                         { 1, 0, 2, 3 },
+                                         { "ON", "LOW", "HIGH", "MAX" })
+
+Quality.PARTICLE_MUL = { [0] = 0.40, [1] = 1.00, [2] = 2.00, [3] = 4.00 }
+
+-- The multiplier every particle budget in the mod passes through. Read
+-- from inside the render path like the rest of this file, so it is a pcall
+-- and a clamp rather than a plain get.
+function Quality.particles()
+  local ok, v = pcall(Quality.particleSetting.get, Quality.particleSetting)
+  local n = (ok and tonumber(v)) or 1
+  return Quality.PARTICLE_MUL[n] or 1
+end
+
 -- Read through pcall and clamped, because these are consulted from inside
 -- the render path: a setting that could throw there would take the frame
 -- with it, and the whole contract of this mod is that it falls back rather
@@ -243,10 +284,21 @@ end
 -- pixels and a streak is a smear. Zero there.
 function Quality.windStreaks()
   local s = Quality.scale()
-  if s >= 4 then return 0 end
-  if s == 3 then return 22 end
-  if s == 2 then return 48 end
-  return 110
+  local base
+  if s >= 4 then base = 0
+  elseif s == 3 then base = 22
+  elseif s == 2 then base = 48
+  else base = 110 end
+  -- ------- AND THEN THE PFX ROW, WHICH IS THE ONE ABOUT THE AIR
+  --
+  -- A multiplier rather than a replacement, so ON is what was always here.
+  -- The floor of one at anything above LOW matters: at RES 1/4 the base is
+  -- zero, and a player who has deliberately turned the air UP should get
+  -- air, not a row that does nothing because a different row said no.
+  local m = Quality.particles()
+  local n = math.floor(base * m)
+  if m > 0.5 and n < 1 and s < 4 then n = 1 end
+  return n
 end
 
 -- Whether the neighbouring maps cast into the shadow map. They are drawn

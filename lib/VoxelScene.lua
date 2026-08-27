@@ -169,8 +169,14 @@ VoxelScene._skyFor = skyFor           -- named for the suite
 VoxelScene._skyStrength = skyStrength
 
 -- A facing as a yaw about +Y, kept for callers that reason about which way
--- an entity points (the mod exports it). The character cards themselves
--- never yaw -- they face south and lean, like the flat game.
+-- an entity points (the mod exports it).
+--
+-- This is the entity's facing IN THE WORLD and has nothing to do with
+-- which way its card is turned. The card faces the CAMERA (see cardYaw
+-- below); which way the character is actually looking is carried by the
+-- sprite FRAME, exactly as it is in the flat game. The two were the same
+-- question back when the camera could not turn, and this note used to say
+-- so; they are not the same question any more.
 local YAW = {
   down = 0,
   up = math.pi,
@@ -299,8 +305,39 @@ end
 -- The sheet frame and mirror flag the 2D path would draw for this pose
 -- (same tables as SpriteRenderer). Shared by the billboard pass and the
 -- shadow pass so a walking character's shadow swings its legs too.
+--
+-- ------- SPRITE BY ANGLE, and the moonwalk it exists to kill
+--
+-- The facing this asks about is the one the CAMERA sees, not the compass
+-- one. Those were the same question for the entire life of this mod --
+-- the camera could not turn, so north was always away from you -- and the
+-- moment the orbit could swing they came apart, in the most visible way
+-- there is: stand north of someone walking north and the sheet hands you
+-- their BACK while they advance toward you. A figure moving one way and
+-- facing the other is a moonwalk, and it is the first thing anybody
+-- notices about a turned camera.
+--
+-- MarioCam.relativeFacing turns the compass facing by whatever quarter
+-- turn the camera is under. Nothing about the WORLD changes: the character
+-- still walks north, still collides north, still takes the ledge north.
+-- Only the drawing picked for them changes, to the one a viewer standing
+-- where the camera stands would actually see.
+--
+-- The mirror rides the relative facing too, because the mirror is the
+-- whole mechanism by which the one profile drawing serves both sides --
+-- leaving it on the compass facing would show a character in profile
+-- facing the wrong way, which is the same defect wearing a smaller hat.
+--
+-- Four positions from three drawings is the ceiling here, and it is the
+-- ROM's ceiling rather than a choice: SpriteRenderer's rows are
+-- down / up / left, with right a mirror of left, and no Gen 1 sheet has a
+-- diagonal in it. So the relative facing quantises to a quarter turn and
+-- the hysteresis in MarioCam.quadrant is what keeps it from flickering at
+-- the boundary. A true eight-way read would need art that does not exist
+-- for any sprite in the game.
 local function frameFor(def, facing, phase, flip)
   local SR = require("src.render.SpriteRenderer")
+  facing = V.require("MarioCam").relativeFacing(facing)
   local frame, mirror = 0, false
   if (def.frames or 1) > 1 then
     frame = (def.walker and phase == 1) and SR.WALK[facing]
@@ -326,21 +363,110 @@ local function drawShadow(sprite, px, py, facing, phase, flip, gh, lift,
                Voxel3D.shadowMatrix(px, py, gh, lift, mirror))
 end
 
+-- ------- WHICH WAY A CARD HAS TO TURN
+--
+-- A character is a flat card standing on its cell, and for the whole life
+-- of this mod it faced due SOUTH and only leaned: the free-roam camera has
+-- no yaw, it is always parked to the south looking north, so a card that
+-- faces south faces the camera by construction. That is what the note on
+-- YAW above means by "the character cards themselves never yaw".
+--
+-- The moment a camera CAN turn -- lib/MarioCam.lua's radial orbit, which
+-- swings most of a half circle across a town -- that stops being true and
+-- the failure is spectacular rather than subtle: the card keeps facing
+-- south while the camera looks east, so it is seen edge-on and the
+-- character reads as LYING FLAT ON THE GROUND at an angle. Not a wrong
+-- angle. A person on the floor.
+--
+-- So the card turns to face the eye first and leans afterwards. This is
+-- the angle it turns by: the bearing from the point the camera looks at to
+-- the camera itself, measured so that 0 is due south (+Z here -- a
+-- character at rest faces +Z, see the note at the top of Voxel3D).
+--
+-- Taken from Voxel3D.eye and Voxel3D.focus rather than from MarioCam,
+-- because those two are set by WHICHEVER camera drew this frame -- the
+-- orbit, the SM64 rig, or a staged battle's placed camera. The orbit puts
+-- its eye due south of its focus, so it answers exactly 0 and multiplies
+-- in as an identity: the mode everyone is already playing gets the same
+-- matrix it got before this function existed.
+local function cardYaw()
+  local eye, focus = Voxel3D.eye, Voxel3D.focus
+  if not (eye and focus) then return 0 end
+  local dx, dz = eye[1] - focus[1], eye[3] - focus[3]
+  if (dx * dx + dz * dz) < 1e-6 then return 0 end
+  -- Mat4.rotateY(a) sends the card's own +Z normal to (sin a, 0, cos a),
+  -- so the angle wanted is just the bearing of the eye in those terms
+  return math.atan2(dx, dz)
+end
+
+VoxelScene._cardYaw = cardYaw          -- named for the suite
+
+-- And how far back it leans: the camera's REAL pitch, from the same two
+-- points, as an angle from straight down (which is what Voxel.angle is).
+--
+-- It used to lean by Voxel.angle itself, and that is the ROW's pitch --
+-- the rung the player picked -- not necessarily the pitch of the camera
+-- actually drawing. For the orbit they are the same number by
+-- construction. For a camera with a rig of its own they drift: MarioCam
+-- eases its pitch, drops ten degrees over water, and clamps, so the row
+-- says 50 while the eye is somewhere else. Measured, the card came out up
+-- to 16 degrees off the eye that way -- small enough to look like "the
+-- sprite is a bit odd" rather than like a bug, which is worse.
+--
+-- Falls back to the row when there is no camera to ask, so nothing changes
+-- before the first frame is set up.
+local function cardPitch()
+  local Voxel = V.require("VoxelState")
+  local eye, focus = Voxel3D.eye, Voxel3D.focus
+  if not (eye and focus) then return Voxel.angle or 0 end
+  local dx = focus[1] - eye[1]
+  local dy = focus[2] - eye[2]
+  local dz = focus[3] - eye[3]
+  local flat = math.sqrt(dx * dx + dz * dz)
+  if flat < 1e-6 then return Voxel.angle or 0 end
+  return math.pi / 2 - math.atan2(-dy, flat)
+end
+
+VoxelScene._cardPitch = cardPitch
+
 -- Where a billboard character's card stands: on the middle of its cell at
--- height `y`, pivoted at the feet and tipped back by exactly the camera's
--- pitch. The slab is built centred on its sprite plane (z = 0), so only the
--- x anchor shifts; the relief bulges symmetrically front and back of it.
+-- height `y`, pivoted at the feet, turned to face the camera and tipped
+-- back by exactly the camera's pitch. The slab is built centred on its
+-- sprite plane (z = 0), so only the x anchor shifts; the relief bulges
+-- symmetrically front and back of it.
+--
+-- ORDER MATTERS AND IT IS NOT THE OBVIOUS ONE. The yaw goes OUTSIDE the
+-- lean, not inside it: read right to left, the card is anchored, mirrored,
+-- leaned back about its own X, and only then spun about the vertical. That
+-- way the lean axis turns WITH the card, so it always tips back along the
+-- direction the camera is actually looking from. Yawing first and leaning
+-- second would tip every card along the world's north-south axis whatever
+-- the camera was doing, which is the bug this is here to fix wearing a
+-- different hat.
 --
 -- Shared by the solid draw and the silhouette below, so the two can never
 -- drift apart -- a silhouette standing anywhere but exactly behind the
 -- figure would read as a second character.
 local function billboardMatrix(px, py, y, mirror)
-  local Voxel = V.require("VoxelState")
-  local m = Mat4.mul(Mat4.translate(px + 8, y, py + 8),
-                     Mat4.rotateX(Voxel.angle - math.pi / 2))
+  local m = Mat4.translate(px + 8, y, py + 8)
+  -- the PRESENTATION yaw rides on top of the camera-facing turn: between
+  -- two cardinals the card under-rotates toward the angle its drawing was
+  -- made for, so the lens always catches it slightly turned -- see
+  -- MarioCam.presentYaw. Zero at every cardinal, zero with the row off,
+  -- so the flat game's matrix is bit-for-bit the one it always had.
+  local yaw = cardYaw() + V.require("MarioCam").presentYaw()
+  if yaw ~= 0 then m = Mat4.mul(m, Mat4.rotateY(yaw)) end
+  m = Mat4.mul(m, Mat4.rotateX(cardPitch() - math.pi / 2))
   if mirror then m = Mat4.mul(m, Mat4.scale(-1, 1, 1)) end
   return Mat4.mul(m, Mat4.translate(-8, 0, 0))
 end
+
+-- The real matrix, for the suite: a probe that rebuilt this recipe of its
+-- own would agree with any bug that lived in the recipe.
+VoxelScene._billboardMatrix = billboardMatrix
+-- and the frame chooser, so the suite can ask which drawing a pose picks
+-- without reproducing the lookup and agreeing with any bug in it
+VoxelScene._frameFor = frameFor
 
 local function billboardPull()
   local Voxel = V.require("VoxelState")
@@ -356,10 +482,22 @@ end
 -- the Pokemon Center couch reads face-on at every tilt like the NPCs
 -- around him. No cell centring: unlike a character he is not standing on a
 -- cell, he is standing where he was drawn, which may straddle two.
+--
+-- He turns to face the camera for the same reason a character does, and it
+-- is a TRADE rather than a free win: he is a cutout of a person the
+-- tileset painted sitting in a specific chair, so turning him can slide
+-- him off the chair he belongs to. Turning him anyway, because the
+-- alternative is worse in kind rather than in degree -- a figure that does
+-- not turn goes edge-on and disappears into a vertical line, and a person
+-- who is a little off his seat still reads as a person.
+--
+-- It only ever comes up indoors, where MarioCam runs its CLOSE mode; on
+-- SOFT and with the row off the yaw is zero and he does not move at all.
 local function figureMatrix(f, offX, offZ)
-  local Voxel = V.require("VoxelState")
-  return Mat4.mul(Mat4.translate(f.wx + (offX or 0), f.y, f.wz + (offZ or 0)),
-                  Mat4.rotateX(Voxel.angle - math.pi / 2))
+  local m = Mat4.translate(f.wx + (offX or 0), f.y, f.wz + (offZ or 0))
+  local yaw = cardYaw()
+  if yaw ~= 0 then m = Mat4.mul(m, Mat4.rotateY(yaw)) end
+  return Mat4.mul(m, Mat4.rotateX(cardPitch() - math.pi / 2))
 end
 
 -- What the sun sees: the same card UNLEANED and flattened, exactly as
@@ -724,8 +862,57 @@ end
 -- east of it -- the same asymmetry, and the same two sides, as fit().
 VoxelScene.FAR_CAP = 5      -- multiples of the view height; ShadowMap's own is 2.5
 
+-- { cx, cy, vw, vh } as of the last render -- see where it is written.
+VoxelScene.lastView = { 0, 0, 160, 144 }
+
+-- ------- AND WHEN THE CAMERA HAS A YAW
+--
+-- Every term above says "north" because the free-roam orbit has no yaw:
+-- it looks north, from the south, always. lib/MarioCam.lua breaks that --
+-- its whole radial mode is a camera that swings round the map -- and a box
+-- that still reaches north while the camera looks west is a box that culls
+-- most of what is on screen. Holes in the world, in a straight line down
+-- the middle of the frame.
+--
+-- So the box is built in the CAMERA'S frame and then squared off: the same
+-- trapezium as before -- a little behind, `north` in front, widening with
+-- distance -- laid along wherever the camera happens to point, and the
+-- axis-aligned box around that is what gets returned. At yaw zero the four
+-- corners land exactly where the four expressions above put them, so the
+-- orbit's behaviour is not merely preserved, it is the same arithmetic.
+--
+-- The sun margin does NOT rotate with it. The sun hangs southeast whatever
+-- the camera does, so what casts onto visible ground still stands south
+-- and east of it, and that stays an addition on two fixed sides.
 function VoxelScene.bounds(cx, cy, vw, vh, forSun)
+  local MarioCam = V.require("MarioCam")
+  local halfFov, camDist = MarioCam.lens()
   local reach = ShadowMap.groundReach(vh, VoxelScene.FAR_CAP)
+  if halfFov then
+    -- ------- NEVER SHORTER THAN THE ORBIT'S OWN REACH
+    --
+    -- Asking the reach about the SM64 camera's actual frustum makes it
+    -- correct and, at the default rungs, SHORTER: that camera shoots a
+    -- narrower lens, so its top ray sits steeper and meets the ground
+    -- sooner than the orbit's does. Geometrically right, and visibly
+    -- wrong -- the probe's screenshot showed the far tree line replaced
+    -- by a detached rectangle of grass hanging over the horizon, because
+    -- the ground around it had been culled while a chunk with something
+    -- tall on it survived on the ymax rule.
+    --
+    -- The flat-earth top ray is not the whole story and the file already
+    -- says why in two places: WorldCurve bends distant ground DOWN in the
+    -- vertex shader, so ground past that ray can still be in frame, and
+    -- FAR_CAP is set to twice the shadow pass's cap precisely to be
+    -- generous about it. That generosity was tuned against the orbit.
+    --
+    -- So the lens is allowed to make the box BIGGER and never smaller. A
+    -- camera that stands further back and higher gets the reach it needs,
+    -- and the horizon the mod already ships stays the horizon it ships.
+    local mine = ShadowMap.groundReach(vh, VoxelScene.FAR_CAP,
+                                       MarioCam.orbitAngle(), halfFov, camDist)
+    if mine > reach then reach = mine end
+  end
   local north = reach
   local spread = reach * 0.5 + 64
   local sun = 0
@@ -733,8 +920,45 @@ function VoxelScene.bounds(cx, cy, vw, vh, forSun)
     sun = ShadowMap.HEIGHT
           * math.max(math.abs(ShadowMap.KX), math.abs(ShadowMap.KZ)) + 24
   end
-  return { cx - vw / 2 - spread, cy - north,
-           cx + vw / 2 + spread + sun, cy + vh / 2 + 64 + sun }
+  local back = vh / 2 + 64
+
+  local yaw = MarioCam.viewYaw()
+  if yaw == 0 then
+    return { cx - vw / 2 - spread, cy - north,
+             cx + vw / 2 + spread + sun, cy + vh / 2 + 64 + sun }
+  end
+
+  -- forward is the look direction and right is perpendicular to it; at yaw
+  -- zero they are due north and due east, which is what makes the two
+  -- branches agree
+  local fx, fz = math.sin(yaw), -math.cos(yaw)
+  local rx, rz = math.cos(yaw), math.sin(yaw)
+  local nearW, farW = vw / 2, vw / 2 + spread
+  local x0, z0, x1, z1
+  local function corner(along, across)
+    local x = cx + fx * along + rx * across
+    local z = cy + fz * along + rz * across
+    x0 = x0 and math.min(x0, x) or x
+    x1 = x1 and math.max(x1, x) or x
+    z0 = z0 and math.min(z0, z) or z
+    z1 = z1 and math.max(z1, z) or z
+  end
+  corner(-back, -nearW)
+  corner(-back, nearW)
+  corner(north, -farW)
+  corner(north, farW)
+  -- AND THE OLD BOX'S SLACK, KEPT.
+  --
+  -- Squaring off a rotated trapezium is not always bigger than squaring
+  -- off an unrotated one: turn it a couple of degrees and the far corner
+  -- on the side you turned AWAY from swings inward, and the box comes back
+  -- a few pixels narrower than the one this replaced. Narrower is the
+  -- direction that culls something, and the whole stance of this function
+  -- is that being wrong that way is a hole in the world while being wrong
+  -- the other way is a few thousand wasted triangles. So the margin the
+  -- south edge always carried is put on all four sides of the rotated box.
+  local M = 64
+  return { x0 - M, z0 - M, x1 + M + sun, z1 + M + sun }
 end
 
 -- The same box in a connected neighbour's own coordinates: its geometry is
@@ -922,6 +1146,35 @@ function VoxelScene.render(state, w, h, vw, vh, paletteFor)
 
   local cam = state.camera
   local cx, cy = cam.x + vw / 2, cam.y + vh / 2
+
+  -- ------- THE SM64 CAMERA, when the row asks for it
+  --
+  -- Handed to Voxel3D through the same slot the overworld battle's staged
+  -- rig uses (Voxel3D.camera), so nothing downstream of here changes: the
+  -- shader uniforms, project(), the horizon and the overlay all read
+  -- Voxel3D.vp and Voxel3D.eye either way. Set HERE rather than in the
+  -- mod's update hook because a battle owns the slot for the length of its
+  -- own pass, and two cameras writing one field across a frame boundary is
+  -- how you get a fight over it -- this way each pass sets what it needs.
+  --
+  -- cx and cy move with it. They are not just the projection's centre:
+  -- the culling box, the shadow frustum, the street lamps and the window
+  -- glint are all fitted around them, and leaving them on the engine's 2D
+  -- scroll while the camera looked somewhere else would cull and light the
+  -- wrong patch of world.
+  local MarioCam = V.require("MarioCam")
+  Voxel3D.camera = MarioCam.camera()
+  if Voxel3D.camera then
+    local fx, fz = MarioCam.focusXZ()
+    if fx then cx, cy = fx, fz end
+  end
+  -- The four numbers every box in this frame was fitted to, kept where
+  -- something outside the draw can read them. A probe that wants to ask
+  -- "was that chunk inside the box" has to ask about THIS frame's box, and
+  -- reconstructing the centre and the view size from the outside is
+  -- guesswork that quietly answers a different question.
+  local lv = VoxelScene.lastView
+  lv[1], lv[2], lv[3], lv[4] = cx, cy, vw, vh
 
   -- the hour's light, before anything is cast or drawn: point the shared
   -- rig at the clock (or at noon, indoors -- a cave at midnight is exactly
@@ -1421,6 +1674,44 @@ function VoxelScene.render(state, w, h, vw, vh, paletteFor)
   -- of each wall. Props rather than terrain, so they belong here with the
   -- posts and with the seams off.
   pcall(Underpass.draw, state.map)
+  Voxel3D.seams(true)
+
+  -- ------- AND THE AIR, INSIDE THE PASS RATHER THAN OVER IT
+  --
+  -- Wind motes used to be painted in main.lua's overlay, which has no
+  -- depth test -- so dust crossed in front of the mountain and blew
+  -- through roofs. Drawn here they are cards in the scene, and the depth
+  -- buffer hides the ones that are behind something.
+  --
+  -- Last among the props and with seams and the window-glass mask off, for
+  -- the same reason the lamps and the authored trees are: these sprites
+  -- are their own textures, not the tileset atlas, and the masks would
+  -- stripe them with window light.
+  -- Required HERE rather than at the top of the file. WindFX reaches for
+  -- Voxel3D and for Weather, and Weather's own chain is long; the authored
+  -- trees a few lines up are loaded lazily for exactly this reason, and a
+  -- render path is not the place to discover a require cycle.
+  Voxel3D.seams(false)
+  Voxel3D.glass(false)
+  do
+    local okW, WindFX = pcall(V.require, "WindFX")
+    if okW and WindFX and WindFX.drawWorld then pcall(WindFX.drawWorld) end
+  end
+  -- the footstep dust, through the same pass for the same reasons -- and
+  -- lazily for the same require-cycle caution as everything else here
+  do
+    local okS, StepFX = pcall(V.require, "StepFX")
+    if okS and StepFX and StepFX.drawWorld then pcall(StepFX.drawWorld) end
+  end
+  -- and the ambient life, in the same pass and for the same reason: a
+  -- butterfly crossing in front of the Mart used to be drawn over its roof
+  do
+    local okA, AmbientLife = pcall(V.require, "AmbientLife")
+    if okA and AmbientLife and AmbientLife.drawWorld then
+      pcall(AmbientLife.drawWorld)
+    end
+  end
+  Voxel3D.glass(true)
   Voxel3D.seams(true)
 
   return Voxel3D.endScene()

@@ -911,6 +911,29 @@ function Buildings.build(S, map, data, perRow)
   end
 end
 
+-- ------- how tall a building stands over each CELL it claims
+--
+-- The mesher paints flat ground under a stamped model, so groundAt reports
+-- a building's footprint as ankle height -- honest for meshing, a lie for
+-- anything doing line-of-sight. The SM64 camera's occlusion ray asked that
+-- exact question and walked the eye behind five storeys of roof without
+-- noticing (the player's own screenshot is what caught it). So the stamp
+-- records the MODEL's real top over every cell of its footprint, and
+-- MarioCam takes the max of the two answers.
+--
+-- Keyed weakly by the map object, exactly like the caches around it, so a
+-- rebuilt map cannot serve stale heights.
+local tallByMap = setmetatable({}, { __mode = "k" })
+
+function Buildings.tallAt(map, cx, cy)
+  local t = map and tallByMap[map]
+  return (t and t[cx * 4096 + cy]) or 0
+end
+
+function Buildings.clearTall()
+  for k in pairs(tallByMap) do tallByMap[k] = nil end
+end
+
 -- One placement: claim its tiles (so the detector leaves them alone and
 -- the mesher paints ground under them) and copy the model into place.
 function Buildings.stamp(S, map, quads, tx, ty, bw, bh)
@@ -944,6 +967,25 @@ function Buildings.stamp(S, map, quads, tx, ty, bw, bh)
       S.shapeAt[k] = shape
       S.skip[k] = true
       S.ground[k] = best or false
+    end
+  end
+
+  -- the model's real top, remembered per CELL for line-of-sight (above)
+  local top = 0
+  for _, q in ipairs(quads) do
+    for i = 1, 4 do
+      if q[i][2] > top then top = q[i][2] end
+    end
+  end
+  if top > 0 and map then
+    local tall = tallByMap[map]
+    if not tall then tall = {} tallByMap[map] = tall end
+    -- tiles are 8px, cells 16: two tiles to a cell either axis
+    for cy = math.floor(ty / 2), math.floor((ty + bh - 1) / 2) do
+      for cx = math.floor(tx / 2), math.floor((tx + bw - 1) / 2) do
+        local k = cx * 4096 + cy
+        if top > (tall[k] or 0) then tall[k] = top end
+      end
     end
   end
 

@@ -8,7 +8,7 @@ is, where it came from and the legal position; this file is the reference.
 > Shape. Most of what is described below is his work — this document grew out
 > of his README and keeps its shape.
 
-> **Play Gen 1.** Gold / Johto is an early first pass in 1.26.0 and is
+> **Play Gen 1.** Gold / Johto is an early first pass (since 1.26.0) and is
 > **not recommended**. Stay on Red, Blue or Yellow.
 
 A mod for the [Pokémon Gen 1 Recompilation
@@ -49,6 +49,7 @@ menu.
 | `5`, or the **V-GRID** options row | OFF / ON — a one-pixel wireframe on every voxel |
 | `6`, or the **T-SHIFT** options row | OFF → 1 → 2 → 3 → OFF (miniature blur) |
 | `7`, or the **V-CURVE** options row | OFF → 1 → 2 → 3 — bend the world over the horizon |
+| `m`, or the **SM64CAM** options row | ON / OFF — the Super Mario 64 camera. A camera operator instead of a fixed mount: it turns to look at you far faster than it flies to where it wants to stand, takes its height from the **ground** under you so walking up a step does not bob the frame, leads the way you are walking, and slides **around** a building that gets between you rather than zooming through it. The camera orbits the **map's** centre rather than trailing your back, the way it orbits Bob-omb Battlefield's mountain — and the **D-pad turns with it**, as in Mario 64. See below |
 | `8`, or the **3D-BTL** options row | ON / OFF — fight on the map instead of on a white field |
 | `9`, or the **WILD** options row | ROAM / MIX / OFF — wild Pokémon standing in the grass instead of a dice roll on every step |
 | the **W-COUNT** options row | SOME / FEW / MANY — how many stand within reach at once. Only on the menu while **WILD** is on |
@@ -124,6 +125,95 @@ anywhere else. And any map this cannot cover at all: no encounter table, no
 room to stand anything on, or art that would not bake. The blind roll stays
 switched on exactly where nothing has replaced it, which is the difference
 between replacing the encounter and deleting it.
+
+## The SM64 camera (SM64CAM)
+
+A port of Super Mario 64's camera, from the decomp (`n64decomp/sm64`,
+`src/game/camera.c`). Off by default; the whole of it lives in
+`lib/MarioCam.lua`, and the file names the decomp's own functions so it can be
+read against that source.
+
+The system is two ideas and the rest is detail hung off them.
+
+**The target and the real are different objects.** One function says where the
+camera *ought* to be this frame -- pure geometry, no history. A second layer
+*chases* that answer. Mixing them is what makes cameras that get stuck in
+feedback loops.
+
+**The focus and the body move at different speeds.** The point the camera
+looks at closes 80% of its gap per frame; the camera's own body closes 30%.
+Run away and the operator is already looking at you while still catching up.
+Measured in the running game, the body's steady-state lag comes out 6.33 times
+the gaze's against a predicted 6.35 -- that gap is most of what SM64 feels
+like, and it costs two constants.
+
+### It orbits the map, not you
+
+The radial camera does not follow your back. It orbits a fixed point of the
+**area** -- here, the map's own centre -- so walking round a town slides the
+camera along the town's edge with the buildings between you and it. That is
+why Bob-omb Battlefield feels the way it does, and a Gen 1 map is the same
+shape: a hand-drawn rectangle with its business in the middle.
+
+### The D-pad turns with it
+
+**This is the one thing in the mod that changes how the game controls.**
+Everything else is presentational and says so.
+
+SM64 makes the stick camera-relative in one line, and without it an orbiting
+camera is not a camera, it is a puzzle: the world turns under you while Up
+keeps meaning north. So Up means **away from the camera**, at every angle.
+
+The walk itself is an ordinary walk through ordinary collision -- the world
+still speaks compass in every direction that matters, and press Up under a
+quarter turn and the player genuinely walks west, exactly as if west had been
+pressed. Turn the row off and the 1996 controls come back untouched.
+
+One consequence worth knowing, and it is true of SM64 too: because the camera
+orbits the map's centre, **Up walks you toward the middle of the map**. Down
+goes outward, left and right go around. In Bob-omb Battlefield, pushing away
+from the camera runs you at the mountain for the same reason.
+
+| control | does |
+| --- | --- |
+| `q` / `e` | turn the camera (SM64's C-left / C-right: 60 degrees on the first press, on to the limit if you press the same way again) |
+| `r` | lock the camera to 45-degree steps and back (SM64's R button) |
+| `f` | the zoom ladder, three rungs (SM64's C-down) |
+| right stick | the same turn, continuously. The N64 had four C buttons and no second stick; this machine has one |
+
+Every press answers with a sound -- the game's own `Tink` and `Switch`.
+
+### Characters turn to face you
+
+Two fixes that the orbit made necessary, and both were plainly visible before
+they were made.
+
+A character is a flat card. It used to face due **south** and only lean back,
+which is exactly right for a camera that cannot turn -- and the moment the
+camera could, the card was seen edge-on and the character read as **lying flat
+on the pavement**. The card now turns to face the eye before leaning.
+
+And the *drawing* on it is now chosen by the angle **the camera sees**, not by
+the compass. Stand north of someone walking north and the old code handed you
+their back while they advanced toward you: a **moonwalk**. Four positions from
+three drawings is the ROM's ceiling, not a choice -- Gen 1's sheets are
+down / up / left, with right a mirror of left, and no sprite in the game has a
+diagonal in it. So the reading quantises to a quarter turn, with hysteresis at
+the boundary so it does not flicker.
+
+The rest of the rig is there too: the height comes from the floor under you
+rather than from you, so steps and ledges do not bob the frame; a dead zone
+just under a cell absorbs the grid's staircase while you walk and recentres
+when you stop; mode changes interpolate in spherical coordinates so the camera
+*arcs* around you instead of cutting through the building it changed because
+of; warps and map changes cut rather than fly; and the shake is a damped
+cosine applied *after* the smoothing, attenuated by distance from whatever
+caused it, so it leaves no drift behind.
+
+Indoors it pulls in close, on water it drops behind you, and
+`data/camera_shots.lua` is the surface for hand-placed shots -- the lesson the
+SM64 writeup repeats most is that no generic algorithm beats an authored
+camera in the ten percent of cases that are hard. It ships empty on purpose.
 
 ### The art
 

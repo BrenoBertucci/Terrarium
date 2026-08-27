@@ -22,6 +22,7 @@ This fork is **independent**: different mod id (`TERRARIUM`), different install 
 | `g` | V-GRID wireframe |
 | `t` | T-SHIFT miniature blur |
 | `c` | V-CURVE horizon |
+| `m` | SM64CAM Mario 64 camera |
 | `b` | 3D-BTL overworld battles |
 | `n` | WILD roam mode |
 | `p` | Minimap |
@@ -36,6 +37,27 @@ Upstream Dramatic Shape still uses `3` / `5` / `6` / `7` / `8` / `9`.
 - Day/night cycle, weather, puddles and snow on the ground
 - Wild Pokemon visible in the grass; ecology / shelter / city life systems
 - Tuned defaults for lower-end / mobile hardware
+
+## New in 1.27.0-mobile
+
+The air has physics. The rain stops falling through the world. The camera
+can be Mario 64's.
+
+- **SM64CAM (`m`).** Super Mario 64's camera on the overworld, off by
+  default. It orbits the map's centre, the D-pad turns with it, and
+  characters face the eye instead of lying flat or moonwalking. `q`/`e`/`r`/`f`
+  and the right stick.
+- **PFX row.** Particle amount is its own axis (LOW / ON / HIGH / MAX),
+  not a side-effect of RES.
+- **Rain occludes.** Shafts no longer draw through roofs, walls and the
+  ground. Wind motes are geometry in the scene pass, not an overlay.
+- **The world sheds.** Footsteps kick dust, trees drop leaves, wind pulls
+  spray off the shore -- one air solver, real sites.
+- **After-rain drips for real.** The eave rate after a shower finally
+  matches the storm it stands in for.
+- **TREES row (3D / VOXEL).** The forest can go back to the classic
+  voxel hulls. The 3D grass tuft path is retired; tall grass is the
+  slab (still sways, still crushes).
 
 ## Play Gen 1. Gold is not ready.
 

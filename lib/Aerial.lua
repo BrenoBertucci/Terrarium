@@ -132,10 +132,45 @@ function Aerial.active()
   return Aerial.level() > 0
 end
 
--- The top rung's strength, or 0 when off -- which is also the shader's
--- "skip it" signal.
+-- ------- AND THE SHOWER PUSHES IT
+--
+-- Heavy rain is a wall of water hanging between you and everything else,
+-- and what it does to a view is exactly what this shader already does:
+-- the far ground goes toward the colour of the sky and the near ground
+-- does not, so distance reads as distance. It is the same physics -- light
+-- scattered out of the line of sight by what is in the air -- and the air
+-- in a downpour has a great deal more in it than the air on a clear
+-- afternoon.
+--
+-- Which is why the mist of a storm belongs HERE and not as a second fog
+-- bolted on beside it. One haze, driven harder, keeps the hour's colour,
+-- the dither, the rungs and the horizon it already agrees with; a separate
+-- rain-fog would be a second grey arriving on its own schedule and going
+-- the wrong colour at dusk.
+--
+-- OFF STAYS OFF. The row is the player's, and a row switched off switches
+-- the whole thing off -- a shower that quietly turned the haze back on
+-- would be the feature ignoring the menu, which is the one thing no
+-- effect in this mod is allowed to do.
+Aerial.WET_LIFT = 0.40      -- added to the top rung at a full downpour
+Aerial.WET_CAP = 0.88       -- and never past this: see AMOUNTS on why
+
 function Aerial.amount()
-  return Aerial.AMOUNTS[Aerial.level() + 1] or 0
+  local base = Aerial.AMOUNTS[Aerial.level() + 1] or 0
+  if base <= 0 then return 0 end
+  local wet = 0
+  local okW, Weather = pcall(V.require, "Weather")
+  if okW and Weather and Weather.visible then
+    local kind, power = Weather.visible()
+    if kind then
+      -- snow hangs less than rain does: a fall of snow you can see
+      -- through, a downpour you cannot
+      wet = (power or 0) * ((kind == "snow") and 0.45 or 1)
+    end
+  end
+  local a = base + Aerial.WET_LIFT * wet
+  if a > Aerial.WET_CAP then a = Aerial.WET_CAP end
+  return a
 end
 
 -- The ramp for a view `vh` world pixels tall, as the pair the shader
