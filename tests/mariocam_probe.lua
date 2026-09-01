@@ -665,6 +665,23 @@ return function(game)
     end
     check(dz0 < -8 and math.abs(dx0) < 8,
           "with the row OFF, UP still walks due north as it always did")
+
+    -- ------- and the THIRD mode: flat 2D. The row can be ON while the
+    -- voxel pipeline is off, and a 2D world drawn north-up must get
+    -- compass controls whatever the row says -- the adaptation is to the
+    -- CAMERA ACTUALLY DRAWING, not to the setting.
+    MarioCam.setting:setIndex(2, game)          -- row ON...
+    Pipelines.setLevel("terrarium_voxel", 0)    -- ...but the world is 2D
+    hold(30)
+    check(MarioCam.rotatesInput() == false,
+          "row ON over the 2D pipeline does not rotate the controls")
+    check(MarioCam.buttonFor("up") == "up"
+          and MarioCam.buttonFor("left") == "left",
+          "2D keeps compass controls even with the row ON")
+    Pipelines.setLevel("terrarium_voxel", 4)
+    hold(60)
+    check(MarioCam.rotatesInput() == true,
+          "and the voxel pass coming back re-arms the rotation")
     MarioCam.setting:setIndex(2, game)
   end
 

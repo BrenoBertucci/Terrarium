@@ -224,7 +224,7 @@ function Structures.forMap(map)
   S = { shapeAt = shapeAt, tileAt = tileAt, outdoor = Map.isOutdoor(def),
         hideBareRing = hullRingOnly or nil,
         runs = {}, skip = {}, ground = {}, doorFold = {}, objectQuads = {},
-        grassQuads = {}, grassInstances = {}, flowerQuads = {},
+        grassQuads = {}, grassInstances = {}, flowerQuads = {}, spriteQuads = {},
         roundStamps = {}, treeSites = {}, figures = {} }
   Buildings.build(S, map, pixels(tileset), perRow)
 

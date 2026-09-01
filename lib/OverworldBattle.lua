@@ -44,6 +44,11 @@ local Gen2Bridge = V.require("Gen2Bridge")
 local ModSetting = V.require("ModSetting")
 local BattleArena = V.require("BattleArena")
 local BattleCam = V.require("BattleCam")
+local BattleShot = V.require("BattleShot")
+local BattleCapsule = V.require("BattleCapsule")
+local BattleGlassFX = V.require("BattleGlassFX")
+local BattleHitFX = V.require("BattleHitFX")
+local BattleRibbon = V.require("BattleRibbon")
 local BattleScene = V.require("BattleScene")
 local BattleDOF = V.require("BattleDOF")
 local BattleHud = V.require("BattleHud")
@@ -385,6 +390,14 @@ function OverworldBattle.begin(state, battle)
               armed = false, token = 0 }
   cullCast(state)
   BattleCam.reset()
+  -- the attack camera opens each battle with a cut onto the composed shot,
+  -- not a flight from wherever the last fight left it
+  BattleShot.reset()
+  -- live battle Vfx must not leak from the last fight into this one
+  pcall(BattleHitFX.clear)
+  -- and the COMBAT row applies at the door, so a persisted CLASSICA holds
+  -- from this battle's first frame (see BattleDynamic)
+  pcall(function() V.require("BattleDynamic").apply() end)
   return true
 end
 
@@ -421,6 +434,9 @@ function OverworldBattle.screensLive()
 end
 
 function OverworldBattle.finish()
+  -- sweep tagged battle Vfx so they do not leak into the overworld
+  pcall(BattleHitFX.clear)
+  pcall(function() V.require("BattleNav").observe(nil) end)
   if not session then return end
   restoreCast()
   session = nil
@@ -459,6 +475,32 @@ function OverworldBattle.update(dt)
   -- the battle only exists once it has been pushed; a session opened at
   -- pushBattle time has it, one opened from battle.started was handed it
   session.battle = session.battle or (top ~= ow and top or nil)
+  -- the attack camera reads the fight's own seams -- who is throwing a
+  -- move, whether the hit landed -- and only ever reads (see BattleShot)
+  pcall(BattleShot.observe, session.battle, dt)
+  -- and the glass physics reads the same seams, plus the defender's cell
+  -- for the wave and the move's type for the weather (see BattleGlassFX)
+  pcall(BattleGlassFX.observe, session.battle, dt, session.arena,
+        session.shot and session.shot.groundY)
+  -- attacks put a sheet on the attacker, then the defender, and a typed
+  -- dent in the grass -- presentational only (see BattleHitFX)
+  pcall(BattleHitFX.observe, session.battle, dt, session.arena,
+        session.shot and session.shot.groundY)
+  -- the turn ribbon glides its medallions toward whoever the round
+  -- belongs to (see BattleRibbon)
+  pcall(BattleRibbon.observe, session.battle, dt)
+  -- the costume's dpad wrap needs the live battle so it can steal the
+  -- press before BattleState walks the Game Boy grid (see BattleNav).
+  -- A broken scene falls back to the engine's own screens: do not remap.
+  if not session.broken then
+    pcall(function()
+      V.require("BattleNav").observe(session.battle, session.shot,
+                                     session.arena,
+                                     session.shot and session.shot.groundY)
+    end)
+    -- bag ListMenu.script even if a later draw frame throws
+    pcall(BattleScreenXY.tick, g)
+  end
   -- the world pass is hidden behind the battle, so mesh builds get the wide
   -- slice: nothing visible can hitch on them
   ChunkMesher.pump(true)
@@ -480,6 +522,7 @@ function OverworldBattle.update(dt)
     session.shot = nil
     session.snapped = false
     session.broken = true
+    pcall(function() V.require("BattleNav").observe(nil) end)
     V.mod.log:warn("overworld battle scene failed: %s -- this battle draws "
                    .. "on the plain battle background", tostring(shot))
     return
@@ -495,6 +538,9 @@ function OverworldBattle.update(dt)
     local okDof, blurred = pcall(BattleDOF.apply, shot.canvas,
                                  focusY, band, range)
     if okDof and blurred then shot.canvas = blurred end
+    -- hit flashes live on the finished 3D image, before the frost, so
+    -- the glass includes them and the HUD / fan still sit on top
+    pcall(BattleHitFX.draw, shot)
     -- the frosted glass the HUDs sit on is built from the FINISHED backdrop,
     -- so a panel over a blurred far field is frosted from what is actually
     -- behind it
@@ -1240,7 +1286,16 @@ function OverworldBattle.drawXYBlock(battle, shot, side)
   local w = math.max(BattleHudXY.MIN_W,
                      math.min(BattleHudXY.MAX_W,
                               shot.pw * BattleHudXY.WIDTH_FRAC))
-  local h = w * BattleHudXY.FRAME_H / BattleHudXY.FRAME_W
+  -- the glass capsule's plate is a different cut than the pack's frame,
+  -- so the height (and with it the player block's clearance above the
+  -- text box) follows whichever renderer is about to draw
+  local capsule = BattleCapsule.available()
+  local fw = capsule and BattleCapsule.FRAME_W or BattleHudXY.FRAME_W
+  local fh = capsule
+             and (side == "enemy" and BattleCapsule.ENEMY_H
+                                   or BattleCapsule.PLAYER_H)
+             or BattleHudXY.FRAME_H
+  local h = w * fh / fw
   local x, y
   if side == "enemy" then
     x, y = m, shot.ly + m
@@ -1270,6 +1325,15 @@ function OverworldBattle.drawXYBlock(battle, shot, side)
   if not info then return false end
   local expFrac = info.isPlayer
     and BattleHudXY.expFraction(battle[side], battle.data) or nil
+  -- stage two first: the capsule hanging beside its own mon (see
+  -- BattleCapsule.hang). Any refusal falls to the corner placement below.
+  local okW, hung = pcall(BattleCapsule.hang, shot, side, info, expFrac)
+  if okW and hung then
+    OverworldBattle._lastXY = OverworldBattle._lastXY or {}
+    OverworldBattle._lastXY[side] = { world = true, w = w,
+                                      pw = shot.pw, ph = shot.ph }
+    return true
+  end
   -- Named for the suite. The block is placed in WORLD-CANVAS pixels and the
   -- canvas is not the window -- checking a layout by measuring a screenshot
   -- means converting between the two, and getting that conversion wrong is
@@ -1277,9 +1341,13 @@ function OverworldBattle.drawXYBlock(battle, shot, side)
   -- actually used are recorded rather than re-derived.
   OverworldBattle._lastXY = OverworldBattle._lastXY or {}
   OverworldBattle._lastXY[side] = {
-    x = x, y = y, w = w, h = h, s = w / BattleHudXY.FRAME_W,
+    x = x, y = y, w = w, h = h, s = w / fw,
     pw = shot.pw, ph = shot.ph, ly = shot.ly, scale = s, exp = expFrac,
   }
+  if capsule then
+    local okC, drew = pcall(BattleCapsule.block, info, x, y, w, expFrac)
+    if okC and drew then return true end
+  end
   return BattleHudXY.block(info, x, y, w, expFrac)
 end
 
@@ -1287,12 +1355,20 @@ function OverworldBattle.snapHUDs(battle, shot)
   if not (battle and shot and shot.canvas and (shot.scale or 0) > 0) then
     return false
   end
+  -- re-assert the costume cursor before Panels/Fan read it. BattleState
+  -- always rewrites menuIndex from the GB 2x2 col/row it captured before
+  -- wasPressed (where BattleNav.step already wrote RUN); pin puts it back.
+  pcall(function() V.require("BattleNav").pin() end)
   local slide = (battle.introSlide or 0) * 4
   local rects, bandX = OverworldBattle.snapRects(shot)
   local enemy, player = OverworldBattle.hudLive(battle, slide)
+  -- With the capsules hanging in the ARENA (BattleCapsule stage two), the
+  -- window corners hold nothing -- frosting them would put slabs of glass
+  -- over empty world. The GB bands stay suppressed either way below.
+  local worldHud = BattleCapsule.worldReady(shot)
   local live = {}
-  if enemy then live.enemy = rects.enemy end
-  if player then live.player = rects.player end
+  if enemy and not worldHud then live.enemy = rects.enemy end
+  if player and not worldHud then live.player = rects.player end
   -- and the text box's own glass, on the same pass. It stays in the middle of
   -- the frame where the engine draws it -- only the HUDs were snapped out --
   -- so its GB rect is mapped into the letterbox rather than to an edge.
@@ -1329,8 +1405,12 @@ function OverworldBattle.snapHUDs(battle, shot)
     -- capsule is opaque so nothing shows through, and a panel that runs on a
     -- side whose capsule is not up is the difference between a clean empty
     -- row and whatever the battle last composited there.
-    live.enemy = live.enemy or rects.enemy
-    live.player = live.player or rects.player
+    -- ...unless the capsules hang in the arena now, in which case the
+    -- corner glass would sit under nothing at all (worldHud above).
+    if not worldHud then
+      live.enemy = live.enemy or rects.enemy
+      live.player = live.player or rects.player
+    end
   end
   -- ...but a side that is not live still draws NOTHING, rather than a capsule
   -- for a mon that has not been sent out. drawXYBlock is skipped; the panel
@@ -1395,9 +1475,18 @@ function OverworldBattle.snapHUDs(battle, shot)
     -- degrades to the old frame rather than to none.
     local screenUp = BattleScreenXY.draw(game(), battle, shot)
     if not screenUp then
-      if xyBox then BattleBoxXY.draw(battle, xyBox) end
+      -- the shot rides along for the move fan, which anchors its cards in
+      -- the world the shot shows (see BattleFanXY)
+      if xyBox then BattleBoxXY.draw(battle, xyBox, shot) end
     end
     g.setColor(1, 1, 1, 1)
+    -- the turn ribbon goes down BEFORE the capsules: its arc is strung
+    -- between the mons and the plates must cover it where they cross,
+    -- not the other way round. Only once both mons are on the field,
+    -- never over the party or bag screens.
+    if enemy and player and not screenUp then
+      pcall(BattleRibbon.draw, battle, shot)
+    end
     for side, band in pairs(OverworldBattle.HUD_BAND) do
       -- Named for the suite: which branch each side took, counted. A frame
       -- showing BOTH an X/Y capsule and the Game Boy's own bar is the failure
@@ -1431,6 +1520,8 @@ function OverworldBattle.snapHUDs(battle, shot)
                shot.ly + band[2] * shot.scale, 0, shot.scale, shot.scale)
       end
     end
+    -- Poke Ball hop, after the chips so it sits on them
+    pcall(function() V.require("BattleNav").draw(shot) end)
   end)
   if prevCanvas then g.setCanvas(prevCanvas) else g.setCanvas() end
   g.setBlendMode(prevBlend or "alpha", prevAlpha)

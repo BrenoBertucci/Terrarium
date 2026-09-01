@@ -39,6 +39,7 @@ local ChunkMesher = V.require("ChunkMesher")
 local TerrainAtlas = V.require("TerrainAtlas")
 local VoxelScene = V.require("VoxelScene")
 local BattleCam = V.require("BattleCam")
+local BattleShot = V.require("BattleShot")
 local BattleBillboard = V.require("BattleBillboard")
 local VoxelGrid = V.require("VoxelGrid")
 local DayNight = V.require("DayNight")
@@ -49,14 +50,15 @@ local Map = require("src.world.Map")
 
 local BattleScene = {}
 
--- Landing / contact splats: one shot per arena token, one shot per flash
--- edge. The arena itself is laid on bare ground (BattleArena.openCell
--- refuses tall grass), so these flatten the tufts AROUND the pair -- the
--- apron the comment at BattleArena:124-138 is about -- not a dent under
--- a mon that is standing on paving.
+-- Landing splat: one shot per arena token. Contact crush is typed and
+-- defender-only now (see BattleHitFX); the live discs under each mon
+-- still part the meadow for the length of the battle. The arena itself
+-- is laid on bare ground (BattleArena.openCell refuses tall grass), so
+-- the land splat flattens the tufts AROUND the pair -- the apron the
+-- comment at BattleArena:124-138 is about -- not a dent under a mon
+-- that is standing on paving.
 local lastArenaTok = nil
 local didLand = false
-local lastFlash = false
 local lastGrassAt = nil
 
 -- The GB frame the battle screen is drawn in, and the frame BattleCam's rig
@@ -375,6 +377,13 @@ function BattleScene.render(state, arena, textures, token)
 
   local groundY = BattleScene.groundY(host, arena)
   local cam, pitch = BattleCam.rig(arena, groundY)
+  -- the attack camera: a pursuer with inertia between the rig and the
+  -- render, swung while a move is thrown (see BattleShot). Guarded so a
+  -- confused director never costs the frame -- the rig is always a valid
+  -- answer on its own.
+  local okShot, sCam, sPitch = pcall(BattleShot.frame, cam, pitch,
+                                     arena, groundY)
+  if okShot and sCam then cam, pitch = sCam, sPitch end
   cam.fov = BattleScene.letterboxFov(cam.fov, ph, s)
 
   local cx, cy = arena.mid[1], arena.mid[2]
@@ -488,13 +497,14 @@ function BattleScene.render(state, arena, textures, token)
         end
       end
     end
-    -- Foot-crush through a fight: landing splat once, contact splat on
-    -- the hit-flash edge, and a live disc under each mon so the meadow
-    -- around the apron stays parted for the length of the battle.
+    -- Foot-crush through a fight: landing splat once, and a live disc
+    -- under each mon so the meadow around the apron stays parted. The
+    -- contact splat on the hit-flash edge used to flatten BOTH mons on
+    -- any flash; BattleHitFX now owns a typed dent at the defender.
     if GrassMod then
       local tok = token or (arena.x .. ":" .. arena.y)
       if tok ~= lastArenaTok then
-        lastArenaTok, didLand, lastFlash = tok, false, false
+        lastArenaTok, didLand = tok, false
       end
       pcall(GrassMod.bindMap, host)
       pcall(GrassMod.setFocus, arena.mid[1], arena.mid[2])
@@ -503,11 +513,6 @@ function BattleScene.render(state, arena, textures, token)
         pcall(GrassMod.splat, arena.enemy[1], arena.enemy[2], 22, 1.35)
         didLand = true
       end
-      if flashing and not lastFlash then
-        pcall(GrassMod.splat, arena.player[1], arena.player[2], 20, 1.2)
-        pcall(GrassMod.splat, arena.enemy[1], arena.enemy[2], 20, 1.2)
-      end
-      lastFlash = flashing and true or false
       local now = (love.timer and love.timer.getTime and love.timer.getTime())
                   or 0
       local dt = (lastGrassAt and (now - lastGrassAt)) or 0
@@ -574,6 +579,18 @@ function BattleScene.render(state, arena, textures, token)
       -- pic pinned to the menu (see OverworldBattle.backPinned). Neutral
       -- indoors, which is what DayNight.tint answers for a room.
       tint = Voxel3D.tint,
+      -- the live camera, snapshotted for UI that anchors itself in the world
+      -- this shot shows -- the move fan (BattleFanXY) projects its cards with
+      -- the same matrix the scene was drawn with, which is what makes them
+      -- parallax with the drift and swing with the attack camera. Copied,
+      -- because Voxel3D.vp is the pipeline's own scratch and the next pass
+      -- overwrites it in place.
+      vp = { vp[1], vp[2], vp[3], vp[4], vp[5], vp[6], vp[7], vp[8],
+             vp[9], vp[10], vp[11], vp[12], vp[13], vp[14], vp[15], vp[16] },
+      eye = { cam.eye[1], cam.eye[2], cam.eye[3] },
+      groundY = groundY,
+      playerCell = { arena.player[1], arena.player[2] },
+      enemyCell = { arena.enemy[1], arena.enemy[2] },
     }
   end)
   -- the placed camera is ours for exactly this pass; anything else that

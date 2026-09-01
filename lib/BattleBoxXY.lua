@@ -63,9 +63,10 @@ BattleBoxXY.COMMANDS = {
 -- X/Y stands FIGHT on its own, big, with the other three along the bottom
 -- edge running off it -- the shape says "this is the one you press" before
 -- any word is read, and the three are drawn as the top half of a capsule
--- precisely so they can be cut by the edge of the screen. menuIndex's own
--- order is preserved underneath: the cursor still moves the way the engine
--- moves it, only the boxes it lands on have changed shape.
+-- precisely so they can be cut by the edge of the screen. menuIndex still
+-- numbers the engine's 2x2 (1 FIGHT, 2 PKMN, 3 BAG, 4 RUN); lib/BattleNav
+-- walks the picture so Down from FIGHT lands on RUN, the chip under it,
+-- instead of on BAG.
 --
 -- The cluster takes the RIGHT end of the box's rect and the message keeps
 -- the left, so the whole menu lives in the bottom third of the letterbox.
@@ -82,8 +83,8 @@ BattleBoxXY.STACK_GAP = 0.02       -- between buttons, as a fraction
 -- The bottom row, left to right, by menuIndex. X/Y puts BAG, RUN and POKéMON
 -- in that order and this follows it -- the cursor's own numbering (2 = party,
 -- 3 = bag, 4 = run) is a Game Boy fact about a 2x2 grid that no longer
--- exists, and reproducing it here would put the buttons in an order the
--- reference does not have.
+-- exists. BattleNav remaps the dpad onto this row (and wraps it) so the
+-- highlight walks left-to-right the way the chips sit.
 BattleBoxXY.BOTTOM_ORDER = { 3, 4, 2 }
 
 -- An unselected button steps back rather than greying out: the four have to
@@ -171,6 +172,12 @@ BattleBoxXY.PHASES = {
 function BattleBoxXY.covers(battle)
   if not (battle and BattleBoxXY.available()) then return false end
   return BattleBoxXY.PHASES[battle.phase] and true or false
+end
+
+-- last projected (or flat) centres, for the cursor-travel streak
+local last = nil
+function BattleBoxXY.debug()
+  return last
 end
 
 local function setColor(c, a)
@@ -331,15 +338,38 @@ local function button(x, y, w, h, cmd, selected, align, mul)
   love.graphics.setColor(1, 1, 1, 1)
 end
 
+-- ------- the world path
+--
+-- The floating panels (BattlePanelsXY), loaded on first use for the same
+-- load-order reason the fan is. This file owns the CONTENT -- which lines,
+-- which commands, which one is selected -- and the panels module owns the
+-- PLACEMENT; a refusal from it falls back to the flat drawing below.
+local BattlePanelsXY = nil
+
+local function panels3d()
+  if BattlePanelsXY == nil then
+    local ok, P = pcall(V.require, "BattlePanelsXY")
+    BattlePanelsXY = (ok and P) or false
+  end
+  return BattlePanelsXY or nil
+end
+
 -- ------- the message, typed into a panel
-local function drawMessage(battle, x, y, w, h)
+local function drawMessage(battle, x, y, w, h, shot)
+  local msg = battle.current and battle.current.text
+  local shownLines = lines(revealed(msg, battle.charIndex))
+
+  local P = panels3d()
+  if P and shot then
+    local okP, drew = pcall(P.message, battle, shot, shownLines)
+    if okP and drew then return end
+  end
+
   local pad = h * BattleBoxXY.PAD
   panel(x, y, w, h)
-  local msg = battle.current and battle.current.text
-  local shown = revealed(msg, battle.charIndex)
   local th = h * BattleBoxXY.TEXT_H
   local ly = y + pad
-  for _, line in ipairs(lines(shown)) do
+  for _, line in ipairs(shownLines) do
     BattleHudXY.text(line, x + pad, ly, th, BattleBoxXY.TEXT)
     ly = ly + th * BattleBoxXY.LINE_GAP
   end
@@ -368,23 +398,34 @@ local function engineString(s)
   return s
 end
 
-local function drawMenu(battle, x, y, w, h)
+-- The menu's lines: the typed text when there is one, the prompt the
+-- LAYOUT owes the player when there is not (see the note above drawMenu's
+-- old body -- the engine's WideBattle prints it beside the commands).
+local function menuLines(battle)
+  local shown = revealed(battle.current and battle.current.text,
+                         battle.charIndex)
+  if shown ~= "" then return lines(shown) end
+  if not battle.demo then
+    local who = (battle.player and battle.player.name) or ""
+    return { engineString("What will"), who .. engineString(" do?") }
+  end
+  return {}
+end
+
+local function drawMenu(battle, x, y, w, h, shot)
+  local msgLines = menuLines(battle)
+
+  local P = panels3d()
+  if P and shot then
+    local okP, drew = pcall(P.menu, battle, shot, msgLines)
+    if okP and drew then return end
+  end
+
   local pad = h * BattleBoxXY.PAD
   local mw = w * BattleBoxXY.MSG_FRAC
   local mh = h * BattleBoxXY.MENU_MSG_H
   local my = y + h - mh
   panel(x, my, mw, mh)
-  local shown = revealed(battle.current and battle.current.text,
-                         battle.charIndex)
-  local msgLines
-  if shown ~= "" then
-    msgLines = lines(shown)
-  elseif not battle.demo then
-    local who = (battle.player and battle.player.name) or ""
-    msgLines = { engineString("What will"), who .. engineString(" do?") }
-  else
-    msgLines = {}
-  end
   local th = h * BattleBoxXY.TEXT_H
   local ly = my + pad
   for _, line in ipairs(msgLines) do
@@ -408,10 +449,15 @@ local function drawMenu(battle, x, y, w, h)
   local sw = (cw - gap * 2) / 3
   local sy = y + fh
   local sh = h - fh
+  local dbg = { phase = "menu", sel = sel, cx = {}, cy = {} }
+  dbg.cx[1], dbg.cy[1] = cx + (cw - fw) * 0.5 + fw * 0.5, y + fh * 0.5
   for slot, i in ipairs(BattleBoxXY.BOTTOM_ORDER) do
-    button(cx + (slot - 1) * (sw + gap), sy, sw, sh,
+    local bx = cx + (slot - 1) * (sw + gap)
+    button(bx, sy, sw, sh,
            BattleBoxXY.COMMANDS[i], sel == i, "bottom", pop)
+    dbg.cx[i], dbg.cy[i] = bx + sw * 0.5, sy + sh * 0.5
   end
+  last = dbg
 end
 
 -- ------- the move list
@@ -448,6 +494,12 @@ local function ppColor(pp, maxPP)
   if r <= 0.5 then return { 1.0, 0.84, 0.40, 1 } end
   return BattleBoxXY.TEXT
 end
+
+-- Exported for the fan (lib/BattleFanXY.lua), which dresses its cards with
+-- the rows' own facts and colours -- one reading of the engine, two looks.
+BattleBoxXY.typeName = typeName
+BattleBoxXY.ppOf = ppOf
+BattleBoxXY.ppColor = ppColor
 
 -- One move row: a rounded slab in the type's colour, the type's icon, the
 -- name, and the PP count on the right edge. Selected rows sit at full
@@ -550,12 +602,37 @@ end
 
 local SWAP_RING = { 1.0, 0.84, 0.40, 0.95 }
 
-local function drawMoves(battle, x, y, w, h)
+-- The fan, loaded on first use: drawMoves is the only caller, so a require
+-- here cannot make the two files' load order matter.
+local BattleFanXY = nil
+
+local function fan()
+  if BattleFanXY == nil then
+    local ok, F = pcall(V.require, "BattleFanXY")
+    BattleFanXY = (ok and F) or false
+  end
+  return BattleFanXY or nil
+end
+
+local function drawMoves(battle, x, y, w, h, shot)
   local moves = (battle.player and battle.player.curMoves) or {}
   if #moves == 0 then return end
   local data = (battle.data and battle.data.moves) or {}
   local sel = math.max(1, math.min(tonumber(battle.moveIndex) or 1, #moves))
   local pop = popScale("moves", sel)
+
+  -- the hand of cards, in the world, when the shot can carry it (it needs
+  -- the camera the scene was drawn with -- see BattleFanXY). Any refusal
+  -- falls through to the flat layout below, which is the proven path.
+  --
+  -- With the hand up, the selected move's info card stays DOWN: every card
+  -- already wears its own type, power and PP, so the panel would repeat
+  -- the raised card word for word -- over the player's mon.
+  local F = fan()
+  if F and shot then
+    local okFan, drew = pcall(F.draw, battle, shot)
+    if okFan and drew then return end
+  end
 
   local iw = w * BattleBoxXY.INFO_FRAC
   local selMv = moves[sel]
@@ -567,11 +644,13 @@ local function drawMoves(battle, x, y, w, h)
   local rx = x + iw + gap
   local rw = w - iw - gap
   local rowH = (h - gap * 3) / 4
+  local dbg = { phase = "move", sel = sel, cx = {}, cy = {} }
   for i, mv in ipairs(moves) do
     local def = data[mv.id]
     local tname = def and typeName(def.type)
     local pp, maxPP = ppOf(mv, def)
-    moveRow(rx, y + (i - 1) * (rowH + gap), rw, rowH,
+    local ry = y + (i - 1) * (rowH + gap)
+    moveRow(rx, ry, rw, rowH,
             (def and def.name) or tostring(mv.id),
             tname and BattleBoxXY.TYPE_COLOR[tname],
             tname and art("types/" .. tname),
@@ -579,7 +658,9 @@ local function drawMoves(battle, x, y, w, h)
             i == sel, pop,
             (battle.moveSwapIndex and battle.moveSwapIndex == i
              and battle.moveSwapIndex ~= sel) and SWAP_RING or nil)
+    dbg.cx[i], dbg.cy[i] = rx + rw * 0.5, ry + rowH * 0.5
   end
+  last = dbg
 end
 
 -- ------- the draw
@@ -587,17 +668,17 @@ end
 -- `rect` is the text box in WORLD-canvas pixels, which is what the caller
 -- already computed for the frosted panel it is replacing. Every phase stays
 -- inside it.
-function BattleBoxXY.draw(battle, rect)
+function BattleBoxXY.draw(battle, rect, shot)
   if not (rect and BattleBoxXY.covers(battle)) then return false end
   local x, y, w, h = rect[1], rect[2], rect[3], rect[4]
   if not (w and h) or w < 8 or h < 8 then return false end
 
   if battle.phase == "menu" then
-    drawMenu(battle, x, y, w, h)
+    drawMenu(battle, x, y, w, h, shot)
   elseif battle.phase == "moveSelect" then
-    drawMoves(battle, x, y, w, h)
+    drawMoves(battle, x, y, w, h, shot)
   else
-    drawMessage(battle, x, y, w, h)
+    drawMessage(battle, x, y, w, h, shot)
   end
   love.graphics.setColor(1, 1, 1, 1)
   return true

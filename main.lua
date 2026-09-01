@@ -142,6 +142,7 @@ local DayTint = V.require("DayTint")
 local Quality = V.require("Quality")
 local Wind = V.require("Wind")
 local Trees3D = V.require("Trees3D")
+local BattleDynamic = V.require("BattleDynamic")
 local Water = V.require("Water")
 local WaterBody = V.require("WaterBody")
 local FloorArt = V.require("FloorArt")
@@ -681,6 +682,20 @@ local SETTINGS = {
     .. "to Gen 1. If the bake is missing, the hulls are used either way. "
     .. "Changing the row rebuilds the map's meshes on the next frames.",
     full = true },
+  -- Not a diorama knob either: like 3D-BTL, this decides how a FIGHT is
+  -- presented, so FULL sets nothing here and the row stays offered.
+  { BattleDynamic.setting,
+    "The whole dynamic battle package on one row. DINAMICA is the staged "
+    .. "fight as built: the camera swings in behind whoever throws a move, "
+    .. "the menu, the dialog box and the move cards float in the arena on "
+    .. "real glass, the HP capsules hang beside their own mons, hits send "
+    .. "a shockwave rolling through the panels, the move's element rains "
+    .. "on the glass, and the turn ribbon arcs between the two. CLASSICA "
+    .. "holds the camera on the plain rig and lays every panel flat and "
+    .. "still -- the capsules keep their Unova bars, pinned to the window "
+    .. "corners. Safe to flip mid-battle; every piece falls back on its "
+    .. "own.",
+    full = true, when = function() return OverworldBattle.enabled() end },
   { Water.setting,
     "The water surface as geometry rather than a scrolling picture: it "
     .. "rises and falls on two crossing swells, cel-shaded into flat "
@@ -1208,6 +1223,26 @@ do
     return innerIsDown(self, btn)
   end
 
+  -- The SAME translation for the one other direction query the engine
+  -- makes: Player:turnWindow asks "is the TOUCH overlay holding my
+  -- facing's button" to widen the tap-to-turn window on touch. The facing
+  -- is a WORLD direction, so under a turned camera the touch button that
+  -- means it is buttonFor's answer -- exactly as with isDown above.
+  -- Wrapped conditionally: not every build of the engine ships the touch
+  -- overlay, and the call site already guards for its absence.
+  if Input.isTouchDown then
+    local innerIsTouchDown = Input.isTouchDown
+    function Input:isTouchDown(btn)
+      if MarioCam.DIR_INDEX[btn] and MarioCam.rotatesInput() then
+        local top = Game.stack and Game.stack:top()
+        if top and top == Game.overworld then
+          return innerIsTouchDown(self, MarioCam.buttonFor(btn))
+        end
+      end
+      return innerIsTouchDown(self, btn)
+    end
+  end
+
   -- The camera may not change what a held button MEANS (see
   -- MarioCam.quadrant), and to enforce that it has to know whether one is
   -- held -- physically, on the unwrapped state, because asking the wrapped
@@ -1219,6 +1254,10 @@ do
     if not st then return false end
     return (st.up or st.down or st.left or st.right) and true or false
   end)
+
+  -- the battle costume's dpad: swallow the engine 2x2 / vertical list
+  -- and walk the picture instead (see lib/BattleNav.lua)
+  V.require("BattleNav").install()
 end
 
 
@@ -1493,6 +1532,11 @@ mod.events:on("mod.options_changed", function(payload)
   -- row remeshes inside Trees3D.setting:row already).
   if payload.key == "trees3d" then
     pcall(Trees3D.onOptionsChanged, payload.value)
+  end
+  -- COMBAT flipped from the manager page: push the choice into every
+  -- battle module's gate (the OPTIONS row applies inside its own step)
+  if payload.key == "battledyn" then
+    pcall(BattleDynamic.onOptionsChanged, payload.value)
   end
   -- 3D-BTL switched on from the manager's page pins BATTLE LAYOUT exactly as
   -- the OPTIONS row does. The manager persists its own value; this is the one
@@ -1970,7 +2014,7 @@ end)
 -- first so this cannot drift again: this literal sat five minors behind the
 -- manifest, and in a feature-encoded form the versioning rules in CHANGELOG.md
 -- forbid outright (`.snow.1` -- features live in the changelog, not here).
-mod.exports.version = mod.version or "1.27.0-mobile"
+mod.exports.version = mod.version or "1.28.0-mobile"
 -- exposed so a companion mod can pin its own tiles' shapes or read the
 -- camera without reaching into this mod's file layout
 mod.exports.lib = V

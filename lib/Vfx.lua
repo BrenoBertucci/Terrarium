@@ -156,15 +156,20 @@ end
 -- a caller says WHAT, WHERE and optionally how big -- it does not get to
 -- reach into the list, and nothing here needs to know why it was asked.
 --
---   Vfx.play("bighit", wx, wy, wz, { size = 32, scale = 1.2 })
+--   Vfx.play("bighit", wx, wy, wz, { size = 32, scale = 1.2, tint = {1,0.5,0.2} })
 --
 -- Silent and harmless on every failure -- row off, unknown key, no sheet.
 -- An effect that cannot draw must never be the reason a frame is lost.
+--
+-- opts.force skips the IMPACT row, so a battle can put a flash on the
+-- arena without dragging the overworld demo on with it. opts.battle tags
+-- the play so a fight's finish can sweep it without wiping a live
+-- overworld effect (see Vfx.clearBattle).
 function Vfx.play(key, wx, wy, wz, opts)
-  if not Vfx.enabled() then return false end
+  opts = opts or {}
+  if not (opts.force or Vfx.enabled()) then return false end
   local d = definitions()[key]
   if not d then return false end
-  opts = opts or {}
   if #live >= Vfx.MAX_LIVE then table.remove(live, 1) end
   live[#live + 1] = {
     key = key,
@@ -174,6 +179,10 @@ function Vfx.play(key, wx, wy, wz, opts)
     t = 0,
     size = opts.size or Vfx.SIZE,
     mul = opts.scale or 1,
+    battle = opts.battle and true or false,
+    -- Per-play tint {r,g,b}. Missing means white, so the overworld IMPACT
+    -- demo is unchanged. BattleHitFX tints authored bt_* sheets by type.
+    tint = opts.tint,
     -- Frames are held for a whole number of source frames at the pack's own
     -- rate, so the animation runs at the speed it was drawn at whatever the
     -- game is doing.
@@ -186,8 +195,26 @@ function Vfx.clear()
   live = {}
 end
 
+-- Drop only the plays a battle tagged. The IMPACT demo and any overworld
+-- caller share this list; sweeping it on battle exit would erase a flash
+-- the player just caused in the field.
+function Vfx.clearBattle()
+  local i = 1
+  while i <= #live do
+    if live[i].battle then table.remove(live, i) else i = i + 1 end
+  end
+end
+
 function Vfx.liveCount()
   return #live
+end
+
+function Vfx.battleCount()
+  local n = 0
+  for i = 1, #live do
+    if live[i].battle then n = n + 1 end
+  end
+  return n
 end
 
 -- Advanced on real seconds rather than on frames: an effect drawn at 20 fps
@@ -207,8 +234,13 @@ end
 -- `project` is Voxel3D.project (wx, wy, wz) -> screen x, y -- the same
 -- camera every other overlay drawing is anchored through, which is what
 -- keeps an effect on its cell while the camera orbits.
-function Vfx.draw(project, scale)
-  if not Vfx.enabled() or #live == 0 then return end
+--
+-- opts.force skips the IMPACT row, matching Vfx.play: a battle drawer
+-- can paint tagged plays onto the arena canvas with the overworld row
+-- still OFF.
+function Vfx.draw(project, scale, opts)
+  opts = opts or {}
+  if not (opts.force or Vfx.enabled()) or #live == 0 then return end
   if not (project and love and love.graphics) then return end
   local g = love.graphics
   scale = scale or 1
@@ -229,6 +261,7 @@ function Vfx.draw(project, scale)
   -- alpha mode takes the two-argument form and nothing else.
   pcall(g.setBlendMode, "add", "alphamultiply")
 
+  local drew = false
   for i = first, #live do
     local e = live[i]
     local img = sheet(e.key)
@@ -261,15 +294,22 @@ function Vfx.draw(project, scale)
         local fade = k > 0.66 and (1 - (k - 0.66) / 0.34) or 1
         if fade < 0 then fade = 0 end
 
-        g.setColor(1, 1, 1, fade)
-        pcall(g.draw, img, quads[e.key], sx, sy, 0, px, px,
+        local tn = e.tint
+        if tn then
+          g.setColor(tn[1], tn[2], tn[3], fade)
+        else
+          g.setColor(1, 1, 1, fade)
+        end
+        local ok = pcall(g.draw, img, quads[e.key], sx, sy, 0, px, px,
               d.frameW * 0.5, d.frameH * 0.5)
+        if ok then drew = true end
       end
     end
   end
 
   pcall(g.setBlendMode, blend, alphaMode)
   g.setColor(r, gg, b, a)
+  return drew
 end
 
 return Vfx

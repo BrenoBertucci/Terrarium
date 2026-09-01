@@ -40,12 +40,14 @@
 -- the cursor stands on. The pocketing is display and motion; the items,
 -- their order in the save, and every effect stay the engine's.
 --
--- WHAT IS NOT. Cursor movement, wrapping, what A and B do, the heal
--- animation's pacing, which rows exist -- all read off the screen instance
--- every frame (`index`, `subIndex`, `swapFrom`, `heal.shown`, `items`,
--- `scroll`...). The one number this file animates that the engine does not
--- is presentation: the pop on a landed cursor and the staggered slide-in
--- when a screen opens.
+-- WHAT IS NOT. What A and B do, the heal animation's pacing, which rows
+-- exist -- all read off the screen instance every frame (`index`,
+-- `subIndex`, `swapFrom`, `heal.shown`, `items`, `scroll`...). The party
+-- grid's dpad is remapped by lib/BattleNav so left/right walk a row of
+-- the 2x3 rather than the engine's vertical list; the SWITCH/STATS pills
+-- stay a list. The bag keeps its own ListMenu.script. The one number this
+-- file animates that the engine does not is presentation: the pop on a
+-- landed cursor and the staggered slide-in when a screen opens.
 --
 -- NESTED SCREENS. While a picker sits on TOP of the bag, the bag is no
 -- longer the stack's top -- but it is still opaque, and letting it back
@@ -62,6 +64,12 @@ local BattleScreenXY = {}
 
 BattleScreenXY.ENABLED = true
 
+-- last party-card centres, for the cursor-travel streak (see BattleNav)
+local last = nil
+function BattleScreenXY.debug()
+  return last
+end
+
 local BattleHudXY = V.require("BattleHudXY")
 local BattleBoxXY = V.require("BattleBoxXY")
 
@@ -76,6 +84,8 @@ BattleScreenXY.RING = { 1, 1, 1, 0.95 }
 BattleScreenXY.SWAP_RING = { 1.0, 0.84, 0.40, 0.95 }
 BattleScreenXY.TEXT = { 1, 1, 1, 1 }
 BattleScreenXY.TEXT_DIM = { 0.78, 0.80, 0.85, 1 }
+BattleScreenXY.BAG_GOLD = { 1.0, 0.84, 0.40, 0.95 }
+BattleScreenXY.BAG_SEL = { 0.36, 0.24, 0.08, 0.96 }
 
 -- The bar's colour bands are Gen 1's own thirds: green while comfortable,
 -- amber under half, red at the tail end.
@@ -165,7 +175,9 @@ local function setColor(c, a)
 end
 
 local function rounded(mode, x, y, w, h, c, a, rFrac)
-  local r = math.min(h * (rFrac or 0.30), 18)
+  if not (w and h) or w <= 1 or h <= 1 then return end
+  local r = math.min(h * (rFrac or 0.30), 18, w * 0.5, h * 0.5)
+  if r < 0 then r = 0 end
   setColor(c, a)
   love.graphics.rectangle(mode, x, y, w, h, r, r)
 end
@@ -184,6 +196,7 @@ local function ring(x, y, w, h, c, a, lw)
 end
 
 local function text(str, x, y, th, c, a)
+  if not th or th <= 1 then return end
   BattleBoxXY.shadowText(str, x, y, th,
                          { c[1], c[2], c[3], (c[4] or 1) * (a or 1) })
 end
@@ -306,13 +319,19 @@ local function drawParty(game, scr, shot)
   local gy = ly + lh * 0.07 + (lh * 0.66 - gh) * 0.5
 
   local slide = lw * BattleScreenXY.SLIDE_FRAC
+  local dbg = { kind = "party", n = n, sel = sel, cx = {}, cy = {} }
   for i, mon in ipairs(party) do
     local col = (i - 1) % 2
     local row = math.floor((i - 1) / 2)
     local e = enterEase(i)
+    local x0 = gx + col * (cw + gap)
+    local y0 = gy + row * (ch + gap)
+    -- rest-pose centre, ignoring the pop, so a hop flies to where the
+    -- card sits rather than to the swollen selected rect
+    dbg.cx[i], dbg.cy[i] = x0 + cw * 0.5, y0 + ch * 0.5
     if e > 0 then
-      local x = gx + col * (cw + gap) - slide * (1 - e)
-      local y = gy + row * (ch + gap)
+      local x = x0 - slide * (1 - e)
+      local y = y0
       local selected = (i == sel)
       local w, h = cw, ch
       if selected then
@@ -333,6 +352,7 @@ local function drawParty(game, scr, shot)
       })
     end
   end
+  last = dbg
 
   -- the screen's own message, bottom left -- swap prompts, "Bring out
   -- which POKemon?", the lot, straight from bottomMessage
@@ -392,6 +412,7 @@ end
 -- repels, the key items -- is the plain pocket, exactly the DS games'
 -- catch-all.
 local POCKET_ORDER = { "items", "cura", "balls", "tm" }
+BattleScreenXY.POCKET_ORDER = POCKET_ORDER
 
 BattleScreenXY.POCKET_LABEL = {
   items = "ITENS", cura = "CURA", balls = "BOLAS", tm = "TM/HM",
@@ -673,6 +694,92 @@ local function pocketIcon(key, active)
   return BattleBoxXY._art("pockets/" .. key)
 end
 
+local function pixel(img)
+  if img then pcall(img.setFilter, img, "nearest", "nearest") end
+  return img
+end
+
+local function restoreBlend(mode, alphamode)
+  if not (love and love.graphics and love.graphics.setBlendMode) then return end
+  if alphamode ~= nil then
+    pcall(love.graphics.setBlendMode, mode, alphamode)
+  else
+    pcall(love.graphics.setBlendMode, mode or "alpha")
+  end
+end
+
+-- one Quad sheet for gui_vcursor; rebuilt only when the image size changes
+local vcCache = { img = nil, fw = 0, vh = 0, vw = 0, frames = 0, quads = {} }
+
+local function vcursorQuad(img, fi, fw, vh, vw, frames)
+  if not img then return nil end
+  if vcCache.img ~= img or vcCache.fw ~= fw or vcCache.vh ~= vh
+     or vcCache.vw ~= vw or vcCache.frames ~= frames then
+    vcCache.img, vcCache.fw, vcCache.vh, vcCache.vw = img, fw, vh, vw
+    vcCache.frames = frames
+    vcCache.quads = {}
+    if love and love.graphics and love.graphics.newQuad then
+      for i = 0, frames - 1 do
+        local ok, q = pcall(love.graphics.newQuad, i * fw, 0, fw, vh, vw, vh)
+        vcCache.quads[i] = (ok and q) or false
+      end
+    end
+  end
+  local q = vcCache.quads[fi]
+  return q or nil
+end
+
+local POCKET_DESC = {
+  items = "Um objeto da mochila.",
+  cura  = "Restaura HP ou cura um status.",
+  balls = "Usada para capturar Pokémon.",
+  tm    = "Ensina um golpe a um Pokémon.",
+}
+
+local function itemDesc(game, id, pocket)
+  local def = game.data and game.data.items and game.data.items[id]
+  if type(def) == "table" then
+    local d = def.description or def.desc or def.text
+    if type(d) == "string" and d ~= "" then return d end
+  end
+  return POCKET_DESC[pocket] or POCKET_DESC.items
+end
+
+local function wrap2(str, th, maxW)
+  str = tostring(str or "")
+  if str == "" then return {} end
+  if textW(str, th) <= maxW then return { str } end
+  local words = {}
+  for w in str:gmatch("%S+") do words[#words + 1] = w end
+  local lines, cur = {}, ""
+  for _, w in ipairs(words) do
+    local trial = (cur == "") and w or (cur .. " " .. w)
+    if cur ~= "" and textW(trial, th) > maxW then
+      lines[#lines + 1] = cur
+      if #lines >= 2 then
+        -- leftover stays dropped; two lines is the card's budget
+        return lines
+      end
+      cur = w
+    else
+      cur = trial
+    end
+  end
+  if cur ~= "" and #lines < 2 then lines[#lines + 1] = cur end
+  return lines
+end
+
+local function qtyString(right)
+  if right == nil then return nil end
+  if type(right) == "number" then
+    return "x" .. tostring(right)
+  end
+  local s = tostring(right)
+  if s:match("^x") or s:match("^X") then return s end
+  if s:match("^%d+$") then return "x" .. s end
+  return s
+end
+
 local function drawBag(game, scr, shot)
   local lx, ly = shot.lx, shot.ly
   local lw, lh = 160 * shot.scale, 144 * shot.scale
@@ -682,20 +789,33 @@ local function drawBag(game, scr, shot)
   local pop = BattleBoxXY.popScale("list", sel)
   local groups = bagGroups(game, scr)
   local cur = (n > 0) and pocketOf(game, items[sel].value) or "items"
+  local selItem = (n > 0) and items[sel] or nil
+  local prevKey = ((selItem and tostring(selItem.value)) or "") .. ":" .. cur
+  local prevPop = BattleBoxXY.popScale("bagprev", prevKey)
+  local t = now()
 
-  local pw = math.max(300, math.min(600, lw * 0.46))
-  local px = lx + lw - pw - lw * 0.025
-  local py = ly + lh * 0.05
+  -- both panes derived from the letterbox: never math.max(280) past lw
+  local listW = lw * 0.50
+  local prevW = lw * 0.38
+  local gap = lw * 0.02
   local ph = lh * 0.90
+  local py = ly + lh * 0.05
+  local listX = lx + lw - listW - lw * 0.018
+  local prevX = listX - gap - prevW
+  if prevX < lx + lw * 0.012 then
+    prevX = lx + lw * 0.012
+    prevW = listX - gap - prevX
+  end
+  if prevW < 1 then prevW = 1 end
+  if listW < 1 then listW = 1 end
+
+  -- ------- RIGHT first: tabs + rows + pokeball cursor. This is the bag.
+  local pw, px = listW, listX
   panel(px, py, pw, ph)
 
   local pad = pw * 0.05
   local th = lh * 0.032
 
-  -- the tab strip, in the pack's own pocket buttons -- coloured for the
-  -- pocket the cursor is in, olive for the rest, the exact pair of states
-  -- the X/Y bag draws them in. An empty pocket stays on the strip, stepped
-  -- back, the way the DS bags keep their empty pockets on the wheel.
   local tabH = lh * 0.065
   local tgap = pad * 0.3
   local tw = (pw - pad * 2 - tgap * 3) / 4
@@ -713,13 +833,13 @@ local function drawBag(game, scr, shot)
       tx, ty, tww, thh = x - dw * 0.5, tabY - dh * 0.5, tw + dw, tabH + dh
     end
     rounded("fill", tx, ty, tww, thh,
-            active and BattleScreenXY.ACCENT or BattleScreenXY.CARD, a, 0.45)
-    local icon = pocketIcon(key, active)
-    if icon then
-      local iw, ih = icon:getDimensions()
+            active and BattleScreenXY.BAG_GOLD or BattleScreenXY.CARD, a, 0.45)
+    local picon = pixel(pocketIcon(key, active))
+    if picon then
+      local iw, ih = picon:getDimensions()
       local s = (thh * 0.82) / math.max(1, ih)
       love.graphics.setColor(1, 1, 1, a * (active and 1 or 0.8))
-      love.graphics.draw(icon, tx + (tww - iw * s) * 0.5,
+      love.graphics.draw(picon, tx + (tww - iw * s) * 0.5,
                          ty + (thh - ih * s) * 0.5, 0, s, s)
     else
       local lth = thh * 0.42
@@ -740,10 +860,8 @@ local function drawBag(game, scr, shot)
   local fromX = bagTab.from or tabXs[cur]
   bagTab.x = fromX + (tabXs[cur] - fromX) * q
   rounded("fill", bagTab.x, tabY + tabH + tgap, tw, lineH,
-          BattleScreenXY.ACCENT, 1, 0.5)
+          BattleScreenXY.BAG_GOLD, 1, 0.5)
 
-  -- the icons carry the strip, so the active pocket's NAME goes in a
-  -- header under it, with how many items it holds on the far edge
   local headTh = lh * 0.03
   local headY = tabY + tabH + tgap + lineH + pad * 0.55
   text(BattleScreenXY.POCKET_LABEL[cur], px + pad, headY, headTh,
@@ -759,11 +877,9 @@ local function drawBag(game, scr, shot)
   local rowH = (rowsH - (BAG_ROWS - 1) * pad * 0.30) / BAG_ROWS
   local rgap = pad * 0.30
 
-  -- the current pocket's rows, re-entering whenever the pocket turns
-  -- (entrance.subAt -- switchPocket stamps it)
   local seq = groups[cur]
   local m = #seq
-  if m > 0 then
+  if m > 0 and rowH > 1 then
     local posSel = 1
     for p, i in ipairs(seq) do
       if i == sel then posSel = p break end
@@ -772,6 +888,8 @@ local function drawBag(game, scr, shot)
     local first = math.max(1, math.min(posSel - math.floor(vis / 2),
                                        m - vis + 1))
     local since = math.max(entrance.at, entrance.subAt)
+    local ball = pixel(BattleBoxXY._art("items/POKE_BALL"))
+    local gutter = rowH * 0.72
     for slot = 1, vis do
       local p = first + slot - 1
       local i = seq[p]
@@ -779,9 +897,9 @@ local function drawBag(game, scr, shot)
       if not item then break end
       local e = enterEase(slot, since)
       if e > 0 then
-        local x = px + pad + (lw * BattleScreenXY.SLIDE_FRAC) * (1 - e)
+        local x = px + pad + gutter + (lw * BattleScreenXY.SLIDE_FRAC) * (1 - e)
         local y = top0 + (slot - 1) * (rowH + rgap)
-        local w = pw - pad * 2 - (m > vis and pad * 0.8 or 0)
+        local w = pw - pad * 2 - gutter - (m > vis and pad * 0.8 or 0)
         local h = rowH
         local selR = (i == sel)
         if selR then
@@ -789,39 +907,51 @@ local function drawBag(game, scr, shot)
           x, y, w, h = x - dw * 0.5, y - dh * 0.5, w + dw, h + dh
         end
         rounded("fill", x, y, w, h,
-                selR and BattleScreenXY.ACCENT or BattleScreenXY.CARD,
+                selR and BattleScreenXY.BAG_SEL or BattleScreenXY.CARD,
                 e * (selR and 1 or 0.85), 0.4)
         if selR then
-          ring(x, y, w, h, BattleScreenXY.RING, e, 2)
+          ring(x, y, w, h, BattleScreenXY.BAG_GOLD, e, 2)
         elseif scr.swapIndex == i then
           ring(x, y, w, h, BattleScreenXY.SWAP_RING, e, 2)
         end
-        local lx2 = x + h * 0.28
-        local icon = itemIcon(item.value)
-        local fell = false
-        if not icon then
-          icon, fell = pocketIcon(cur, true), true
+        if selR and ball then
+          local bw, bh = ball:getDimensions()
+          local bs = (h * 0.82) / math.max(1, bh)
+          local bob = math.sin(t * 7.0) * h * 0.06
+          love.graphics.setColor(1, 1, 1, e)
+          love.graphics.draw(ball,
+                             x - gutter * 0.52 - bw * bs * 0.5,
+                             y + (h - bh * bs) * 0.5 + bob,
+                             0, bs, bs)
         end
-        if icon then
-          local iw, ih = icon:getDimensions()
-          local s = (h * 0.74) / math.max(1, ih)
-          love.graphics.setColor(1, 1, 1, e * (fell and 0.5 or 1))
-          love.graphics.draw(icon, lx2, y + (h - ih * s) * 0.5, 0, s, s)
-          lx2 = lx2 + iw * s + h * 0.25
+        local lx2 = x + h * 0.18
+        local iicon = pixel(itemIcon(item.value))
+        local ifell = false
+        if not iicon then
+          iicon, ifell = pixel(pocketIcon(cur, true)), true
+        end
+        if iicon then
+          local iw, ih = iicon:getDimensions()
+          local s = (h * 0.90) / math.max(1, ih)
+          love.graphics.setColor(1, 1, 1, e * (ifell and 0.5 or 1))
+          love.graphics.draw(iicon, lx2, y + (h - ih * s) * 0.5, 0, s, s)
+          lx2 = lx2 + iw * s + h * 0.20
         end
         local lth = h * 0.44
         local label = tostring(item.label or item.value or "")
-        text(label, lx2, y + (h - lth) * 0.5, lth,
-             BattleScreenXY.TEXT, e)
-        if item.right then
-          local rs = tostring(item.right)
-          text(rs, x + w - h * 0.35 - textW(rs, lth * 0.95),
+        local rs = item.right and qtyString(item.right) or nil
+        local rightW = rs and (textW(rs, lth * 0.95) + h * 0.40) or (h * 0.35)
+        local nameMax = (x + w - rightW) - lx2
+        local nth2 = lth * math.min(1, nameMax / math.max(1, textW(label, lth)))
+        text(label, lx2, y + (h - nth2) * 0.5, nth2, BattleScreenXY.TEXT, e)
+        if rs then
+          text(rs, x + w - h * 0.28 - textW(rs, lth * 0.95),
                y + (h - lth) * 0.5, lth * 0.95, BattleScreenXY.TEXT_DIM, e)
         end
       end
     end
 
-    if m > vis then
+    if m > vis and rowsH > 1 then
       local tx = px + pw - pad * 0.9
       local trackH = rowsH - rgap
       rounded("fill", tx, top0, pad * 0.35, trackH,
@@ -830,7 +960,7 @@ local function drawBag(game, scr, shot)
       local thumbY = top0 + (trackH - thumbH)
                      * ((first - 1) / math.max(1, m - vis))
       rounded("fill", tx, thumbY, pad * 0.35, thumbH,
-              BattleScreenXY.ACCENT, 1, 0.5)
+              BattleScreenXY.BAG_GOLD, 1, 0.5)
     end
   end
 
@@ -838,7 +968,145 @@ local function drawBag(game, scr, shot)
     text(footer, px + pw - pad - textW(footer, th),
          py + ph - pad - th, th, BattleScreenXY.TEXT_DIM)
   end
+
+  -- ------- LEFT: preview. Decorations isolated so a sparkle/quad throw
+  -- cannot take the list with it.
+  local ppad = prevW * 0.07
+  panel(prevX, py, prevW, ph)
+
+  local function simplePreview()
+    local icon = selItem and itemIcon(selItem.value) or nil
+    if not icon then icon = pocketIcon(cur, true) end
+    icon = pixel(icon)
+    local cx = prevX + prevW * 0.5
+    local cy = py + ph * 0.38
+    if icon then
+      local iw, ih = icon:getDimensions()
+      local size = math.min(prevW * 0.50, ph * 0.36)
+      local s = size / math.max(1, ih)
+      love.graphics.setColor(1, 1, 1, 1)
+      love.graphics.draw(icon, cx, cy, 0, s, s, iw * 0.5, ih * 0.5)
+    end
+    local name = selItem and tostring(selItem.label or selItem.value or "") or ""
+    if name == "" then name = BattleScreenXY.POCKET_LABEL[cur] or "" end
+    text(name, prevX + ppad, py + ph * 0.62, lh * 0.036, BattleScreenXY.TEXT)
+  end
+
+  local okPrev = pcall(function()
+    local mark = pixel(pocketIcon(cur, true))
+    if mark then
+      local mw, mh = mark:getDimensions()
+      local ms = (math.min(prevW, ph) * 0.72) / math.max(1, mh)
+      love.graphics.setColor(1, 1, 1, 0.10)
+      love.graphics.draw(mark,
+                         prevX + (prevW - mw * ms) * 0.5,
+                         py + ph * 0.10, 0, ms, ms)
+    end
+
+    local icon = selItem and itemIcon(selItem.value) or nil
+    local fell = false
+    if not icon then
+      icon, fell = pocketIcon(cur, true), true
+    end
+    icon = pixel(icon)
+    local cx = prevX + prevW * 0.5
+    local cy = py + ph * 0.38
+    local size = math.min(prevW * 0.58, ph * 0.42) * prevPop
+    local frame = pixel(BattleBoxXY._art("fx/gui_item_frame"))
+    if frame then
+      local fw, fh = frame:getDimensions()
+      local fs = (size * 1.18) / math.max(1, fh)
+      love.graphics.setColor(1.0, 0.84, 0.40, 0.78)
+      love.graphics.draw(frame, cx, cy, 0, fs, fs, fw * 0.5, fh * 0.5)
+    end
+    if icon then
+      local iw, ih = icon:getDimensions()
+      local s = size / math.max(1, ih)
+      local bob = math.sin(t * 1.65) * (size * 0.045)
+      local rot = math.sin(t * 0.85) * 0.14
+      love.graphics.setColor(1, 1, 1, fell and 0.55 or 1)
+      love.graphics.draw(icon, cx, cy + bob, rot, s, s, iw * 0.5, ih * 0.5)
+    end
+
+    do
+      local sparks = {
+        pixel(BattleBoxXY._art("fx/bishie_sparkle_1")),
+        pixel(BattleBoxXY._art("fx/bishie_sparkle_2")),
+        pixel(BattleBoxXY._art("fx/9_pointed_star")),
+      }
+      local prevB, prevA = love.graphics.getBlendMode()
+      love.graphics.setBlendMode("add")
+      local r = size * 0.58
+      for i, img in ipairs(sparks) do
+        if img then
+          local ang = t * (0.65 + 0.22 * i) + i * 2.15
+          local dist = r * (0.70 + 0.10 * math.sin(t * 1.4 + i))
+          local sx = cx + math.cos(ang) * dist
+          local sy = cy + math.sin(ang) * dist * 0.72
+          local pulse = 0.40 + 0.60 * (0.5 + 0.5 * math.sin(t * 5.2 + i * 1.7))
+          local iw, ih = img:getDimensions()
+          local ss = (size * (0.16 + 0.05 * i)) / math.max(1, ih)
+          love.graphics.setColor(1.0, 0.92, 0.55, 0.80 * pulse)
+          love.graphics.draw(img, sx, sy,
+                             t * 0.35 * ((i % 2 == 0) and 1 or -1),
+                             ss, ss, iw * 0.5, ih * 0.5)
+        end
+      end
+      restoreBlend(prevB, prevA)
+    end
+
+    local nameTh = lh * 0.036
+    local name = selItem and tostring(selItem.label or selItem.value or "") or ""
+    if name == "" then name = BattleScreenXY.POCKET_LABEL[cur] or "" end
+    local nameY = py + ph * 0.62
+    local vc = pixel(BattleBoxXY._art("fx/gui_vcursor"))
+    local nameX = prevX + ppad
+    if vc then
+      local vw, vh = vc:getDimensions()
+      local frames = 5
+      local fw = math.max(1, math.floor(vw / frames))
+      local fi = math.floor(t * 8) % frames
+      local vs = (nameTh * 1.35) / math.max(1, vh)
+      local qv = vcursorQuad(vc, fi, fw, vh, vw, frames)
+      love.graphics.setColor(1.0, 0.84, 0.40, 0.95)
+      if qv then
+        love.graphics.draw(vc, qv, nameX, nameY + (nameTh - vh * vs) * 0.5,
+                           0, vs, vs)
+      else
+        love.graphics.draw(vc, nameX, nameY, 0, vs * (fw / math.max(1, vw)), vs)
+      end
+      nameX = nameX + fw * vs + ppad * 0.35
+    end
+    local avail = prevX + prevW - ppad - nameX
+    local nth = nameTh * math.min(1, avail / math.max(1, textW(name, nameTh)))
+    text(name, nameX, nameY + (nameTh - nth) * 0.5, nth, BattleScreenXY.TEXT)
+
+    local qs = selItem and qtyString(selItem.right) or nil
+    if qs then
+      local qth = lh * 0.028
+      local qw = textW(qs, qth) + qth * 0.70
+      local qh = qth * 1.30
+      local qx = prevX + prevW - ppad - qw
+      local qy = nameY + nameTh * 1.35
+      rounded("fill", qx, qy, qw, qh, BattleScreenXY.BAG_GOLD, 1, 0.5)
+      text(qs, qx + qth * 0.35, qy + (qh - qth) * 0.5, qth, BattleScreenXY.TEXT)
+    end
+
+    local dth = lh * 0.026
+    local desc = itemDesc(game, selItem and selItem.value, cur)
+    local dlines = wrap2(desc, dth, prevW - ppad * 2)
+    local dy = py + ph * 0.78
+    for _, line in ipairs(dlines) do
+      text(line, prevX + ppad, dy, dth, BattleScreenXY.TEXT_DIM)
+      dy = dy + dth * 1.28
+    end
+  end)
+  if not okPrev then
+    pcall(simplePreview)
+  end
 end
+
+BattleScreenXY.drawBag = drawBag
 
 -- ------- the draw, from snapHUDs' already-bound canvas
 function BattleScreenXY.draw(game, battle, shot)
@@ -848,6 +1116,7 @@ function BattleScreenXY.draw(game, battle, shot)
   local scr, kind = BattleScreenXY.of(game)
   if not scr then
     entrance.key = nil
+    last = nil
     return false
   end
   if entrance.key ~= scr then
@@ -868,13 +1137,38 @@ function BattleScreenXY.draw(game, battle, shot)
   setColor(BattleScreenXY.VEIL)
   love.graphics.rectangle("fill", 0, 0, shot.pw, shot.ph)
   local ok, err = pcall(drawer, game, scr, shot)
-  love.graphics.pop()
-  love.graphics.setColor(1, 1, 1, 1)
   if not ok then
     V.mod.log:warn("BattleScreenXY draw failed: %s", tostring(err))
-    return false
+    -- never leave the player with a veil and no list
+    if drawer ~= drawList then
+      local ok2, err2 = pcall(drawList, game, scr, shot)
+      if not ok2 then
+        V.mod.log:warn("BattleScreenXY drawList fallback failed: %s",
+                       tostring(err2))
+        love.graphics.pop()
+        love.graphics.setColor(1, 1, 1, 1)
+        return false
+      end
+    else
+      love.graphics.pop()
+      love.graphics.setColor(1, 1, 1, 1)
+      return false
+    end
   end
+  love.graphics.pop()
+  love.graphics.setColor(1, 1, 1, 1)
   return true
+end
+
+-- Mechanics live here, not only inside draw: a thrown frame still has
+-- ListMenu.script installed so LEFT/RIGHT pockets and UP/DOWN keep working.
+function BattleScreenXY.tick(game)
+  if not BattleScreenXY.available() then return false end
+  local top = game and game.stack and game.stack:top()
+  if listShape(top) then
+    return bagInstall(top, game) and true or false
+  end
+  return false
 end
 
 return BattleScreenXY

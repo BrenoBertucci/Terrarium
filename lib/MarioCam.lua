@@ -847,12 +847,47 @@ end
 MarioCam.SHOULDER_DIST = 0.7          -- of the zoom rung's distance
 MarioCam.SHOULDER_DROP = 18           -- degrees below the VOXEL ladder
 
+-- ------- THE FOLLOW COMMITS, IT DOES NOT TWITCH
+--
+-- The first cut of this mode aimed the camera at the FACING, and on a
+-- grid game that is a washing machine: Pokemon movement is up, right,
+-- up, right, a re-aim of the entire world on every tap, and the player
+-- called it exactly what it was -- dizzying, "changing out of nowhere".
+-- A modern follow camera on a grid holds its heading and lets the
+-- character turn WITHIN the frame; it only re-aims when the player has
+-- COMMITTED to a direction -- walked it, continuously, for long enough
+-- to mean it. Turning in place moves nothing. A one-cell side-step moves
+-- nothing. A held walk swings the world once, to the new back, and
+-- holds again.
+MarioCam.FOLLOW_COMMIT = 0.6          -- seconds of sustained walk to re-aim
+
+local follow = { heading = nil, facing = nil, commit = 0, lull = 0 }
+
 function modes.behind(dt, vh)
   local shoulder = MarioCam.rung() == "shoulder"
   local v = FACE_VEC[geo.facing] or FACE_VEC.down
   -- the camera stands OPPOSITE the facing, and cam.yaw is focus-to-pos, so
   -- it is the facing negated
-  local goal = atan2s(-v[1], -v[2])
+  local faceGoal = atan2s(-v[1], -v[2])
+
+  -- the commitment clock: same facing, actually walking, long enough.
+  -- geo.moving flickers between grid steps (a lesson the walk-clock bug
+  -- taught), so a short lull is forgiven rather than resetting the count.
+  if geo.facing ~= follow.facing then
+    follow.facing = geo.facing
+    follow.commit = 0
+  end
+  if geo.moving then
+    follow.commit = follow.commit + dt
+    follow.lull = 0
+  else
+    follow.lull = follow.lull + dt
+    if follow.lull > 0.2 then follow.commit = 0 end
+  end
+  if follow.heading == nil or follow.commit >= MarioCam.FOLLOW_COMMIT then
+    follow.heading = faceGoal
+  end
+  local goal = follow.heading
   -- a slow swing, because the facing here snaps between four values and a
   -- fast one would whip the world round on every turn; the shoulder rung
   -- takes it slightly quicker, since turning is its whole steering wheel.
@@ -1094,6 +1129,9 @@ MarioCam.avoidState = avoid
 -- the way -- slower than WALL_DIV, because leaving a corner is a relax and
 -- arriving at one is a dodge
 MarioCam.WALL_RELAX = 20
+-- how long a block must STAND before the steering answers it at all: a
+-- passing occlusion resolves itself and the camera must not have moved
+MarioCam.WALL_DELAY = 0.25
 
 -- resolve_geometry_collisions: the last line, and the only one allowed to
 -- move the camera IN. Two jobs -- keep the eye above the ground it is
@@ -1295,6 +1333,9 @@ local function courseProcessing()
     pan.x, pan.z = 0, 0
     cam.autoYaw = nil
     avoid.offset = 0
+    avoid.blocked = 0
+    follow.heading, follow.facing = nil, nil
+    follow.commit, follow.lull = 0, 0
     cam.shot = nil
     -- a map change is a cut, and the lens cuts with it: easing a leftover
     -- shot's 30-degree lens back to 45 across a door would be the one
@@ -1638,11 +1679,26 @@ function MarioCam.update(dt, vh)
     local tryYaw = s16(modeYaw + avoid.offset)
     local av = avoidYaw(geo.map, cam.focus, cam.dist, cam.pitch,
                         tryYaw, modeYaw, signed(avoid.offset))
-    if av == false then
+    -- ------- THE ENGAGE DELAY: passing occlusions move nothing
+    --
+    -- Walking past a house corner hides the player for a couple of cells,
+    -- and a steering that answered the FIRST blocked frame swung the
+    -- camera for every one of them -- and swung it back after -- which
+    -- from the player's chair is the camera "changing out of nowhere".
+    -- So the block has to STAND for a quarter second before any steering
+    -- or pull-in answers it; a block that resolves itself by walking was
+    -- never the camera's problem.
+    if av ~= nil then
+      avoid.blocked = (avoid.blocked or 0) + dt
+    else
+      avoid.blocked = 0
+    end
+    local engaged = (avoid.blocked or 0) >= MarioCam.WALL_DELAY
+    if av == false and engaged then
       -- boxed in: hold the deflection where it is and let resolveGeometry
       -- pull the eye in, which is the one thing that always works
       boxedIn = true
-    elseif av then
+    elseif av and engaged then
       -- a clear bearing exists: grow the deflection toward it. The goal is
       -- measured from where the MODE wanted to stand rather than from due
       -- south: on RADIAL the orbit has already used up its own allowance
@@ -1658,7 +1714,7 @@ function MarioCam.update(dt, vh)
       end
       avoid.offset = signed(approachS16(s16(avoid.offset), s16(goal),
                                         rateDiv(MarioCam.WALL_DIV, dt)))
-    elseif avoid.offset ~= 0 then
+    elseif av == nil and avoid.offset ~= 0 then
       -- the deflected view is clear. Ease home -- but only if home is
       -- clear too, because relaxing back INTO the wall that caused the
       -- deflection is a camera that saws against a corner forever.
@@ -1771,6 +1827,9 @@ function MarioCam.cut()
   lakitu.smooth = false
   anchor.x, anchor.z = nil, nil
   avoid.offset = 0
+  avoid.blocked = 0
+  follow.heading, follow.facing = nil, nil
+  follow.commit, follow.lull = 0, 0
 end
 
 -- The yaw the world is being seen from, in radians, for anything that has

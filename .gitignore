@@ -8,6 +8,14 @@ __pycache__/
 # agent worktrees and local scratch
 .claude/
 
+# Downloaded VFX packs used to cut wind strips (Pimen, ELR, JuiceBox, …).
+# The cut strips in assets/vfx/ are what ships; the packs stay on disk.
+tools/_vfx_dl/
+
+# One-off battle-bag splice scratch. Not source.
+tools/bagxy_fix/
+tools/bagxy_fix.tar.gz
+
 # Private working notes: briefs written to an assistant, task prompts, local
 # to-do. These carry absolute paths from the authoring machine (and with them
 # a username), and they are notes to one person rather than documentation for

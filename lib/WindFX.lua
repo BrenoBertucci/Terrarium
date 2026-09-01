@@ -1,18 +1,26 @@
 -- Voxel world mode: the wind you can SEE.
 --
 -- Wind.lua bends the grass; this file fills the air when grass is not on
--- screen. Particles are cel-hard grit, seeds and dashes (assets/vfx/wind_*.png,
--- authored by tools/make_wind_sprites.py) -- not soft photo-smoke circles.
+-- screen. What it fills it with is the animated strips in WindFX.SHEETS
+-- (Pimen's swoosh, crescent, puff, vortex and dust kick) and the coloured
+-- leaf strip -- and the RULES written above that table, which are the
+-- whole point of this file.
 --
--- Kinds (picked by weather + wind strength):
---   grit    tiny hard dust pixels low over the ground (dry air)
---   seed    elongated pollen/seed mid height (dry breeze+)
---   dash    velocity-aligned streak (gale / gust front)
---   spray   seed-shaped, rain-tinted (shower)
---   snow    grit-shaped, white (snow)
+-- Kinds the wind itself spawns (picked by weather + wind strength):
+--   ribbon   the swoosh, aligned to travel        (dry, more in a gale)
+--   curl     a small crescent turning over        (dry breeze)
+--   leaf     a leaf tumbling, three colourways    (any dry air, rain)
+--   wetpuff  a small puff, tinted like the spray  (rain, snow)
+--   kick     dust thrown off the ground           (dry gust front only)
+--   whirl    a vortex standing on the ground      (gale gust front only)
 --
--- Gust front: rank of dashes + a short curl frame strip, same Wind.gust
--- envelope the grass already bows to.
+-- Kinds only WindFX.emit's callers spawn (VegFX, SprayFX, StepFX), drawn
+-- as the authored cel stamps (assets/vfx/wind_*.png from
+-- tools/make_wind_sprites.py): grit, seed, dash, spray, snow, puff.
+--
+-- Gust front: a rank of ribbons across the view + the ground kicked once
+-- (+ the whirl, sometimes), on the same Wind.gust envelope the grass
+-- already bows to.
 
 local V = ...
 
@@ -70,7 +78,110 @@ WindFX.TAIL = 0.14
 WindFX.FRONT_AT = 0.70
 WindFX.FRONT_WAIT = 2.5
 WindFX.FRONT_WIDE = 8
-WindFX.FRONT_N = 8
+
+-- ------- THE DOWNLOADED SHEETS, AND THE RULES THEY PLAY BY
+--
+-- Five strips cut from Pimen's Wind Spell Effect 01/02 and Smoke n Dust 03
+-- (tools/install_pimen_wind.py; provenance and licence in
+-- assets/vfx/LICENSE.md). They replace an earlier set of OpenGameArt sheets
+-- whose first wiring put them INTO the standing field: every grain, puff
+-- and dash became a 96 px animation, turned by its own spin, its clip
+-- stretched over a random lifetime, up to three hundred of them at once.
+-- Pretty, and noise -- because a sheet is not a mote. A mote is a thing
+-- the air carries; a sheet is an EVENT with a beginning and an end. So:
+--
+--   1. The air's sheets (ribbon, curl, wet puff) ARE the standing field, a
+--      few at a time (STANDING_MAX), each born inside the view. The ground
+--      sheet (dust kick) and the hero (whirl) play only at a GUST FRONT
+--      -- the Wind.gust envelope the grass bows to -- with slots kept for
+--      them (FRONT_RESERVE) so a full field cannot crowd the front out.
+--   2. A sheet plays its clip once at its own frame rate; its lifetime IS
+--      the clip's length, never a random draw. The two that loop (curl,
+--      whirl) dwell for a written span (`dwell` + up to `jitter`) instead.
+--   3. A sheet keeps its authored up. The ribbon alone follows its travel,
+--      and flips instead of turning over when the wind runs left. Nothing
+--      spins.
+--   4. A sheet has one size, in world px. No per-mote size jitter.
+--   5. Ground sheets (whirl, dust kick) stand on the ground under them:
+--      no bob, no lift, no flutter.
+--   6. At most ONE hero (the whirl) is in the air, and only in a gale --
+--      and today none: HERO_CHANCE is 0. A vortex at the player's feet
+--      was one more thing happening at the player's feet.
+--   7. The grey cel stamps (grit, seed, dash, puff, spray, snow) are not
+--      drawn by the wind any more: a screen of grey specks over the path
+--      read as dirt on the lens, and the authored 16 px leaf silhouettes
+--      read as no leaf at all. Their kinds, images and draw code stay,
+--      for WindFX.emit's other callers -- and a "leaf" emitted by VegFX
+--      is a sheet now too, so a leaf torn off a tree tumbles like one.
+--   8. Dry air plays the swoosh. Wet air plays the puff, tinted like the
+--      spray. The ground is kicked only if KICK is on -- it is off: a
+--      dust burst on the path read as a fart from nowhere.
+--   9. The wind is BACKGROUND. Everything but the leaf rides high -- up
+--      by the tree crowns (`band`) -- and faint (`alpha`), so it reads as
+--      weather passing over the diorama, never as a thing happening at
+--      the player's feet. The leaf is the one piece at eye level and at
+--      full strength, because a leaf is a thing and a gust is not.
+--
+-- A sheet mote is a mote whose kind names a row here. The solver steps it
+-- like any other (its own KINDS row says how it moves); only the draw is
+-- different, and both draw paths read it through sheetCard() below.
+--
+--   img      key in the sprite pack       fw/fh   frame size, px
+--   cols/n   grid columns / frame count   fps     the clip's own clock
+--   hw       half-width in world px (height follows the frame's aspect)
+--   align    turn with travel (rule 3)    loop    replay instead of ending;
+--            lifetime is then `dwell` + rand * `jitter` seconds
+--   ground   stand on the ground; `foot` is how much of the half-height
+--            sits above it (1 = the card's bottom edge is the ground)
+--   climate  take the spray / blown tint in wet air (rule 8)
+--   variants the strip holds this many copies of the clip side by side
+--            (colourways); a mote picks one at birth and keeps it
+--   band     { lo, hi } world px above the ground the sheet lives in
+--            (rule 9); absent = the field's own 6..14 above the ground
+--   alpha    strength of the card (rule 9); absent = 1
+WindFX.SHEETS = {
+  -- EdgeLoopRepeat's leaf, tumbling: fall / spring / winter colourways.
+  -- The tumble is the clip's; the mote itself never spins (rule 3).
+  leaf    = { img = "leaf",    fw = 16, fh = 16, cols = 15, n = 5,  fps = 10,
+              hw = 4.5,  loop = true, dwell = 2.2, jitter = 2.8, variants = 3 },
+  -- Wind Breath: a swoosh with leaves in its tail. THE wind you see --
+  -- high and faint, passing over the crowns.
+  ribbon  = { img = "breath",  fw = 48, fh = 32, cols = 11, n = 11, fps = 16,
+              hw = 14.0, align = true, band = { 30, 48 }, alpha = 0.30 },
+  -- Wind Projectile: a small crescent turning over. The breeze's mote.
+  curl    = { img = "curl",    fw = 32, fh = 32, cols = 6,  n = 6,  fps = 12,
+              hw = 5.0,  loop = true, dwell = 1.4, jitter = 1.2,
+              band = { 28, 44 }, alpha = 0.30 },
+  -- Smoke n Dust 5: a small puff. The wet air's mote, tinted.
+  wetpuff = { img = "wetpuff", fw = 32, fh = 32, cols = 6,  n = 6,  fps = 14,
+              hw = 7.0,  climate = true, band = { 26, 44 }, alpha = 0.35 },
+  -- Pull in: a vortex, looping on the ground. The gale's hero, faint.
+  whirl   = { img = "whirl",   fw = 48, fh = 48, cols = 7,  n = 7,  fps = 12,
+              hw = 12.0, loop = true, dwell = 3.0, jitter = 1.5,
+              ground = true, foot = 1.0, alpha = 0.35 },
+  -- Smoke n Dust 1: dust thrown up and settling. The front's ground.
+  kick    = { img = "kick",    fw = 80, fh = 64, cols = 9,  n = 9,  fps = 16,
+              hw = 12.0, ground = true, foot = 0.85 },
+}
+
+WindFX.STANDING_MAX = 10       -- the standing field, sheets and leaves
+WindFX.FRONT_SHEETS = 4        -- ribbons (or wet puffs) per front
+WindFX.FRONT_RESERVE = 6       -- slots the standing field may not take
+WindFX.KICK = false            -- dry fronts kick dust off the ground (rule 8)
+WindFX.HERO_AT = 1.40          -- Wind.amount() the whirl needs (gale)
+-- The whirl is OFF (rule 6): the only two things in the air are the leaf
+-- and the background wind. Wired and measured; a number turns it back on.
+WindFX.HERO_CHANCE = 0         -- per front, when eligible and none live
+WindFX.SHEET_IN = 0.10         -- fade guards against a pop, under the
+WindFX.SHEET_OUT = 0.25        -- clip's own first and last frames
+-- A card turns only in its own plane, so travel along z can be hinted at
+-- but not drawn; this is how much of it leaks into the tilt.
+WindFX.SHEET_TILT = 0.5
+-- Where a sheet is born, in cells upwind of the player. A sheet's life is
+-- its clip and nothing else, so it has to be born where it will be SEEN,
+-- not six cells upwind like the rank of dashes that flies in.
+WindFX.SHEET_BACK = { leaf = 2.0, ribbon = 2.5, curl = 3.0, wetpuff = 2.5,
+                      whirl = 3.0, kick = 0.5 }
 
 -- How much of the field's own speed one unit of eddy is worth (T7): the
 -- solver samples Wind.turbAt per mote and converts at speed * TURB. Half
@@ -126,12 +237,39 @@ WindFX.KINDS = {
     speed = function(p, t) return 0.78 + 0.20 * math.sin(t * 3.1 + (p.seed or 0)) end,
     bob = 9.5, mass = 0.12, area = 2.20,
   },
+  -- the sheets (rules 3 and 5). The ribbon flies straight like a dash;
+  -- the curl drifts and wanders like a seed; the wet puff drifts like a
+  -- puff; the whirl crawls, heavy; the dust kick is the ground itself and
+  -- does not move at all.
+  ribbon  = { speed = 1.18, bob = 0,   mass = 0.50, area = 0.35, curlA = 0, curlB = 0 },
+  curl    = { speed = 0.90, bob = 3.0, mass = 0.30, area = 1.00 },
+  wetpuff = { speed = 0.85, bob = 0,   mass = 0.30, area = 1.20, curlA = 0, curlB = 0 },
+  whirl   = { speed = 0.30, bob = 0,   mass = 4.00, area = 1.00, curlA = 0, curlB = 0 },
+  kick    = { speed = 0,    bob = 0,   mass = 0,    area = 1.00, curlA = 0, curlB = 0 },
 }
+
+-- Rule 5 as clamps: a ground sheet's height above the ground under it is
+-- fixed to where its foot lands, so the solver's own clamp holds it there
+-- through every step -- including the frame it is born on.
+for name, s in pairs(WindFX.SHEETS) do
+  local k = WindFX.KINDS[name]
+  if s.ground then
+    local foot = s.hw * (s.fh / s.fw) * (s.foot or 1)
+    k.lowClamp, k.highClamp = foot, foot
+  elseif s.band then
+    -- rule 9 as clamps too: the solver keeps a high sheet high
+    k.lowClamp, k.highClamp = s.band[1], s.band[2]
+  end
+end
 
 local field = Particles.newField(WindFX.KINDS, WindFX.MAX)
 local frontCool = 0
 
-local function notFront(m) return not m.front end
+-- The wind's OWN standing motes. VegFX, SprayFX and StepFX put theirs in
+-- this field through WindFX.emit (marked veg / src), and with the field
+-- capped at STANDING_MAX a dozen grass seeds were enough to fill the count
+-- and leave the wind itself nothing to spawn.
+local function ownStanding(m) return not m.front and not m.veg and not m.src end
 
 -- The step's context, reused. Building it fresh each frame was a table per
 -- frame handed straight to the collector -- small against what the engine
@@ -148,6 +286,7 @@ local stepCtx = {}
 WindFX.ticks = 0
 WindFX.ticksLive = 0
 WindFX.lastGate = "never ran"
+WindFX.fronts = 0          -- gust fronts spawned so far (probes)
 
 local imgs = nil     -- { grit, seed, dash, swirl, swirlQ, swirlN } | false
 
@@ -168,6 +307,12 @@ local function loadImgs()
   local puff = one("wind_puff.png")
   local swirl = one("wind_swirl.png")
   local leaves = one("leaves.png")
+  local leaf = one("wind_leaf.png")
+  local breath = one("wind_breath.png")
+  local curl = one("wind_curl.png")
+  local whirl = one("wind_whirl.png")
+  local kick = one("wind_kick.png")
+  local wetpuff = one("wind_wetpuff.png")
   local swirlQ, swirlN = nil, 0
   if swirl then
     local fh = swirl:getHeight()
@@ -194,6 +339,11 @@ local function loadImgs()
     grit = grit, seed = seed or grit, dash = dash or seed,
     puff = puff, swirl = swirl, swirlQ = swirlQ, swirlN = swirlN,
     leaves = leaves, leafQ = leafQ, leafN = leafN,
+    -- the sheets, under the names WindFX.SHEETS[*].img use
+    leaf = leaf, breath = breath, curl = curl, whirl = whirl, kick = kick,
+    wetpuff = wetpuff,
+    -- overlay-path quads for them, built on first use
+    sheetQ = {},
   }
   return imgs
 end
@@ -241,10 +391,13 @@ local function openSky(map)
   return not DayNight.isCanopy(map)
 end
 
--- What the air carries + palette + brightness.
+-- What the air carries + palette + brightness. The kind is the weather's
+-- own word ("rain", "snow", "dry"): every consumer compares against
+-- those, and this used to answer "spray" for rain, which nothing ever
+-- matched -- a shower got the dry mix and the dry tint.
 local function climate()
   local kind = Weather.visible()
-  if kind == "rain" then return "spray", WindFX.SPRAY, 0.72 end
+  if kind == "rain" then return "rain", WindFX.SPRAY, 0.72 end
   if kind == "snow" then return "snow", WindFX.BLOWN, 0.88 end
   return "dry", WindFX.DUST, 0.78
 end
@@ -258,60 +411,36 @@ local function budget()
   return n
 end
 
--- Pick a particle kind that makes sense for this climate and wind strength.
--- Stronger wind → more seeds/dashes mixed in; weak breeze stays mostly grit.
--- ------- WHAT A STORM ACTUALLY BLOWS AROUND
+-- ------- WHAT THE STANDING FIELD IS MADE OF (rules 1, 7, 8)
 --
--- Rain used to switch this to spray and dashes and nothing else, which is
--- the one climate where that is least true. A wind hard enough to slant
--- rain is a wind stripping the trees: the air in a squall is full of torn
--- leaves, and they are the thing that reads as violence, because unlike
--- spray they are big, coloured, and tumbling.
---
--- Rain also SOAKS what it carries, and that is why the mix is not the dry
--- one with water added. Grit and chaff go down to almost nothing -- wet
--- dust is mud and stays on the ground -- while leaves go UP, because a wet
--- gale is tearing them off faster than a dry one ever does.
+-- The strength of the wind is a VOCABULARY, not a density: a breeze is
+-- leaves adrift and small crescents turning over; a wind is those plus
+-- the odd swoosh; a gale is mostly swooshes. Rain soaks the air -- the
+-- sheet is the wet puff, tinted like the spray -- and still tears leaves
+-- off, because a wet gale strips a tree faster than a dry one. Snow is
+-- the puff alone, blown white.
 local function pickKind(amount, front, climateKind)
-  if front then return "dash" end
-  if climateKind == "rain" then
-    local r = rand()
-    if amount < 0.9 then
-      -- a shower in still air: mostly spray, the odd leaf let go
-      if r < 0.74 then return "spray" end
-      if r < 0.90 then return "leaf" end
-      return "dash"
-    end
-    -- a squall: the wood is coming apart
-    if r < 0.44 then return "spray" end
-    if r < 0.80 then return "leaf" end
-    return "dash"
-  end
-  if climateKind == "snow" then
-    return rand() < 0.80 and "snow" or "dash"
-  end
+  if front then return (climateKind == "dry") and "ribbon" or "wetpuff" end
+  if climateKind == "snow" then return "wetpuff" end
   local r = rand()
-  if amount < 0.75 then
-    -- light air: almost all grit, rare seed / one lost leaf
-    if r < 0.78 then return "grit" end
-    if r < 0.90 then return "puff" end
-    if r < 0.97 then return "seed" end
-    return "leaf"
-  elseif amount < 1.40 then
-    if r < 0.38 then return "grit" end
-    if r < 0.52 then return "puff" end
-    if r < 0.70 then return "seed" end
-    if r < 0.88 then return "leaf" end
-    return "dash"
-  else
-    -- gale: the air is full of what the trees just lost
-    if r < 0.18 then return "grit" end
-    if r < 0.28 then return "puff" end
-    if r < 0.42 then return "seed" end
-    if r < 0.82 then return "leaf" end
-    return "dash"
+  if climateKind == "rain" then
+    return (r < 0.55) and "wetpuff" or "leaf"
   end
+  if amount < 0.75 then
+    if r < 0.50 then return "leaf" end
+    if r < 0.90 then return "curl" end
+    return "ribbon"
+  elseif amount < 1.40 then
+    if r < 0.35 then return "leaf" end
+    if r < 0.60 then return "curl" end
+    return "ribbon"
+  end
+  if r < 0.30 then return "leaf" end
+  if r < 0.40 then return "curl" end
+  return "ribbon"
 end
+
+local spawnSheet   -- defined below spawn(); the two are mutually aware
 
 local function dustTint()
   local r = rand()
@@ -338,6 +467,10 @@ local function spawn(px, pz, amount, opts)
   local z = pz - dz * back + dx * side
   local climateKind = opts.climate or "dry"
   local kind = opts.kind or pickKind(amount, opts.front, climateKind)
+  -- a sheet is born by its own rules, not by the ladder below
+  if WindFX.SHEETS[kind] then
+    return spawnSheet(kind, px, pz, side, opts.front)
+  end
 
   -- Height by kind: grit skims the grass, seeds float mid, dashes higher.
   -- measured from the ground under the spawn, not from world zero
@@ -384,8 +517,9 @@ local function spawn(px, pz, amount, opts)
   m.frame = kind == "leaf" and rand(0, 15) or 0
   m.flip = rand() < 0.5 and -1 or 1
   m.front = opts.front or false
-  -- wide size range so a cloud of grit is not one stamp
-  m.size = 0.45 + rand() * 1.05
+  -- wide size range so a cloud of grit is not one stamp; a leaf keeps to
+  -- a narrow one, because a leaf at half size is a speck again
+  m.size = (kind == "leaf") and (0.8 + rand() * 0.4) or (0.45 + rand() * 1.05)
   m.tint = tint
   m.ang = 0
 end
@@ -432,21 +566,83 @@ end
 function WindFX.count() return field:count() end
 function WindFX.get(i) return field:get(i) end
 
+-- ------- A SHEET, BORN
+--
+-- Every field the solver and sheetCard() read is written here, and the
+-- rules are visible as the constants: no spin, no lift, size 1, a seed of
+-- 0, and a lifetime that is the clip's own (rule 2) or the hero's dwell.
+spawnSheet = function(name, px, pz, side, front)
+  local s = WindFX.SHEETS[name]
+  if not s then return false end
+  if field:count() >= budget() then return false end
+  local dx, dz = Wind.DIR[1] or 1, Wind.DIR[2] or 0
+  local back = (WindFX.SHEET_BACK[name] or WindFX.SPAWN_AHEAD) * 16
+  local x = px - dx * back - dz * side
+  local z = pz - dz * back + dx * side
+  local hh = s.hw * (s.fh / s.fw)
+  local floor = groundUnder(x, z)
+  local y
+  if s.ground then
+    y = floor + hh * (s.foot or 1)
+  elseif s.band then
+    y = floor + s.band[1] + rand() * (s.band[2] - s.band[1])
+  else
+    y = floor + 6 + rand() * 8
+  end
+  local m = field:claim()
+  if not m then return false end
+  m.x, m.z, m.y = x, z, y
+  m.kind = name
+  m.seed = 0
+  m.t = 0
+  if s.loop then
+    m.ttl = (s.dwell or 1) + rand() * (s.jitter or 0)
+  else
+    m.ttl = s.n / s.fps
+  end
+  m.fast = 1
+  m.lift = 0
+  m.spin = 0
+  m.frame = 0
+  m.flip = 1
+  m.front = front and true or false
+  m.size = 1
+  m.tint = nil
+  m.ang = 0
+  -- colourway, picked once. The leaf's are fall / spring / winter; most
+  -- of what blows around is the first two
+  if s.variants then
+    local r = rand()
+    m.variant = (r < 0.45) and 0 or ((r < 0.85) and 1 or 2)
+  end
+  return true
+end
+
+local function isHero(m) return m.kind == "whirl" end
+
+-- One gust front: a rank of the climate's sheet across the view, the
+-- ground kicked once, and -- in a gale, sometimes -- the hero.
 local function spawnFront(px, pz, amount, climateKind)
-  local n = WindFX.FRONT_N
-  if n < 1 then return end
-  local cap = budget()
+  WindFX.fronts = (WindFX.fronts or 0) + 1
   local wide = WindFX.FRONT_WIDE * 16
-  for i = 1, n do
-    if field:count() >= cap then break end
-    local f = (n > 1) and ((i - 1) / (n - 1) * 2 - 1) or 0
-    spawn(px, pz, amount, {
-      back = WindFX.SPAWN_AHEAD + 1.5,
-      side = f * wide + (rand() * 2 - 1) * 8,
-      front = true,
-      kind = "dash",
-      climate = climateKind,
-    })
+
+  -- rule 8: the air's sheet follows the climate
+  local air = (climateKind == "dry") and "ribbon" or "wetpuff"
+  local ns = WindFX.FRONT_SHEETS
+  for i = 1, ns do
+    local f = (ns > 1) and ((i - 1) / (ns - 1) * 2 - 1) or 0
+    spawnSheet(air, px, pz, f * wide * 0.6 + (rand() * 2 - 1) * 6, true)
+  end
+
+  -- rule 8: only dry ground has dust to kick
+  if WindFX.KICK and climateKind == "dry" then
+    spawnSheet("kick", px, pz, (rand() * 2 - 1) * wide * 0.3, true)
+  end
+
+  -- rule 6: the hero, alone, and only in a gale
+  if amount >= WindFX.HERO_AT and rand() < WindFX.HERO_CHANCE
+     and field:countIf(isHero) == 0 then
+    spawnSheet("whirl", px, pz, (rand() * 2 - 1) * wide * 0.5, true)
   end
 end
 
@@ -498,13 +694,16 @@ function WindFX.update(dt, voxelOn)
 
   -- Density scales hard with wind: weak breeze = a few specks, gale = a
   -- stream. Quadratic so the middle of AUTO does not already look full.
-  local headroom = math.max(0, cap - WindFX.FRONT_N)
+  -- Rule 1: the field is a handful of sheets and leaves, not a cloud of
+  -- specks, and the front always finds a slot.
+  local headroom = math.max(0, cap - WindFX.FRONT_RESERVE)
+  if headroom > WindFX.STANDING_MAX then headroom = WindFX.STANDING_MAX end
   local t = (amount - WindFX.FLOOR) / 1.35
   if t < 0 then t = 0 elseif t > 1 then t = 1 end
   local want = math.floor(2 + (t * t) * (headroom - 2))
   if want > headroom then want = headroom end
   if want < 0 then want = 0 end
-  local standing = field:countIf(notFront)
+  local standing = field:countIf(ownStanding)
   -- refill faster under a gale so the field stays dense as motes expire
   local burst = 2 + math.floor(t * 10)
   for _ = 1, math.min(burst, math.max(0, want - standing)) do
@@ -549,7 +748,7 @@ end
 
 local function imgFor(pack, kind)
   if not pack then return nil end
-  if kind == "dash" then return pack.dash end
+  if kind == "dash" or kind == "ribbon" then return pack.dash end
   if kind == "leaf" then return pack.leaves end
   if kind == "seed" or kind == "spray" then return pack.seed end
   if kind == "puff" then return pack.puff or pack.grit end
@@ -562,6 +761,71 @@ local function colourFor(m, base)
   if m.kind == "seed" then return WindFX.SEED end
   if m.kind == "dash" and base == WindFX.DUST then return WindFX.DASH end
   return base
+end
+
+-- ------- ONE SHEET MOTE, DESCRIBED FOR EITHER PASS
+--
+-- Frame, orientation, size and colour of a sheet mote come from here for
+-- BOTH the overlay paint and the scene pass, so the two cannot drift.
+--
+--   returns spec, frame, flipX, ang, r, g, b, a   -- or nil: draw nothing
+--
+-- `ang` is in the scene card's sense (counter-clockwise, up is up); the
+-- overlay, whose y runs down, negates it.
+local function sheetCard(m, climateKind)
+  local s = WindFX.SHEETS[m.kind]
+  if not s then return nil end
+  local t = m.t or 0
+  local ttl = m.ttl or 1
+  -- rule 2: the clip's own clock
+  local f = math.floor(t * s.fps)
+  if s.loop then
+    f = f % s.n
+  elseif f > s.n - 1 then
+    f = s.n - 1
+  end
+  -- a colourway is the same clip further along the strip
+  if s.variants then f = f + ((m.variant or 0) % s.variants) * s.n end
+  -- full strength: the strip carries its own colour and envelope, and the
+  -- stamps' `bright` (a tint's brightness) would only wash it out
+  local a = math.min(1, t / WindFX.SHEET_IN, (ttl - t) / WindFX.SHEET_OUT)
+  a = a * (s.alpha or 1)               -- rule 9: background stays faint
+  if a <= 0.02 then return nil end
+  -- rule 3: authored up. The ribbon alone follows its travel, and flips
+  -- rather than turning over when the wind runs the other way; the tilt
+  -- dips the leading edge toward the camera when the travel has any z.
+  local ang, flip = 0, 1
+  if s.align then
+    local vx = m.vx or Wind.DIR[1] or 1
+    local vz = m.vz or Wind.DIR[2] or 0
+    if vx < 0 then flip = -1; vx = -vx end
+    ang = -flip * math.atan2(vz * WindFX.SHEET_TILT, vx)
+  end
+  local r, g, b = 1, 1, 1
+  if s.climate then
+    local c = (climateKind == "rain" and WindFX.SPRAY)
+           or (climateKind == "snow" and WindFX.BLOWN)
+    if c then r, g, b = c[1], c[2], c[3] end
+  end
+  return s, f, flip, ang, r, g, b, a
+end
+
+-- The overlay path draws through quads; one per sheet frame, kept.
+local function sheetQuad(pack, kind, s, f)
+  local img = pack[s.img]
+  if not img then return nil end
+  local qs = pack.sheetQ[kind]
+  if not qs then qs = {}; pack.sheetQ[kind] = qs end
+  local q = qs[f]
+  if not q then
+    local iw, ih = img:getDimensions()
+    local ok, made = pcall(love.graphics.newQuad,
+      (f % s.cols) * s.fw, math.floor(f / s.cols) * s.fh, s.fw, s.fh, iw, ih)
+    if not ok then return nil end
+    q = made
+    qs[f] = q
+  end
+  return img, q
 end
 
 function WindFX.draw(project, scale)
@@ -601,22 +865,20 @@ function WindFX.draw(project, scale)
               if ex then ang = math.atan2(sy - ey, sx - ex) end
             end
 
-            -- Gust front: curl strip (opens over life) + thin dash under it
-            if wantFront and pack and pack.swirl and pack.swirlQ then
-              local u = math.min(1, math.max(0, m.t / math.max(0.001, m.ttl)))
-              local qi = math.min(pack.swirlN - 1, math.floor(u * pack.swirlN))
-              local q = pack.swirlQ[qi]
-              if q then
-                local fh = pack.swirl:getHeight()
-                local px = math.max(5, s * 2.6)
-                g.setColor(col[1], col[2], col[3], math.min(1, a * 0.9))
-                pcall(g.draw, pack.swirl, q, sx, sy, ang,
-                      px / fh, px / fh, fh * 0.5, fh * 0.5)
-              end
-            end
-
+            local spec = WindFX.SHEETS[m.kind]
             local use = imgFor(pack, m.kind)
-            if m.kind == "leaf" and pack and pack.leaves and pack.leafQ then
+            if spec then
+              -- a sheet: its own clock, size and up (sheetCard)
+              local sh, f, flip, sang, r, gg, b, sa = sheetCard(m, climateKind)
+              local img, q = nil, nil
+              if sh and pack then img, q = sheetQuad(pack, m.kind, sh, f) end
+              if img and q then
+                local px = s * sh.hw * 2
+                g.setColor(r, gg, b, sa)
+                pcall(g.draw, img, q, sx, sy, -sang,
+                      flip * px / sh.fw, px / sh.fw, sh.fw * 0.5, sh.fh * 0.5)
+              end
+            elseif m.kind == "leaf" and pack and pack.leaves and pack.leafQ then
               local n = pack.leafN or 1
               local q = pack.leafQ[(m.frame or 0) % n]
               local flip = math.sin(ang * 0.5)
@@ -700,7 +962,6 @@ local CARD = {
   seed  = { 1.5, 1.5, 0.90 },
   spray = { 1.5, 1.5, 0.90 },
   puff  = { 1.8, 1.2, 1.10 },
-  leaf  = { 1.7, 1.0, 1.00 },
   grit  = { 1.05, 1.0, 1.0 },
   snow  = { 1.05, 1.0, 1.0 },
 }
@@ -716,7 +977,25 @@ function WindFX.drawWorld()
 
   local leafN = pack.leafN or 1
   local describe = function(m)
-    local img = imgFor(pack, m.kind)
+    local kind = m.kind
+
+    -- ------- a sheet: one card of the clip's current frame
+    if WindFX.SHEETS[kind] then
+      local s, f, flip, ang, r, g, b, a = sheetCard(m, climateKind)
+      if not s then return nil end
+      local img = pack[s.img]
+      if not img then return nil end
+      local iw, ih = img:getDimensions()
+      if iw < 1 or ih < 1 then return nil end
+      local u0 = ((f % s.cols) * s.fw) / iw
+      local v0 = (math.floor(f / s.cols) * s.fh) / ih
+      local u1, v1 = u0 + s.fw / iw, v0 + s.fh / ih
+      if flip < 0 then u0, u1 = u1, u0 end
+      return img, u0, v0, u1, v1, s.hw, s.hw * (s.fh / s.fw), ang, r, g, b, a
+    end
+
+    -- ------- a mote: the authored stamp, as before the sheets (rule 7)
+    local img = imgFor(pack, kind)
     if not img then return nil end
     local fade = math.min(1, m.t * 4, (m.ttl - m.t) * 2.5)
     local a = bright * fade * (m.front and 1.2 or 1.0)
@@ -727,22 +1006,32 @@ function WindFX.drawWorld()
     if climateKind == "snow" then col = WindFX.BLOWN end
 
     local u0, v0, u1, v1 = 0, 0, 1, 1
-    if m.kind == "leaf" and pack.leaves then
+    if kind == "leaf" and pack.leaves then
       -- the strip is leafN frames wide; pick this mote's own
       local f = (m.frame or 0) % leafN
       u0 = f / leafN
       u1 = (f + 1) / leafN
     end
 
-    local c = CARD[m.kind] or CARD.grit
+    -- A dash points where it goes. The overlay always aligned it from the
+    -- projection; this pass was turning it by its spin, which is the one
+    -- thing a streak must not do.
+    local ang = m.ang or 0
+    if kind == "dash" then
+      local vx, vz = m.vx or 0, m.vz or 0
+      if vx ~= 0 or vz ~= 0 then
+        local flip = (vx < 0) and -1 or 1
+        ang = -flip * math.atan2(vz * WindFX.SHEET_TILT, math.abs(vx))
+      end
+    end
+
+    local c = CARD[kind] or CARD.grit
     local base = c[1] * (m.size or 1)
     local hw = base * c[2] * 0.5
     local hh = base * c[3] * 0.5
     if hw < 0.5 then hw = 0.5 end
     if hh < 0.5 then hh = 0.5 end
-
-    return img, u0, v0, u1, v1, hw, hh, m.ang or 0,
-           col[1], col[2], col[3], a
+    return img, u0, v0, u1, v1, hw, hh, ang, col[1], col[2], col[3], a
   end
 
   local mesh, batches = builder:build(field, describe)
