@@ -357,8 +357,25 @@ local function model(sp, pr, t)
       x1d = x
     end
   end
+  -- A cornice/awning band with no inside pixels would jut empty
+  -- air; skip it rather than wearing a vacant slab. Per-template
+  -- only -- no new global default.
   local ledge0, ledge1 = nil, nil
-  if t.ledge then ledge0, ledge1 = t.ledge[1], t.ledge[2] end
+  if t.ledge then
+    local a, b = t.ledge[1], t.ledge[2]
+    local filled = false
+    if a and b then
+      for sy = a, b do
+        if sy >= 0 and sy < H then
+          for x = 0, W - 1 do
+            if sp.inside[sy * W + x] then filled = true break end
+          end
+        end
+        if filled then break end
+      end
+    end
+    if filled then ledge0, ledge1 = a, b end
+  end
 
   local rz0, rz1 = 0, D - 1 + (t.frontEave or 0)
   local back, front = t.roofBack, t.roofFront
@@ -430,7 +447,8 @@ local function model(sp, pr, t)
     -- the chimney: an optional box standing on the roof surface, worn in
     -- the drawing's own palette -- body in shadow, capped and based by
     -- the outline shade. Checked before the trim so it survives above
-    -- the roof.
+    -- the roof. ch.ball splits the body into a two-tone ornament:
+    -- WHITE lower half, a 1-voxel BLACK belt at the equator, DARK upper.
     if ch and x0d and x >= ch.x and x < ch.x + ch.w
         and z >= ch.z and z < ch.z + ch.w then
       local cx = x < x0d and x0d or (x > x1d and x1d or x)
@@ -439,6 +457,15 @@ local function model(sp, pr, t)
         if y > base and y <= base + ch.h then
           if y == base + ch.h or y == base + 1 then
             return pr.shadeTexel[BLACK]
+          end
+          if ch.ball then
+            local equator = base + math.floor(ch.h / 2)
+            if y == equator then
+              return pr.shadeTexel[BLACK]
+            end
+            if y < equator then
+              return pr.shadeTexel[WHITE]
+            end
           end
           return pr.shadeTexel[DARK]
         end
@@ -498,8 +525,298 @@ local function model(sp, pr, t)
            xmin = math.min(0, ex0 or 0),
            xmax = math.max(W - 1, ex1 or (W - 1)),
            zmin = math.min(ledge0 and -2 or 0, x0d and rz0e or 0),
-           zmax = math.max(rz1, ledge0 and (D + 1) or 0, D) }
+           zmax = math.max(rz1, ledge0 and (D + 1) or 0, D,
+                           ch and (ch.z + ch.w - 1) or 0) }
 end
+
+-- Front-facing custom sprite (Kalos Center+Mart). Loaded from t.sprite
+-- via Assets, voxelized as a SOUTH facade with invented depth. Every
+-- visible voxel colour is a texel of that PNG. Not a Nintendo model.
+--
+-- q.tex is ALWAYS the template-relative path (`t.sprite`, typically
+-- "assets/buildings/....png"). Never a resolved absolute / mixed-slash
+-- path: ChunkMesher looks the GPU image up with Buildings.spriteImage(q.tex)
+-- and an absolute key misses the cache, leaves spriteTex nil, and the
+-- mesh draws invisible while stamp has already claimed the footprint.
+local function spriteRel(path)
+  path = tostring(path or ""):gsub("\\", "/")
+  local i = path:find("assets/", 1, true)
+  if i then return path:sub(i) end
+  return path
+end
+
+local function assetPath(rel)
+  rel = spriteRel(rel)
+  local base = tostring((V and V.path) or ""):gsub("\\", "/")
+  if rel == "" then return base end
+  if base ~= "" and base:sub(-1) ~= "/" then base = base .. "/" end
+  return base .. rel
+end
+
+local function imageDataFromBytes(bytes, key)
+  if type(bytes) ~= "string" or #bytes < 16 then return nil end
+  local newID = love and love.image and love.image.newImageData
+  if not newID then return nil end
+  if love.data and love.data.newByteData then
+    local okF, fd = pcall(love.data.newByteData, bytes)
+    if okF and fd then
+      local ok3, data = pcall(newID, fd)
+      if ok3 and data and data.getPixel then return data, key end
+    end
+  end
+  return nil
+end
+
+local function loadImageData(rel)
+  rel = spriteRel(rel)
+  if rel == "" then return nil end
+  local paths = { rel, assetPath(rel) }
+  paths[3] = paths[2]:gsub("/", "\\")
+  -- 0. sanctioned mod API first (StreetLamps lesson: love.filesystem
+  --    raises on field access for mods, so a filename decode can never
+  --    see a file that only lives under the mod tree).
+  if V and V.mod and V.mod.read then
+    local ok, bytes = pcall(V.mod.read, V.mod, rel)
+    if ok then
+      local data = imageDataFromBytes(bytes, rel)
+      if data then return data, rel end
+    end
+  end
+  local okC, ImageCache = pcall(V.require, "ImageCache")
+  if okC and ImageCache and ImageCache.get then
+    for i = 1, #paths do
+      local data = ImageCache.get(paths[i])
+      if data and data.getPixel then return data, rel end
+    end
+  end
+  local okA, Assets = pcall(require, "src.render.Assets")
+  if okA and Assets and Assets.imageData then
+    for i = 1, #paths do
+      local ok, data = pcall(Assets.imageData, paths[i])
+      if ok and data and data.getPixel then return data, rel end
+    end
+  end
+  if love and love.image and love.image.newImageData then
+    for i = 1, #paths do
+      local ok, data = pcall(love.image.newImageData, paths[i])
+      if ok and data and data.getPixel then return data, rel end
+    end
+  end
+  return nil
+end
+
+local spriteImg = {}
+local function loadSpriteImage(rel)
+  rel = spriteRel(rel)
+  if rel == "" then return nil end
+  if spriteImg[rel] ~= nil then return spriteImg[rel] or nil end
+  -- Prefer ImageData from the mod tree, then GPU-upload. Assets.image on
+  -- a relative path that is NOT in the game filesystem can return a
+  -- placeholder (tiny / empty) that would texture the Center invisible.
+  local data = loadImageData(rel)
+  if data and love and love.graphics and love.graphics.newImage then
+    local ok, img = pcall(love.graphics.newImage, data)
+    if ok and img then
+      pcall(img.setFilter, img, "nearest", "nearest")
+      spriteImg[rel] = img
+      return img
+    end
+  end
+  local okA, Assets = pcall(require, "src.render.Assets")
+  if okA and Assets and Assets.image then
+    local ok, img = pcall(Assets.image, rel)
+    if not ok or not img then
+      ok, img = pcall(Assets.image, assetPath(rel))
+    end
+    if ok and img then
+      pcall(img.setFilter, img, "nearest", "nearest")
+      spriteImg[rel] = img
+      return img
+    end
+  end
+  spriteImg[rel] = false
+  return nil
+end
+
+Buildings.spriteImage = loadSpriteImage
+
+local ROLE_WALL, ROLE_ROOF, ROLE_AWNING, ROLE_BALL = 1, 2, 3, 4
+local ROLE_PLANT, ROLE_POST, ROLE_GLASS, ROLE_WINDOW = 5, 6, 7, 8
+
+local function classify(r, g, b, a, sy, H)
+  if a < 0.04 then return 0 end
+  local u = sy / H
+  if g > r + 0.08 and g > b + 0.04 and g > 0.22 then return ROLE_PLANT end
+  if r > g + 0.10 and r > b + 0.08 and r > 0.32 then
+    if u < 0.50 then return ROLE_BALL end
+    if u > 0.84 then return ROLE_POST end
+    if u < 0.64 then return ROLE_AWNING end
+    return ROLE_POST
+  end
+  if math.min(r, g, b) > 0.70 and u > 0.38 and u < 0.62 then
+    return ROLE_BALL
+  end
+  if u < 0.34 and b > r + 0.06 and b > 0.28 then return ROLE_ROOF end
+  if math.max(r, g, b) < 0.38 and u > 0.50 and u < 0.86 then
+    return ROLE_WINDOW
+  end
+  if u > 0.52 and u < 0.88 and b > r + 0.04 and b > 0.35 then
+    return ROLE_GLASS
+  end
+  return ROLE_WALL
+end
+
+local function readSprite(path)
+  path = spriteRel(path)
+  local data = loadImageData(path)
+  if not data then return nil end
+  local W, H = data:getDimensions()
+  if not W or not H or W < 4 or H < 4 then return nil end
+  local col, ax, ay, inside, role = {}, {}, {}, {}, {}
+  local alpha = {}
+  for sy = 0, H - 1 do
+    Budget.tick()
+    for sx = 0, W - 1 do
+      local i = sy * W + sx
+      local r, g, b, a = data:getPixel(sx, sy)
+      -- Love 11 ImageData:getPixel is 0-1. Some Assets backends still
+      -- hand back 0-255; shadeOf/classify thresholds are all 0-1, so
+      -- un-normalized bytes make every opaque pixel "white" and can
+      -- collapse the silhouette / flood.
+      if not r then r, g, b, a = 0, 0, 0, 0 end
+      a = a or 0
+      if r > 1 or g > 1 or b > 1 or a > 1 then
+        r, g, b, a = r / 255, g / 255, b / 255, a / 255
+      end
+      ax[i], ay[i] = sx, sy
+      col[i] = shadeOf(r, g, b, a)
+      alpha[i] = a
+      role[i] = classify(r, g, b, a, sy, H)
+    end
+  end
+  -- flood from the border through fully transparent pixels
+  local outside = {}
+  local queue, n = {}, 0
+  local function seed(x, y)
+    local i = y * W + x
+    if not outside[i] and (alpha[i] or 0) < 0.04 then
+      outside[i] = true
+      n = n + 1
+      queue[n] = i
+    end
+  end
+  for x = 0, W - 1 do seed(x, 0) seed(x, H - 1) end
+  for y = 0, H - 1 do seed(0, y) seed(W - 1, y) end
+  while n > 0 do
+    local i = queue[n]
+    n = n - 1
+    local x, y = i % W, math.floor(i / W)
+    if x + 1 < W then seed(x + 1, y) end
+    if x > 0 then seed(x - 1, y) end
+    if y + 1 < H then seed(x, y + 1) end
+    if y > 0 then seed(x, y - 1) end
+  end
+  local nIn = 0
+  for i = 0, W * H - 1 do
+    inside[i] = not outside[i]
+    if inside[i] then nIn = nIn + 1 end
+  end
+  if nIn < 32 then return nil end
+  return { W = W, H = H, col = col, ax = ax, ay = ay,
+           inside = inside, role = role, path = path }
+end
+
+-- Front-facing XY drawing: the whole PNG is the south facade (and
+-- roof-from-front). Depth is invented. Width is the claimed tile
+-- footprint; height uses the same scale.
+local function modelFrontSprite(sp, t)
+  local sW, sH = sp.W, sp.H
+  local plotW = #t.tiles[1] * 8
+  local plotD = #t.tiles * 8
+  local scale = plotW / sW
+  local worldW = plotW
+  local worldH = math.max(1, math.floor(sH * scale + 0.5))
+  local bodyD = t.bodyDepth or 38
+  local bodyZ1 = plotD - 1
+  local bodyZ0 = bodyZ1 - bodyD + 1
+  local awningJut = t.awningJut or 5
+  local ballJut = t.ballJut or 3
+  local plantJut = t.plantJut or 3
+  local postJut = t.postJut or 2
+  local doorRec = 4
+  local winRec = 2
+
+  local doorX0 = math.floor(worldW * 0.38)
+  local doorX1 = math.floor(worldW * 0.62) - 1
+  local doorY0 = 2
+  local doorY1 = math.floor(worldH * 0.48)
+
+  local function sample(x, y)
+    if x < 0 or x >= worldW or y < 0 or y >= worldH then return nil end
+    local sx = math.floor(x / scale + 0.5)
+    local sy = math.floor((worldH - 1 - y) / scale + 0.5)
+    if sx < 0 then sx = 0 elseif sx > sW - 1 then sx = sW - 1 end
+    if sy < 0 then sy = 0 elseif sy > sH - 1 then sy = sH - 1 end
+    local i = sy * sW + sx
+    if not sp.inside[i] then return nil end
+    return i, sp.role[i] or ROLE_WALL
+  end
+
+  local function depths(role)
+    if role == ROLE_PLANT then
+      return bodyZ1 + 1, bodyZ1 + plantJut
+    elseif role == ROLE_POST then
+      return bodyZ1 + 1, bodyZ1 + postJut
+    elseif role == ROLE_AWNING then
+      return bodyZ1 - 1, bodyZ1 + awningJut
+    elseif role == ROLE_BALL then
+      return bodyZ1 - 2, bodyZ1 + ballJut
+    elseif role == ROLE_ROOF then
+      return bodyZ0 + math.floor(bodyD * 0.22), bodyZ1 - 2
+    else
+      return bodyZ0, bodyZ1
+    end
+  end
+
+  local function at(x, y, z)
+    local i, role = sample(x, y)
+    if not i then
+      if y == 0 then
+        i, role = sample(x, 1)
+        if not i then return nil end
+      else
+        return nil
+      end
+    end
+    local z0, z1 = depths(role)
+    if y >= doorY0 and y <= doorY1 and x >= doorX0 and x <= doorX1
+        and (role == ROLE_WALL or role == ROLE_GLASS
+             or role == ROLE_WINDOW) then
+      local back = bodyZ1 - doorRec
+      if z > back and z <= bodyZ1 then return nil end
+      if z == back then return i end
+    end
+    if role == ROLE_WINDOW and y >= 4 then
+      local back = bodyZ1 - winRec
+      if z > back and z <= bodyZ1 then return nil end
+      if z == back then return i end
+    end
+    if z < z0 or z > z1 then return nil end
+    return i
+  end
+
+  return {
+    at = at, W = worldW,
+    ytop = worldH - 1,
+    xmin = 0,
+    xmax = worldW - 1,
+    zmin = bodyZ0,
+    zmax = bodyZ1 + math.max(awningJut, ballJut, plantJut, postJut),
+    tex = sp.path,
+    atlasW = sW, atlasH = sH,
+  }
+end
+
 
 -- ----------------------------------------------------------------- parts --
 
@@ -888,7 +1205,30 @@ function Buildings.build(S, map, data, perRow)
                   -- full (the tower's roof rows on ROUTE_10 -- Lavender's
                   -- placement composites them via topRows). Left to the
                   -- detector they stood as a second half-building.
-                  models[key] = {}
+                  models[key] = { claim = true }
+                elseif t.sprite then
+                  -- front-facing custom PNG (UlithiumDragon Center+Mart)
+                  -- q.tex is the TEMPLATE relative path, never a resolved
+                  -- absolute. If the PNG cannot be read, voxelized, or
+                  -- bound as a GPU image, fall back to the classic Gen1
+                  -- kit (slab/eaves/chimney) WITHOUT .tex so the Center
+                  -- still stands instead of an empty claimed lot.
+                  local rel = spriteRel(t.sprite)
+                  local sp = readSprite(rel)
+                  local tex = sp and loadSpriteImage(rel) or nil
+                  local q = nil
+                  if sp and tex then
+                    local m = modelFrontSprite(sp, t)
+                    q = emit(m, sp, m.atlasW or sp.W, m.atlasH or sp.H)
+                  end
+                  if q and #q > 0 then
+                    q.tex = rel
+                    models[key] = q
+                  else
+                    local sp2 = read(t, data, perRow)
+                    local pr = measure(sp2, t)
+                    models[key] = emit(model(sp2, pr, t), sp2, atlasW, atlasH)
+                  end
                 elseif t.parts then
                   -- two structures in one drawing (the Indigo Plateau):
                   -- each part models its own crop, emit takes the union
@@ -937,6 +1277,13 @@ end
 -- One placement: claim its tiles (so the detector leaves them alone and
 -- the mesher paints ground under them) and copy the model into place.
 function Buildings.stamp(S, map, quads, tx, ty, bw, bh)
+  -- An empty model must not claim skip/shape: that is the empty-lot bug
+  -- (sprite path produced 0 quads or an undrawable .tex, then the volume
+  -- detector never boxed the Gen1 Center). claimOnly templates are the
+  -- exception -- they exist to occupy cells with nothing drawn.
+  if not quads then return end
+  if #quads == 0 and not quads.claim then return end
+
   local shape = { class = "building", h = 0, art = "building",
                   flat = false, authored = true }
 
@@ -990,14 +1337,17 @@ function Buildings.stamp(S, map, quads, tx, ty, bw, bh)
   end
 
   local mx, mz = tx * 8, ty * 8
-  local out = S.objectQuads
+  if quads.tex then
+    S.spriteQuads = S.spriteQuads or {}
+  end
+  local out = quads.tex and S.spriteQuads or S.objectQuads
   for _, q in ipairs(quads) do
     out[#out + 1] = {
       { q[1][1] + mx, q[1][2], q[1][3] + mz },
       { q[2][1] + mx, q[2][2], q[2][3] + mz },
       { q[3][1] + mx, q[3][2], q[3][3] + mz },
       { q[4][1] + mx, q[4][2], q[4][3] + mz },
-      uv = q.uv, shade = q.shade,
+      uv = q.uv, shade = q.shade, tex = quads.tex,
       -- placements only ever scan the BODY, so a building is always this
       -- map's own structure: the mesher's edge keep-rules must not eat
       -- the parts that poke past the boundary (an edge-row house's eave
@@ -1025,6 +1375,7 @@ end
 function Buildings.invalidate()
   spec = nil
   models = {}
+  for k in pairs(spriteImg) do spriteImg[k] = nil end
 end
 
 return Buildings

@@ -577,30 +577,40 @@ if min(vy, 360 - vy) > 10:
 d_shoulder = MarioCam.cam.dist
 if abs(d_shoulder - 175 * 0.7) > 4:
     fails.append(f"shoulder distance {d_shoulder:.1f}, want ~{175*0.7:.0f}")
+# THE FOLLOW COMMITS: turning in place moves NOTHING (the grid washing
+# machine the player reported); only a SUSTAINED walk re-aims the world.
 G.__player.facing = "right"
-step(400)
+step(400)                                   # standing: no commitment
+vy_hold = math.degrees(MarioCam.viewYaw()) % 360
+if min(vy_hold, 360 - vy_hold) > 12:
+    fails.append(f"turning in place swung the camera: viewYaw {vy_hold:.1f}")
+G.__player.phase = 1                        # now actually walking right
+step(150)                                   # commit (~0.6s) + swing + chase
 vy2 = math.degrees(MarioCam.viewYaw()) % 360
-print(f"shoulder: mode {MarioCam.cam.mode}, dist {d_shoulder:.1f}, "
-      f"viewYaw up={vy:.1f} right={vy2:.1f}")
-if abs(vy2 - 90) > 10:
-    fails.append(f"turning right did not swing the camera behind: {vy2:.1f}")
+print(f"shoulder: dist {d_shoulder:.1f}, turn-in-place held {vy_hold:.1f}, "
+      f"committed right {vy2:.1f}")
+if abs(vy2 - 90) > 12:
+    fails.append(f"a committed walk did not re-aim the follow: {vy2:.1f}")
 
-# the ABOUT-FACE is urgent: walking back toward the lens must have the
-# camera at the new back in a fraction of a second, not ambling through a
-# side view. 15 frames at the reversal divisor lands within ~9 degrees;
-# the polite quarter-turn divisor would still be ~46 out -- so the bound
-# also proves the fast path actually engaged.
+# the ABOUT-FACE: a held walk back swings urgently -- but only once
+# committed. Early, the camera still HOLDS (the calm gate); afterwards,
+# rendered view included, it stands at the new back. The polite divisor
+# alone would leave it ~25-30 out at the second reading, so the bound
+# also proves the reversal latch engaged.
 G.__player.facing = "left"
-step(30)
+step(20)
+vy_early = math.degrees(MarioCam.viewYaw()) % 360
+dev_early = abs(((vy_early - 270 + 180) % 360) - 180)
+if dev_early < 120:
+    fails.append(f"the about-face moved before commitment: dev {dev_early:.1f}")
+step(70)
 vy3 = math.degrees(MarioCam.viewYaw()) % 360
 dev3 = abs(((vy3 - 270 + 180) % 360) - 180)
-print(f"about-face after 30 frames: viewYaw {vy3:.1f} (dev {dev3:.1f})")
-# measured on the RENDERED camera, chase included: half a second must be
-# enough to stand at the new back. The polite divisor alone leaves the
-# rendered view ~25-30 out here, so the bound proves the latch engaged.
+print(f"about-face: early dev {dev_early:.1f} (holding), "
+      f"after commit+swing dev {dev3:.1f}")
 if dev3 > 15:
-    fails.append(f"the about-face swing is not urgent: {dev3:.1f} deg off "
-                 "after 30 frames")
+    fails.append(f"the committed about-face is not urgent: {dev3:.1f} deg off")
+G.__player.phase = 0
 G.__player.facing = "down"
 G.__setRung("on")
 MarioCam.cut()

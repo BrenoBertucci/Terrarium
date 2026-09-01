@@ -77,8 +77,12 @@ TEMPLATES = {
     ),
     # B05: every Pokemon Center in the game (Celadon, Cerulean,
     # Cinnabar, Fuchsia, Lavender, Pewter, Saffron, Vermilion, Viridian,
-    # Mt Moon, Rock Tunnel). B03's block with the POKe sign hung beside
-    # the door; the sign is too wide to be a pane, so it stays flush.
+    # Mt Moon, Rock Tunnel). Runtime lib/Buildings.lua uses t.sprite
+    # (UlithiumDragon front-facing PNG) / modelFrontSprite, not this
+    # generic extrusion. This Python model() is the generic sprite-extrusion
+    # reference used by Stage 5 probes for OTHER buildings; it is NOT
+    # a port of the XY Center. chimney.ball below is the generic kit
+    # ornament, not the in-game roof pokeball.
     "pokecenter": dict(
         tiles=[
             [76, 83, 83, 83, 83, 83, 83, 77],
@@ -91,7 +95,9 @@ TEMPLATES = {
             [78, 26, 27, 28, 74, 74, 26, 79],
         ],
         roof_rows=32, roof_back=7, roof_front=8, roof_cycle=(5, 12),
-        slab=4, front_eave=4, ledge=None,
+        slab=5, front_eave=7, eave_out=4, recess_depth=4,
+        ledge=(32, 35),
+        chimney=dict(x=28, z=18, w=8, h=8, ball=True),
     ),
     # B06: every Poke Mart (Cerulean, Cinnabar, Fuchsia, Lavender,
     # Pewter, Saffron, Vermilion, Viridian). The Center's twin, MART on
@@ -890,8 +896,20 @@ def build(sp, pr, t):
             base = T(cx)
             for z in range(ch["z"], ch["z"] + ch["w"]):
                 for y in range(base + 1, base + ch["h"] + 1):
-                    shade = (BLACK if y == base + ch["h"] or y == base + 1
-                             else DARK)
+                    if y == base + ch["h"] or y == base + 1:
+                        shade = BLACK
+                    elif ch.get("ball"):
+                        # Generic kit ornament. The in-game Center is Lua
+                        # t.sprite / modelFrontSprite, not this block.
+                        equator = base + (ch["h"] // 2)
+                        if y == equator:
+                            shade = BLACK
+                        elif y < equator:
+                            shade = WHITE
+                        else:
+                            shade = DARK
+                    else:
+                        shade = DARK
                     px = shade_px.get(shade) or shade_px[BLACK]
                     put(x, y, z, px[0], px[1])
     return vox

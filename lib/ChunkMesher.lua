@@ -1075,6 +1075,39 @@ local function buildFlowerMesh(map)
   return quadsMesh(Structures.forMap(map).flowerQuads)
 end
 
+-- Custom-sprite buildings (t.sprite): their UVs address a PNG that is
+-- not the tileset atlas, so they cannot ride the terrain mesh. One mesh
+-- per map, textured from Buildings.spriteImage.
+--
+-- NOT quadsMesh: that path (grass, flowers, figures) multiplies a SCALAR
+-- shade, and Buildings.emit hands a building's quads a 4-corner shade
+-- TABLE wherever the baked AO darkened a corner (premium kit F2). Through
+-- quadsMesh the first such quad threw "arithmetic on a table", the pcall
+-- around this builder swallowed it, the slot went false and every Center
+-- stood as a claimed, empty lot -- read, decoded, voxelized, stamped, and
+-- never uploaded. The sink below is the one the terrain's own objectQuads
+-- go through: table shades, ffi buffers, uint32 indices past 65535
+-- vertices (a Center is ~130k).
+local function buildSpriteMesh(map)
+  local qs = Structures.forMap(map).spriteQuads
+  if not qs or #qs == 0 then return nil, nil end
+  local sink = newSink(math.max(64, #qs))
+  for _, q in ipairs(qs) do
+    Budget.tick()
+    sink.push({ q[1], q[2], q[3], q[4] }, q.uv, q.shade, q.sky)
+  end
+  local mesh = sink.finish()
+  local path = qs[1] and qs[1].tex
+  local tex = nil
+  if path then
+    local okB, Buildings = pcall(V.require, "Buildings")
+    if okB and Buildings and Buildings.spriteImage then
+      tex = Buildings.spriteImage(path)
+    end
+  end
+  return mesh, tex
+end
+
 -- Authored FIGURES (a person drawn into furniture) as one mesh each, in
 -- the card's own local space -- because each one is placed by its own
 -- matrix at draw time, leaned back by the camera pitch exactly like a
@@ -1121,7 +1154,7 @@ local function entry(id)
 end
 
 local function releaseEntry(c)
-  for _, slot in ipairs({ "full", "body", "grass", "flowers" }) do
+  for _, slot in ipairs({ "full", "body", "grass", "flowers", "sprites" }) do
     local mesh = c[slot]
     if mesh and mesh.release then pcall(mesh.release, mesh) end
     c[slot] = nil
@@ -1167,20 +1200,26 @@ local function runJob(job)
   local map = job.map
   local c = entry(job.id)
   if c.grass == nil or c.flowers == nil or c.figures == nil
-     or (c.stale and c.stale.aux) then
+     or c.sprites == nil or (c.stale and c.stale.aux) then
     local okG, grass = pcall(buildGrassMesh, map)
     local okF, flowers = pcall(buildFlowerMesh, map)
     local okX, figures = pcall(buildFigureMeshes, map)
+    local okS, sprites, stex = pcall(buildSpriteMesh, map)
     if (gen[job.id] or 0) ~= job.gen then
       if okG and grass and grass.release then pcall(grass.release, grass) end
       if okF and flowers and flowers.release then
         pcall(flowers.release, flowers)
+      end
+      if okS and sprites and sprites.release then
+        pcall(sprites.release, sprites)
       end
       if okX then releaseFigures(figures) end
       return
     end
     swapSlot(c, "grass", (okG and grass) or false)
     swapSlot(c, "flowers", (okF and flowers) or false)
+    swapSlot(c, "sprites", (okS and sprites) or false)
+    c.spriteTex = (okS and stex) or nil
     releaseFigures(c.figures)
     c.figures = (okX and figures) or false
     if c.stale then c.stale.aux = nil end
@@ -1337,11 +1376,15 @@ end
 function ChunkMesher.get(map, bodyOnly, masks)
   local slot = bodyOnly and "body" or "full"
   local c = entry(map.id)
-  if c.grass == nil or c.flowers == nil or (c.stale and c.stale.aux) then
+  if c.grass == nil or c.flowers == nil or c.sprites == nil
+     or (c.stale and c.stale.aux) then
     local okG, grass = pcall(buildGrassMesh, map)
     local okF, flowers = pcall(buildFlowerMesh, map)
+    local okS, sprites, stex = pcall(buildSpriteMesh, map)
     swapSlot(c, "grass", (okG and grass) or false)
     swapSlot(c, "flowers", (okF and flowers) or false)
+    swapSlot(c, "sprites", (okS and sprites) or false)
+    c.spriteTex = (okS and stex) or nil
     if c.stale then c.stale.aux = nil end
   end
   if c[slot] == nil or (c.stale and c.stale[slot]) then
@@ -1379,6 +1422,16 @@ end
 function ChunkMesher.flowers(map)
   local c = cache[map.id]
   return c and c.flowers or nil
+end
+
+function ChunkMesher.sprites(map)
+  local c = cache[map.id]
+  return c and c.sprites or nil
+end
+
+function ChunkMesher.spriteTex(map)
+  local c = cache[map.id]
+  return c and c.spriteTex or nil
 end
 
 -- Authored figures as `{ mesh, wx, wz, y }` records -- each placed by its

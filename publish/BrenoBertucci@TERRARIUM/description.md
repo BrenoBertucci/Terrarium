@@ -38,6 +38,20 @@ Upstream Dramatic Shape still uses `3` / `5` / `6` / `7` / `8` / `9`.
 - Wild Pokemon visible in the grass; ecology / shelter / city life systems
 - Tuned defaults for lower-end / mobile hardware
 
+## New in 1.28.0-mobile
+
+The fight is staged. The Pokemon Center is a drawing. The wind is a brush.
+
+- **COMBAT row (DINAMICA / CLASSICA).** The camera swings in behind the
+  attacker. Menu, dialog and move cards float on glass in the arena. HP
+  capsules hang beside their mons. Hits send a shockwave and a typed
+  sheet at the blow. CLASSICA holds still. Safe to flip mid-battle.
+- **Pokemon Centers voxelized** from UlithiumDragon's XY-inspired Center
+  + Mart drawing. Warps and collision unchanged.
+- **Wind field redrawn** with Pimen / EdgeLoopRepeat strips (use-in-a-game
+  licence; not CC0 — see `assets/vfx/LICENSE.md`). Grey specks over the
+  path are gone.
+
 ## New in 1.27.0-mobile
 
 The air has physics. The rain stops falling through the world. The camera

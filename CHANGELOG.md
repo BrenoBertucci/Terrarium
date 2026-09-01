@@ -19,11 +19,68 @@ MAJOR.MINOR.PATCH[-CHANNEL]
 
 Tags and packages:
 
-- Git tag: `v1.27.0-mobile`
-- Zip asset: `TERRARIUM-1.27.0-mobile.zip`
-- `manifest.json` / catalog `version` field: `1.27.0-mobile`
+- Git tag: `v1.28.0-mobile`
+- Zip asset: `TERRARIUM-1.28.0-mobile.zip`
+- `manifest.json` / catalog `version` field: `1.28.0-mobile`
 
 ## Unreleased
+
+## 1.28.0-mobile
+
+The fight is staged. The Pokemon Center is a drawing. The wind is
+someone's brush, not grey specks.
+
+### COMBAT row — DINAMICA / CLASSICA
+
+One row for the whole dynamic battle costume (`lib/BattleDynamic.lua`).
+DINAMICA is the fight as built; CLASSICA holds the camera and lays every
+panel flat. Safe mid-battle: every piece already had its own fallback.
+
+- **Attack camera** (`lib/BattleShot.lua`): the rig swings in behind
+  whoever throws a move, punches closer, stoops, and recovers. Hits
+  kick a small shake; Earthquake a bigger one.
+- **Glass panels** (`lib/BattlePanelsXY.lua`, `lib/BattleGlassFX.lua`,
+  `lib/BattleFanXY.lua`, `lib/BattleNav.lua`): the menu, the dialog box
+  and the move cards float in the arena on real glass. Hits send a
+  shockwave through the panes; the move's element rains on them.
+- **HP capsules** (`lib/BattleCapsule.lua`): Unova bars hang beside
+  their own mons in the shot (B2W2 sheet when the XY pack is present).
+- **Turn ribbon** (`lib/BattleRibbon.lua`): an arc between the two,
+  with medallions that glide to the crest on the active side.
+- **Hits in the arena** (`lib/BattleHitFX.lua`): typed charge / slash /
+  bolt / burst sheets at the attacker and the defender, plus a dent in
+  the grass. Authored strips `assets/vfx/bt_*.png` — not the overworld
+  IMPACT pack.
+
+CLASSICA pins the capsules to the window corners and keeps the Unova
+art. 3D-BTL still has to be on; the row is hidden without it.
+
+### Pokemon Centers from a drawing
+
+Every Center stamps a voxelized south facade from
+`assets/buildings/ulithium_poke_center_mart.png` (UlithiumDragon, fan
+custom art, XY-inspired — not a Nintendo rip). Matcher tiles, warps and
+collision are unchanged; all eleven placements still stamp. Eaves,
+chimney and a deeper recess come from the premium kit.
+
+### Wind that is a brush stroke
+
+The standing field no longer paints grey specks over the path. Dry air
+carries Pimen's breath / curl and EdgeLoopRepeat's tumbling leaves;
+rain and snow carry a wet puff. Gust fronts throw ribbons across the
+view. Dust kick and foot-vortex are wired and measured, then held off
+(`KICK = false`, `HERO_CHANCE = 0`) because they read as a fart and as
+one more thing at the player's feet.
+
+Licence exception, recorded in `assets/vfx/LICENSE.md`: Pimen / ELR
+terms allow use and modification inside a game, not redistribution of
+the strips as an asset pack. The repo carries the cut strips, not the
+itch packs (`tools/_vfx_dl/` stays off git).
+
+### Also
+
+MarioCam probe coverage and a few chase constants. Battle bag / screen
+draw guards so a missing XY sheet cannot take the pipeline down.
 
 ## 1.27.0-mobile
 

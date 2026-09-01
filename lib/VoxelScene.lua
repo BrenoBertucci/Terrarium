@@ -1073,6 +1073,13 @@ local function castShadows(state, terrain, nbMesh, posed, cx, cy, vw, vh,
                         Mat4.translate(nb.ox, 0, nb.oy),
                         shifted(box, nb.ox, nb.oy))
   end
+  ShadowMap.draw(ChunkMesher.sprites(state.map),
+                 ChunkMesher.spriteTex(state.map), nil)
+  for _, nb in ipairs(casters) do
+    ShadowMap.draw(ChunkMesher.sprites(nb.map),
+                   ChunkMesher.spriteTex(nb.map),
+                   Mat4.translate(nb.ox, 0, nb.oy))
+  end
   -- flower billboards live outside the terrain mesh (they draw after the
   -- characters, pulled -- see render), but the sun still sees them: a
   -- handful of cutouts per meadow, unlike the grass left out below.
@@ -1315,6 +1322,20 @@ function VoxelScene.render(state, w, h, vw, vh, paletteFor)
     Voxel3D.drawGroup(nbMesh[i], atlasFor(nb.map),
                       Mat4.translate(nb.ox, 0, nb.oy), nil, nil,
                       shifted(box, nb.ox, nb.oy))
+  end
+  -- custom-sprite buildings: UVs address a PNG, not the tileset, so the
+  -- glass mask is off for this draw (same reason character sheets turn it
+  -- off). They still sit in the terrain pass -- no lean, they cast below.
+  do
+    Voxel3D.glass(false)
+    Voxel3D.draw(ChunkMesher.sprites(state.map),
+                 ChunkMesher.spriteTex(state.map), nil, nil, nil, 0)
+    for _, nb in ipairs(state.neighbors or {}) do
+      Voxel3D.draw(ChunkMesher.sprites(nb.map),
+                   ChunkMesher.spriteTex(nb.map),
+                   Mat4.translate(nb.ox, 0, nb.oy), nil, nil, 0)
+    end
+    Voxel3D.glass(true)
   end
   -- and off again before anything that is not the world is drawn: a
   -- character's card is a sprite facing the camera, and its shade is 1 for
