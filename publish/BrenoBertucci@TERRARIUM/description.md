@@ -38,6 +38,28 @@ Upstream Dramatic Shape still uses `3` / `5` / `6` / `7` / `8` / `9`.
 - Wild Pokemon visible in the grass; ecology / shelter / city life systems
 - Tuned defaults for lower-end / mobile hardware
 
+## New in 1.30.1
+
+If the 3D mode never came up for you on Android, this is the build.
+
+- **The diorama builds on Adreno.** The scene shader was one veto: any
+  construct the driver refused took the whole 3D mode with it, silently,
+  with the OPTIONS row still reading ON. Two things in it are legal for a
+  GLES2 driver to refuse -- three texture taps in the vertex stage where the
+  driver may expose zero vertex texture units, and ten fragment samplers
+  where eight are guaranteed -- and Adreno refuses. Both are optional at
+  compile time now, and the build walks a ladder: full, then without the
+  vertex taps, then without the crypt's stone, then without either. Only the
+  bottom rung failing means no 3D.
+- **And it says why.** If the mode still cannot build, the game now prints a
+  report -- your GPU, the driver, and the driver's own error for every
+  refusal -- and writes `TERRARIUM-gpu-report.txt` beside the save. Paste
+  that whole block into a bug report.
+- **The crypt's ring is one wall.** The white seams down the Tower's stepped
+  walls are gone: the ring was a stack of separate 16px models, each emitting
+  all four sides, so every step and every run-end showed a lit strip of the
+  outer stone with the wall's black core behind it.
+
 ## New in 1.30.0
 
 The tower of graves has an inside.
