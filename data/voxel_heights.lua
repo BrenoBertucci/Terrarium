@@ -2208,12 +2208,20 @@ return {
     -- one all-black tile is $47, and no map in the group places it.)
     CEMETERY = {
       -- One 16px course: the chamber's wall ring ($09/$0A over
-      -- $19/$1A), the grey mass beyond it ($11) so the room reads as a
-      -- chamber cut into solid stock rather than a fence standing on a
-      -- plain, and Agatha's north band ($20 over $30).
+      -- $19/$1A) and Agatha's north band ($20 over $30). Both are the
+      -- CLASSIC stand-in: with the CRYPT row on NEW the templates in
+      -- `buildings.CEMETERY` below claim every ring cell first and stand
+      -- it as a tall wall of stone (lib/CryptKit.lua).
       wall = { 9, 10, 25, 26,
-               17,
                32, 48 },
+      -- The grey mass beyond the ring ($11) lies FLAT, as the void does.
+      -- It used to sit in `wall`, "so the room reads as a chamber cut
+      -- into solid stock" -- which at 16px is a table top with a ring of
+      -- crates on it, and which the mesher also stood over the whole
+      -- border ring beyond the map's edge. Flat, it is the dark the
+      -- walls stand in; inside the body the crypt kit lays its own black
+      -- slab over it, and the border stays out of the picture.
+      void = { 17 },
       -- The reception counter of POKEMON_TOWER_1F -- the only counter in
       -- the group, and the ROM's own counterTiles for this tileset name
       -- $12 as exactly that.  It is an L that fences the receptionist
@@ -2693,6 +2701,37 @@ return {
       { id = "mart_counter_club", room = "counter", seal = "nsew",
         standH = 12,
         tiles = { { 90, 91 }, { 25, 24 } } },
+    },
+
+    -- The Pokemon Tower's seven floors and Agatha's room (lib/CryptKit.lua,
+    -- the CRYPT row). One cell per template; which model a cell gets is
+    -- decided per placement by the kit's `signature` (which sides of a
+    -- wall face the room, how tall its row stands, whether a lantern hangs
+    -- on it, a headstone's variant), so the list is short. Every template
+    -- composites the same palette row above its drawing: $00 (all white)
+    -- and $47 (all black), the two texels every recolour leaves alone, so
+    -- the stone is the white held down by light and the ironwork and the
+    -- dark beyond the walls are black under any palette.
+    CEMETERY = {
+      -- the chamber's ring ($09/$0A over $19/$1A): a wall, or the dark
+      -- where it never touches the room
+      { id = "crypt_wall", crypt = "wall", seal = "nsew",
+        topRows = { { 0, 71 } },
+        tiles = { { 9, 10 }, { 25, 26 } } },
+      -- Agatha's north band ($20 over $30): the same wall
+      { id = "crypt_band", crypt = "wall", seal = "nsew",
+        topRows = { { 0, 71 } },
+        tiles = { { 32, 32 }, { 48, 48 } } },
+      -- the headstones ($05/$06 over $15/$16): a plinth, the stone on it
+      -- wearing its own drawing, the two posts beside it
+      { id = "crypt_grave", crypt = "grave", seal = "nsew",
+        topRows = { { 0, 71 } },
+        tiles = { { 5, 6 }, { 21, 22 } } },
+      -- the mass beyond the ring ($11): a black slab, the dark the walls
+      -- stand in
+      { id = "crypt_mass", crypt = "mass", seal = "nsew",
+        topRows = { { 0, 71 } },
+        tiles = { { 17, 17 }, { 17, 17 } } },
     },
 
     OVERWORLD = {

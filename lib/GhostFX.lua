@@ -102,7 +102,7 @@ GhostFX.GLOW = { 0.86, 0.96, 1.0 }
 GhostFX.FLAT = 0.92
 GhostFX.NIGHT_MIN = 0.20     -- windowLight under which the tower is quiet
 -- how the breath is shared between a haunt's sources, by kind
-GhostFX.WEIGHT = { lantern = 1.0, portal = 0.35, spire = 0.15 }
+GhostFX.WEIGHT = { lantern = 1.0, portal = 0.35, spire = 0.15, grave = 1.0 }
 
 local field = Particles.newField(GhostFX.KINDS, GhostFX.MAX)
 local ctx = {}
@@ -182,11 +182,14 @@ local function wisp(src)
   local lift = GhostFX.LIFT * (0.85 + rand() * 0.3)
   if k == "portal" then lift = lift * 0.6 end
   if k == "spire" then lift = lift * 1.4 end
+  -- a grave's breath barely leaves the stone
+  if k == "grave" then lift = lift * 0.4 end
   m.lift0 = lift
   m.lift = lift
   m.spin = (rand() * 2 - 1) * 0.3
   m.ang = (rand() - 0.5) * 0.3
-  m.size = 0.8 + rand() * 0.45
+  -- `scale` (the stamp): how big a source's wisps are, next to the tower's
+  m.size = (0.8 + rand() * 0.45) * (tonumber(src.scale) or 1)
   GhostFX.emitted = GhostFX.emitted + 1
 end
 
@@ -197,8 +200,15 @@ local function updateBody(dt, voxelOn)
 
   local Game = game()
   local ow = Game and Game.overworld
+  -- INSIDE the tower of graves (lib/Crypt.lua) the haunted floors breathe
+  -- too: the crypt kit's headstones report a haunt each, and a crypt is
+  -- dark whatever the hour
+  local okC, Crypt = pcall(V.require, "Crypt")
+  local crypt = okC and Crypt and ow and ow.map and Crypt.haunted(ow.map)
+                and true or false
+  local outdoor = ow and ow.map and Map.isOutdoor(ow.map.def) or false
   local live = voxelOn and GhostFX.enabled() and ow and ow.map and ow.player
-               and Map.isOutdoor(ow.map.def)
+               and (outdoor or crypt)
                and Game.stack and Game.stack:top() == ow
                and not ow.transitioning
   if not live then
@@ -206,7 +216,7 @@ local function updateBody(dt, voxelOn)
       (not voxelOn and "voxelOn=false")
       or (not GhostFX.enabled() and "HAUNT off")
       or (not (ow and ow.map and ow.player) and "no overworld/map/player")
-      or (not Map.isOutdoor(ow.map.def) and "indoors")
+      or (not (outdoor or crypt) and "indoors")
       or (not (Game.stack and Game.stack:top() == ow) and "overworld not on top")
       or (ow.transitioning and "map transitioning")
       or "unknown"
@@ -227,7 +237,7 @@ local function updateBody(dt, voxelOn)
   -- through the night, comes up through dusk and is mostly gone by dawn
   local okN, night = pcall(DayNight.windowLight)
   night = (okN and tonumber(night)) or 0
-  if GhostFX.force then night = 1 end
+  if GhostFX.force or crypt then night = 1 end
   GhostFX.lastNight = night
 
   if list and night >= GhostFX.NIGHT_MIN then
@@ -247,9 +257,11 @@ local function updateBody(dt, voxelOn)
       if dz < 0 then dz = -dz end
       if dx <= range and dz <= range then
         -- the first wisp comes at a random point of the period
-        h.next = (h.next or (rand() * every)) - dt
+        -- `slow` (the stamp): a grave sighs where a lantern storey pours
+        local period = every * (tonumber(h.slow) or 1)
+        h.next = (h.next or (rand() * period)) - dt
         if h.next <= 0 then
-          h.next = every * (0.6 + rand() * 0.8)
+          h.next = period * (0.6 + rand() * 0.8)
           local src = pickSource(h)
           if src then wisp(src) end
         end
@@ -270,6 +282,8 @@ local function updateBody(dt, voxelOn)
       m.lift = (m.lift0 or 0) * (1 - k) * (1 - k) + GhostFX.HOVER
     end
     local amount = Wind.amount()
+    -- no wind reaches a crypt: what air there is barely stirs
+    if crypt then amount = math.min(amount, 1) * 0.25 end
     ctx.dirX = Wind.DIR[1] or 1
     ctx.dirZ = Wind.DIR[2] or 0
     ctx.speed = amount * WindFX.SPEED

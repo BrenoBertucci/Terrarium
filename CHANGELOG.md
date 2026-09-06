@@ -20,11 +20,114 @@ The old `-mobile` channel is retired. Historical tags keep it (`v1.28.0-mobile` 
 
 Tags and packages:
 
-- Git tag: `v1.29.0`
-- Zip asset: `TERRARIUM-1.29.0.zip`
-- `manifest.json` / catalog `version` field: `1.29.0`
+- Git tag: `v1.30.0`
+- Zip asset: `TERRARIUM-1.30.0.zip`
+- `manifest.json` / catalog `version` field: `1.30.0`
 
 ## Unreleased
+
+## 1.30.0
+
+The tower of graves has an inside.
+
+### The crypt -- the CRYPT row (`lib/CryptKit.lua`, `lib/Crypt.lua`, `lib/Buildings.lua`, `lib/ChunkMesher.lua`, `lib/Structures.lua`, `lib/GhostFX.lua`, `lib/MarioCam.lua`, `lib/FloorArt.lua`, `data/voxel_heights.lua`, `data/atmosphere.lua`)
+
+- The Pokemon Tower's seven floors and Agatha's room (the CEMETERY
+  tileset) stood as the profile's pins: a 16px ring of boxes wearing the
+  wall-panel drawing -- red crates, in Lavender's palette -- on a grey
+  table top under a black sky, with the headstones as 6px cutouts.
+  `CryptKit` stands them as a crypt on the building pipeline: every ring
+  cell that touches the room is a tall wall of ashlar (courses, staggered
+  joints, a proud plinth, a string course, a pilaster at every corner the
+  ring turns), lit rather than painted -- the drawing's white held to grey
+  by `tint`, the top rows falling to black so the far walls climb out of
+  the light and no ceiling is needed; the near walls are cut to a parapet
+  with a coping (the dollhouse cut) so the fixed camera at the south looks
+  over them; the grey stock beyond, and the ring cells that never touch
+  the room, go to a black slab; every headstone stands on a plinth wearing
+  its own drawing front and back, three variants by cell hash.
+- Which model a cell gets is a fact about the PLACEMENT: `Buildings.build`
+  gained a `crypt` branch that asks the kit for a `signature` (which sides
+  face the room, the row's height band, a lantern side, a variant) and
+  builds one model per distinct signature, the way the ledge banks build
+  per ground tile. `Buildings.stamp` carries a haunt's `slow` and `scale`.
+- Candle lanterns hang where the light is (`Crypt.MAPS`, sites per floor,
+  shared with the kit so a pool always has a flame over it): the scene
+  shader's eight point lights, warm, breathing on the gas clock; the
+  flames are flattened cards with a halo. The interior's tint is held down
+  and cooled per floor (the passage's lesson: there was never too little
+  light indoors, there was too little dark).
+- The floors carry their own air (`data/atmosphere.lua` entries marked
+  `indoor`, which `MarioCam` now honours): a dark haze on the lower
+  floors, the town's violet heavier on the haunted ones (3F-6F), so the
+  far wall sinks back. On those floors one grave in six reports a haunt
+  and `GhostFX` breathes wisps out of it -- indoors now, at any hour, in
+  still air, small and low.
+- `FloorArt` became PROFILES (the passage's, unchanged, and the crypt's:
+  `assets/floor/crypt.jpg`, dark flagstones, laid over the white lattice
+  at a high mix, keyed to everything flat and low on the sheet but black).
+- The mesher draws a pinned `void` cell as the tileset's own all-black
+  tile (`S.voidTile`), not as the tile's grey: the mass tile $11 is pinned
+  `void` so the ring beyond the map's edge lies flat and dark instead of
+  standing as a plateau.
+- CRYPT options row (NEW / CLASSIC, `full`), remeshing on its step like
+  TOWER; CLASSIC is the pins as they were, lit flat, no lanterns, no
+  flagstones, no air.
+- Probe `tests/tower_interior_probe.lua` (every floor: the kit built with
+  no fallback, the lanterns, the air, the flagstones, the sight law over
+  the cut walls, the wisps, screenshots, the tilt-shift frame, the CLASSIC
+  A/B, frame cost), runner `tests/run_tower_interior.cmd`.
+  `tests/lavender_shots_probe.lua` now waits for the 3D pass before its
+  first shot and expects the tower's own air on 1F.
+
+### The crypt's light -- the CRYPT-FX row (`lib/Voxel3D.lua`, `lib/Bloom.lua`, `lib/Crypt.lua`, `lib/VoxelScene.lua`)
+
+- The scene shader lights a flank by its REAL face normal when asked
+  (`lampNormals`; screen-space derivatives of the world position, exact on
+  voxel geometry, built under the same gate as the wireframe): a wall
+  turned away from a lantern goes dark. A wet sheen (`lampSpec`,
+  Blinn-Phong off the same normal in the flame's colour, added after the
+  material). Ground mist (`mist`: two octaves of drifting value noise,
+  denser at the floor, lit by the pools it lies under, keyed off black so
+  the dark beyond the walls stays dark; heavier and violet on the haunted
+  floors). `eyePos` is sent every scene.
+- MATERIALS: the kit's walls wear the drawing's white and its headstones
+  the drawing's greys, so the shader reads what a fragment is made of off
+  its texel: white is masonry, grey is a headstone's granite, the floor
+  the paving art's. Three photographed CC0 surfaces from Poly Haven
+  (`assets/stone/README.md`: castle_wall_slates, granite_tile_03,
+  monastery_stone_floor; graded toward the crypt's grey, means normalised)
+  with their tangent-space normal maps, mapped in world space by the
+  face's own axis and turned into the normal the lamps light by -- real
+  relief under a candle -- with a gloss and a sheen per material (rough
+  masonry, polished granite, a wet floor with a Fresnel lift), soot
+  blackening the wall above every flame, moss and damp at the foot. The
+  tone stays the geometry's; with the row on the kit builds its walls
+  WITHOUT drawn courses, pilasters or string course (the photograph
+  carries the masonry) and CARVES every room-facing face by the
+  photograph's own height map (`assets/stone/crypt_wall_h.png`, baked from
+  the same Poly Haven displacement): the outermost voxel stands where the
+  picture's stones stand and is missing at its joints, read at the cell's
+  own phase in the picture's cycle (part of the placement signature), so
+  the voxels, the albedo, the relief map and the occlusion all describe
+  the same stones. The headstones take the drawing's own silhouette (the
+  arch's rounded shoulders) on a two-step plinth. The row remeshes on its
+  step.
+- `Bloom`: the bright part of the finished diorama, shrunk, blurred with
+  the tilt-shift's gaussian; RAYS marched from each lantern's place on
+  the canvas across it (the sun-shaft march, pointed at a candle); and the
+  GRADE -- the glow added over the frame through a contrast curve that
+  keeps black black (the ACES fit was tried and lifted the crypt to grey),
+  a vignette, a breath of grain -- written back in place.
+- RayFX's ambient occlusion is asked for at least at its `ao` rung inside
+  (`RayFX.floor`) and harder and closer than the streets' (`o.aoPower`,
+  `o.aoRange`); the noon rig's shadow is held down to leave the dark to the
+  lanterns and the occlusion.
+- The voxel wireframe is held off while the materials are on (the
+  battle's own `VoxelGrid.override`, taken only when nobody holds it).
+- CRYPT-FX options row (ON / OFF, `full`); OFF lights the crypt the way the
+  streets are lit. Measured on 4F, vsync off: ~4.5 ms a frame with all of
+  it on against ~2.7 with the geometry alone.
 
 ## 1.29.0
 

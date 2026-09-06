@@ -158,6 +158,8 @@ local SprayFX = V.require("SprayFX")
 local HearthFX = V.require("HearthFX")
 local GhostFX = V.require("GhostFX")
 local TowerKit = V.require("TowerKit")
+local Crypt = V.require("Crypt")
+local CryptKit = V.require("CryptKit")
 local LedgeKit = V.require("LedgeKit")
 local Weather = V.require("Weather")
 local Sky = V.require("Sky")
@@ -512,6 +514,10 @@ mod.content.render_pipelines:register(PIPE_VOXEL, {
     GroundFX.dropGPU()
     Water.dropGPU()
     FloorArt.dropGPU()
+    -- the crypt's flame card and its bloom canvases are GPU objects of
+    -- this context too
+    Crypt.dropGPU()
+    pcall(function() V.require("Bloom").invalidate() end)
     -- the size-of-the-water field is a baked texture over the CURRENT
     -- neighbourhood, so a map registry that moved under us invalidates it
     -- the same way it invalidates the meshes measured from those maps
@@ -884,6 +890,37 @@ local SETTINGS = {
     .. "of the same drawing, as it stood before. Flipping it rebuilds the "
     .. "map's meshes. The HAUNT row's cold glass and wisps belong to the "
     .. "NEW tower only.",
+    full = true },
+  -- `full = true` like TOWER: what the inside of the tower of graves is
+  -- made of is the look of the place, not a knob on the camera. Remeshes
+  -- on its own step (CryptKit.setting:row), like TREES.
+  { CryptKit.setting,
+    "What the inside of the Pokemon Tower is. NEW stands its seven floors "
+    .. "and Agatha's room as a crypt: the ring of wall panels becomes a "
+    .. "tall octagon of grey ashlar -- courses and joints, a plinth, a "
+    .. "string course, a pilaster at every turn -- lit rather than "
+    .. "painted, its top rows falling into the dark; the near walls are "
+    .. "cut to a parapet so the camera looks over them; the grey beyond "
+    .. "goes to black; every headstone stands on a plinth wearing its own "
+    .. "drawing. Candle lanterns hang where the light is: warm pools on "
+    .. "the stone, flames breathing, the room held dim and cool, a "
+    .. "violet haze on the haunted floors, and on those floors wisps sigh "
+    .. "out of the graves (the HAUNT row). CLASSIC is the profile's pins "
+    .. "as they were. Flipping it rebuilds the map's meshes.",
+    full = true },
+  -- `full = true` like CRYPT: the crypt's light is the look of the place.
+  -- Remeshes on its own step (CryptKit gives the row that): the walls
+  -- draw their own courses only while the photograph is off.
+  { Crypt.fxSetting,
+    "The crypt's light, in the shader. ON lights every wall and headstone "
+    .. "by the face it actually turns to the lantern (a flank facing away "
+    .. "goes dark), lays a wet sheen on the stone under each flame, drifts "
+    .. "a ground mist through the graves -- heavier and violet on the "
+    .. "haunted floors, lit where it lies under a pool -- and blooms the "
+    .. "flames, the lantern glass and the wisps so they spill light into "
+    .. "the frame instead of sitting on it as drawings. OFF lights the "
+    .. "crypt the way the streets are lit. Only inside the Pokemon Tower "
+    .. "and Agatha's room, and only with the CRYPT row on NEW.",
     full = true },
   -- `full = true` like TOWER: what a ledge is made of is the look of every
   -- route, not a knob on the camera. Remeshes on its own step, like TREES.
@@ -1608,6 +1645,14 @@ mod.events:on("mod.options_changed", function(payload)
   if payload.key == "tower" then
     pcall(TowerKit.onOptionsChanged, payload.value)
   end
+  -- CRYPT flipped from the manager page: the same remesh; CRYPT-FX too,
+  -- since whether the walls draw their own courses is built in
+  if payload.key == "crypt" then
+    pcall(CryptKit.onOptionsChanged, payload.value)
+  end
+  if payload.key == "cryptfx" then
+    pcall(CryptKit.onFxChanged, payload.value)
+  end
   if payload.key == "ledges" then
     pcall(LedgeKit.onOptionsChanged, payload.value)
   end
@@ -2092,7 +2137,7 @@ end)
 -- first so this cannot drift again: this literal sat five minors behind the
 -- manifest, and in a feature-encoded form the versioning rules in CHANGELOG.md
 -- forbid outright (`.snow.1` -- features live in the changelog, not here).
-mod.exports.version = mod.version or "1.29.0"
+mod.exports.version = mod.version or "1.30.0"
 -- exposed so a companion mod can pin its own tiles' shapes or read the
 -- camera without reaching into this mod's file layout
 mod.exports.lib = V

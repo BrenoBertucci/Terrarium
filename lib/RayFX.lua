@@ -1074,12 +1074,20 @@ local shaders = {}
 -- own scene slots.
 local outs = {}
 
+-- A scene may ask for AT LEAST a rung (the crypt asks for `ao`: its
+-- materials want the corners shaded whatever the RTX row says); nil asks
+-- for nothing. Never lowers what the row has.
+RayFX.floor = nil
+local RUNG = { off = 0, ao = 1, rt = 2, max = 3 }
+
 function RayFX.level()
   local ok, v = pcall(RayFX.setting.get, RayFX.setting)
-  if ok and (v == "off" or v == "ao" or v == "rt" or v == "max") then
-    return v
+  if not (ok and (v == "off" or v == "ao" or v == "rt" or v == "max")) then
+    v = "rt"
   end
-  return "rt"
+  local f = RayFX.floor
+  if f and RUNG[f] and RUNG[f] > (RUNG[v] or 0) then return f end
+  return v
 end
 
 -- Whether the scene pass should keep a READABLE depth buffer this frame.
@@ -1226,8 +1234,8 @@ function RayFX.apply(o)
   local radius = math.max(RayFX.AO_MIN,
                           math.min(RayFX.AO_MAX, o.h * RayFX.AO_SPAN))
   send("aoRadius", radius)
-  send("aoRange", RayFX.AO_RANGE)
-  send("aoPower", RayFX.AO_POWER)
+  send("aoRange", o.aoRange or RayFX.AO_RANGE)
+  send("aoPower", o.aoPower or RayFX.AO_POWER)
 
   -- The anime rung rides on AO's own normal, so it is sent here beside it
   -- rather than in a block of its own. Guarded on the rung to keep a frame

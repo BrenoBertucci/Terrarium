@@ -1719,7 +1719,6 @@ end
 -- no-fog state the placed contract already had.
 local atmoData
 local function atmoFor()
-  if geo.indoors then return nil end
   if atmoData == nil then
     local ok, t = pcall(V.data, "atmosphere")
     atmoData = (ok and type(t) == "table") and t or false
@@ -1729,6 +1728,10 @@ local function atmoFor()
   if not def then return nil end
   local a = atmoData[def.id] or atmoData[def.name]
   if not a then return nil end
+  -- OUTDOOR by default: an interior never inherits the town's weather. An
+  -- entry that names itself `indoor` is that interior's OWN air (the
+  -- tower of graves, lib/Crypt.lua) and rides in the same way.
+  if geo.indoors and not a.indoor then return nil end
   if not a._built then
     a._built = {
       color = a.color or { 0.6, 0.6, 0.7 },

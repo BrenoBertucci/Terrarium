@@ -747,6 +747,15 @@ Weather.STREAKS_MAX = 190
 -- the ceiling so that nobody can ever have the downpour.
 Weather.SHAFTS = 440
 Weather.SHAFTS_MAX = 780
+-- Live ceilings that PFX MAX is not allowed to blow past. The counts
+-- above are what the field looks like; these are what a frame can afford.
+-- Without them RES FULL × PFX MAX is three thousand shafts and a 10 fps
+-- slideshow — the PFX row's own comment says MAX is more than the machine
+-- enjoys, and that was measured. 30 fps is the floor this file now keeps.
+Weather.SHAFTS_HARD = 360
+Weather.SPLASH_HARD = 140
+Weather.EJECT_HARD = 36
+Weather.FLAKE_HARD = 140
 Weather.SHAFT_FALL = 102            -- world px / s, a mid-sized drop
 -- ------- a streak is a length of TIME
 --
@@ -815,7 +824,7 @@ Weather.INK_RIM_A = 0.5             -- water ring's dark half
 -- mote population at peak -- ~680 motes for 300 bursts at 2.6 -- and every
 -- tenth of this number is a slice of that projection loop on the machines
 -- the QUALITY row exists for.
-Weather.INK_LINGER = 2.2
+Weather.INK_LINGER = 1.15
 -- a stamp is a blob, not a circle: six chords disappear at these sizes,
 -- and the default segment count is fill rate spent on nothing
 Weather.INK_SEGS = 6
@@ -1161,9 +1170,14 @@ Weather.POOL_TRIES = 5          -- rolls spent looking for standing water
 -- underground on a town's raised paving -- so in exactly the places worth
 -- standing in a downpour, every ring drew sunk into the street. The shape
 -- profile already knows the height; this only had to ask.
+local VoxelSceneRef = nil
 local function groundAt(map, cx, cy)
-  local VoxelScene = V.require("VoxelScene")
-  local ok, h = pcall(VoxelScene.groundAt, map, cx, cy)
+  if VoxelSceneRef == nil then
+    local okM, m = pcall(V.require, "VoxelScene")
+    VoxelSceneRef = (okM and m) or false
+  end
+  if not VoxelSceneRef then return 0 end
+  local ok, h = pcall(VoxelSceneRef.groundAt, map, cx, cy)
   return (ok and h) or 0
 end
 
@@ -1261,6 +1275,42 @@ Weather.SPLASH_POOL_SIZE = 1.45
 -- another's allowance.
 local live = { splash = 0, eject = 0, drip = 0, flake = 0 }
 
+-- Per-tick memo of surfaceAt / Wind.flowAt, keyed by cell. Hundreds of
+-- shafts share a few dozen cells; asking VoxelScene and the wind field
+-- once per drop was the tick's whole cost.
+local focusX, focusZ = 0, 0
+local surfGen = 0
+local surfY, surfKind, surfHit = {}, {}, {}
+local windVX, windVZ, windB, windHit = {}, {}, {}, {}
+local capMul, capSplash, capFlake, capDrip, capShaft = 1, 1, 1, 1, 1
+local buckets = { {}, {}, {} }
+
+local function cellKey(wx, wz)
+  return (math.floor((wx or 0) / 16) + 512) * 1024
+       + (math.floor((wz or 0) / 16) + 512)
+end
+
+local function beginTickCaches()
+  surfGen = surfGen + 1
+  if surfGen >= 64 then
+    surfGen = 1
+    surfY, surfKind, surfHit = {}, {}, {}
+    windVX, windVZ, windB, windHit = {}, {}, {}, {}
+  end
+end
+
+local function flowAtFast(wx, wz)
+  local key = cellKey(wx, wz)
+  if windHit[key] == surfGen then
+    return windVX[key], windVZ[key], windB[key]
+  end
+  local ok, vx, vz, b = pcall(Wind.flowAt, wx, wz)
+  if not ok then vx, vz, b = 0, 0, 1 end
+  windHit[key] = surfGen
+  windVX[key], windVZ[key], windB[key] = vx, vz, b
+  return vx, vz, b
+end
+
 local function census()
   live.splash, live.eject, live.drip, live.flake = 0, 0, 0, 0
   for i = 1, #motes do
@@ -1338,6 +1388,17 @@ local function surfaceAt(ow, wx, wz)
   return gh + Weather.SPLASH_LIFT, "stone"
 end
 
+local function surfaceAtFast(ow, wx, wz)
+  local key = cellKey(wx, wz)
+  if surfHit[key] == surfGen then
+    return surfY[key], surfKind[key]
+  end
+  local y, k = surfaceAt(ow, wx, wz)
+  surfHit[key] = surfGen
+  surfY[key], surfKind[key] = y, k
+  return y, k
+end
+
 -- Placed AFTER surfaceAt on purpose: a flake now lands on whatever is
 -- under it rather than at world zero, and `local function` means the
 -- name it needs does not exist yet one line above this one.
@@ -1357,7 +1418,7 @@ local function spawnFlake(ow)
   -- (that is WHY snow drifts rather than falling), so this is a narrow
   -- spread on purpose. What varies wildly is the WANDER, not the descent.
   local d = rand() ^ 1.6
-  local yLand = select(1, surfaceAt(ow, x, z))
+  local yLand = select(1, surfaceAtFast(ow, x, z))
   motes[#motes + 1] = {
     kind = "flake", x = x, z = z, y = yLand + 40 + rand() * 26,
     yLand = yLand,
@@ -1397,7 +1458,7 @@ end
 --   GROUND one or two, barely -- this is spray off stone, not a crown
 --   ROOF   none. A tile is a hard dry surface at a slant; what leaves it
 --          leaves as a drip off the eave, which this file already has.
-Weather.EJECT_MAX = 150             -- live ejecta ceiling, all surfaces
+Weather.EJECT_MAX = 36              -- live ejecta ceiling, all surfaces
 Weather.EJECT_G = 260               -- world px/s/s, the arc's whole shape
 
 local function spawnEjecta(x, z, y, surf, d, n)
@@ -1437,19 +1498,29 @@ local function pfxMul()
   return (ok and tonumber(m)) or 1
 end
 
+local function refreshCaps()
+  capMul = pfxMul()
+  local n
+  n = math.floor(Weather.SPLASHES * capMul)
+  if n > Weather.SPLASH_HARD then n = Weather.SPLASH_HARD end
+  capSplash = (n < 1) and 1 or n
+  n = math.floor(Weather.FLAKES * capMul)
+  if n > Weather.FLAKE_HARD then n = Weather.FLAKE_HARD end
+  capFlake = (n < 1) and 1 or n
+  n = math.floor(Weather.DRIP_MAX * capMul)
+  capDrip = (n < 1) and 1 or n
+end
+
 local function splashCap()
-  local n = math.floor(Weather.SPLASHES * pfxMul())
-  return (n < 1) and 1 or n
+  return capSplash
 end
 
 local function flakeCap()
-  local n = math.floor(Weather.FLAKES * pfxMul())
-  return (n < 1) and 1 or n
+  return capFlake
 end
 
 local function dripCap()
-  local n = math.floor(Weather.DRIP_MAX * pfxMul())
-  return (n < 1) and 1 or n
+  return capDrip
 end
 
 -- (Declared HERE, well above shaftBudget, and not for tidiness: splashCap
@@ -1476,7 +1547,17 @@ end
 Weather.SPLASH_RAISE = 2.0
 
 local function splashFromHit(x, z, y, surf, d)
-  if live.splash >= splashCap() then return end
+  if live.splash >= capSplash then return end
+  -- Keep the street busy near the camera; far hits are density the eye
+  -- cannot resolve and they are most of the mote list.
+  do
+    local dx, dz = (x or 0) - focusX, (z or 0) - focusZ
+    local d2 = dx * dx + dz * dz
+    if d2 > 110 * 110 then return end
+    if d2 > 64 * 64 and surf ~= "water" and surf ~= "pool" then
+      if rand() > 0.35 then return end
+    end
+  end
   if surf ~= "water" then y = y + Weather.SPLASH_RAISE end
   -- "ground" is surfaceAt's answer for a cell OFF THE MAP -- the void
   -- past the diorama's edge, where the reach outruns a small town. It
@@ -1524,7 +1605,12 @@ local function splashFromHit(x, z, y, surf, d)
     ink = (surf == "water" or surf == "pool") and life
           or life * Weather.INK_LINGER,
   }
-  if eject > 0 then spawnEjecta(x, z, y, surf, d, eject) end
+  if eject > 0 then
+    local dx, dz = (x or 0) - focusX, (z or 0) - focusZ
+    if dx * dx + dz * dz < 48 * 48 then
+      spawnEjecta(x, z, y, surf, d, eject)
+    end
+  end
   if surf == "pool" and Weather.notePoolHit then
     -- and GroundFX's own ripple inside the film of water on the road,
     -- which is a different drawing from this one
@@ -1757,8 +1843,10 @@ local function shaftBudget()
   elseif s == 3 then base = math.floor(Weather.SHAFTS * 0.22)
   elseif s == 2 then base = Weather.SHAFTS
   else base = Weather.SHAFTS_MAX end
-  local out = math.floor(base * pfxMul())
-  return (out < 1) and 1 or out
+  local out = math.floor(base * capMul)
+  if out > Weather.SHAFTS_HARD then out = Weather.SHAFTS_HARD end
+  capShaft = (out < 1) and 1 or out
+  return capShaft
 end
 
 -- Every shaft gets an id, and it exists for one reason: a probe that wants
@@ -1783,22 +1871,26 @@ local shaftId = 0
 -- what you are given, so a lull still gets rain and the loop still ends.
 Weather.BUNCH = 3                 -- rolls spent looking for a dense band
 
-local function spawnShaft(ow, anywhere)
+local function fillShaft(s, ow, anywhere)
   local p = ow.player
   local r = Weather.SHAFT_REACH
   local x, z
-  for try = 1, Weather.BUNCH do
+  -- Prewarm rolls once: three Wind.flowAt tries times hundreds of shafts
+  -- is the hitch at the start of a shower. Live recycle still hunts a band.
+  local tries = anywhere and 1 or Weather.BUNCH
+  for try = 1, tries do
     x = (p.cellX + rand(-r, r)) * 16 + rand(0, 15)
     z = (p.cellY + rand(-r, r)) * 16 + rand(0, 15)
-    if try == Weather.BUNCH then break end
-    local _, _, band = Wind.flowAt(x, z)
+    if try == tries then break end
+    local _, _, band = flowAtFast(x, z)
     -- band runs about 0.4 in a lull to 1.6 in the crest; squared, so the
     -- crest is four times as likely to be chosen as the lull rather than
     -- merely twice
     if (band or 1) >= 1 then break end
     if rand() < band * band then break end
   end
-  local ySurf = select(1, surfaceAt(ow, x, z))
+  local ySurf, surf0 = surfaceAtFast(ow, x, z)
+  ySurf = ySurf or 0
   -- always start ABOVE the lid, never inside a house
   local air = 22 + rand() * 56
   local y = ySurf + (anywhere and (4 + rand() * air) or air)
@@ -1892,26 +1984,32 @@ local function spawnShaft(ow, anywhere)
   -- been falling out of a cloud for a while by the time it enters the
   -- frame, and starting it at rest would make the top of the emission
   -- volume a band where every drop is visibly straightening up.
-  local ax, az = Wind.flowAt(x, z)
+  local ax, az = flowAtFast(x, z)
 
   shaftId = shaftId + 1
-  shafts[#shafts + 1] = {
-    id = shaftId,
-    x = x, y = y, z = z,
-    vx = ax, vz = az,
-    d = d,
-    tau = Weather.DRAG_MIN + Weather.DRAG_SPAN * d,
-    fall = fall,
-    -- Length is TIME, not a constant: how far this drop travels in the
-    -- span the eye smears it over. Which is why it no longer has to be
-    -- stretched separately at draw -- the streak IS the distance covered.
-    len = fall * Weather.SHAFT_SMEAR * (0.85 + rand() * 0.30),
-    layer = layer,
-    alpha = alpha, thick = thick,
-    age = 0,
-    fade = anywhere and 1 or 0,
-    seed = rand() * 6.2832,
-  }
+  s.id = shaftId
+  s.x, s.y, s.z = x, y, z
+  s.vx, s.vz = ax, az
+  s.d = d
+  s.tau = Weather.DRAG_MIN + Weather.DRAG_SPAN * d
+  s.fall = fall
+  -- Length is TIME, not a constant: how far this drop travels in the
+  -- span the eye smears it over. Which is why it no longer has to be
+  -- stretched separately at draw -- the streak IS the distance covered.
+  s.len = fall * Weather.SHAFT_SMEAR * (0.85 + rand() * 0.30)
+  s.layer = layer
+  s.alpha, s.thick = alpha, thick
+  s.age = 0
+  s.fade = anywhere and 1 or 0
+  s.seed = rand() * 6.2832
+  s.yHit, s.surf = ySurf, surf0
+  s.cell = cellKey(x, z)
+end
+
+local function spawnShaft(ow, anywhere)
+  local s = {}
+  fillShaft(s, ow, anywhere)
+  shafts[#shafts + 1] = s
 end
 
 -- ------- THE STEP THAT MAKES IT WEATHER
@@ -1947,7 +2045,7 @@ local function stepShafts(ow, dt, power)
   if want < 0 then want = 0 end
   local first = #shafts == 0
   for _ = 1, math.max(0, want - #shafts) do spawnShaft(ow, first) end
-  while #shafts > want do table.remove(shafts) end
+  while #shafts > want do shafts[#shafts] = nil end
 
   local p = ow.player
   local px = (p.cellX or 0) * 16
@@ -1957,13 +2055,15 @@ local function stepShafts(ow, dt, power)
   local fadeAt = reach * (1 - Weather.FADE_EDGE)
   local fadeSpan = math.max(1, reach - fadeAt)
   local fadeInK = dt / math.max(0.01, Weather.FADE_IN)
+  local dripMax = capDrip
 
-  for i = #shafts, 1, -1 do
+  local i = 1
+  while i <= #shafts do
     local s = shafts[i]
     s.age = (s.age or 0) + dt
 
     -- the air here, and how fast this particular drop can answer it
-    local ax, az = Wind.flowAt(s.x, s.z)
+    local ax, az = flowAtFast(s.x, s.z)
     local k = dt / (s.tau or 0.3)
     if k > 1 then k = 1 end
     s.vx = (s.vx or 0) + (ax - (s.vx or 0)) * k
@@ -1973,7 +2073,16 @@ local function stepShafts(ow, dt, power)
     s.z = s.z + s.vz * dt
     s.y = s.y - s.fall * dt
 
-    local yHit, surf = surfaceAt(ow, s.x, s.z)
+    local ck = cellKey(s.x, s.z)
+    local yHit, surf
+    if s.cell ~= ck or s.yHit == nil then
+      s.cell = ck
+      yHit, surf = surfaceAtFast(ow, s.x, s.z)
+      s.yHit, s.surf = yHit, surf
+    else
+      yHit, surf = s.yHit, s.surf
+    end
+    yHit = yHit or 0
     local dx = math.abs(s.x - px)
     local dz = math.abs(s.z - pz)
     local out = (dx > dz) and dx or dz
@@ -1997,15 +2106,22 @@ local function stepShafts(ow, dt, power)
       if out <= reach and s.y <= yHit + 6 then
         splashFromHit(s.x, s.z, yHit, surf, s.d)
         if surf == "roof" and rand() < Weather.EAVE_CHANCE
-           and live.drip < dripCap() then
+           and live.drip < dripMax then
           spawnDrip(ow, s.x, s.z, yHit)
           live.drip = live.drip + 1
         end
       end
-      -- recycle into the air column above a fresh cell
-      local ns = #shafts
-      table.remove(shafts, i)
-      if ns <= want then spawnShaft(ow, false) end
+      -- Recycle IN PLACE. table.remove+spawn was O(n) copies per landing
+      -- and a fresh table per drop, hundreds of times a second.
+      if #shafts <= want then
+        fillShaft(s, ow, false)
+        i = i + 1
+      else
+        shafts[i] = shafts[#shafts]
+        shafts[#shafts] = nil
+      end
+    else
+      i = i + 1
     end
   end
 end
@@ -2212,6 +2328,10 @@ local function tick(dt)
 
   local p = ow.player
   local px, pz = p.cellX * 16, p.cellY * 16
+  focusX, focusZ = px, pz
+  beginTickCaches()
+  refreshCaps()
+  shaftBudget()
 
   -- one pass over the list, and every ceiling below reads off it
   census()
@@ -2289,8 +2409,9 @@ local function tick(dt)
   local okw, n = pcall(Wind.amount)
   if okw then windAmt = n or 0 end
 
-  for i = #motes, 1, -1 do
-    local m = motes[i]
+  local mi = 1
+  while mi <= #motes do
+    local m = motes[mi]
     m.t = m.t + dt
     -- a splash's ink outlives its burst (see THE INK): the mote stays for
     -- whichever clock runs longer
@@ -2320,7 +2441,7 @@ local function tick(dt)
       local swing = math.sin(m.t * m.rate + m.seed)
       local stall = 0.62 + 0.38 * math.abs(math.sin(m.t * m.rate * 0.5 + m.seed))
       m.y = m.y - m.fall * stall * dt
-      local ax, az = Wind.flowAt(m.x, m.z)
+      local ax, az = flowAtFast(m.x, m.z)
       -- Snow answers the air far more readily than rain does -- there is
       -- almost no mass to lag -- but not instantly, or a flake would be a
       -- speck of wind rather than a thing being blown.
@@ -2374,7 +2495,12 @@ local function tick(dt)
     if not dead and (math.abs(m.x - px) > 200 or math.abs(m.z - pz) > 200) then
       dead = true
     end
-    if dead then table.remove(motes, i) end
+    if dead then
+      motes[mi] = motes[#motes]
+      motes[#motes] = nil
+    else
+      mi = mi + 1
+    end
   end
 end
 
@@ -2431,7 +2557,7 @@ local function stepDrops(w, h, dt, power)
   if want > Weather.STREAKS_MAX then want = Weather.STREAKS_MAX end
   local first = #drops == 0
   for _ = 1, math.max(0, want - #drops) do spawnDrop(w, h, first) end
-  while #drops > want do table.remove(drops) end
+  while #drops > want do drops[#drops] = nil end
 
   local lean = slant()
   local wAmt, wDx = windForce()
@@ -2895,6 +3021,7 @@ end
 -- The live caps this frame, for probes and for the row's own proof: the
 -- PFX row is only doing something if these move when it moves.
 function Weather.budgets()
+  refreshCaps()
   return shaftBudget(), splashCap(), flakeCap(), dripCap(), pfxMul()
 end
 
@@ -3059,12 +3186,32 @@ local function rainPush(hx, hy, ux, uy, w, r, g, b, aH, aT, dH, dT)
   rainN = rainN + 1
 end
 
-local function rainFlush()
+local function rainFlush(mode)
   if not rainMesh or rainN == 0 then return end
   local g = love.graphics
+  -- Do NOT shorten rainV before setVertices. LOVE resizes the mesh down
+  -- to #vertices; the next flush then writes past that size, throws, and
+  -- T-SHIFT's pcall swallows it — zero rain on screen, sky still grey.
   rainMesh:setVertices(rainV)
   rainMesh:setDrawRange(1, rainN * 6)
   local pm, pa = g.getBlendMode()
+
+  if mode == "alpha" then
+    local dsh = depthOnlyShader()
+    local pushed = false
+    if dsh then
+      if pcall(g.setShader, dsh) then
+        sendDepth(dsh)
+        pushed = true
+      end
+    end
+    g.setBlendMode("alpha", "alphamultiply")
+    g.setColor(1, 1, 1, 1)
+    g.draw(rainMesh)
+    if pushed then pcall(g.setShader) end
+    g.setBlendMode(pm, pa)
+    return
+  end
 
   -- ------- the refractive draw, and why it is alpha and not add
   --
@@ -3125,7 +3272,10 @@ local function drawDrops(h, power)
   rainReset(#drops)
 
   -- cheap insertion order: partition into three buckets (no full sort)
-  local buckets = { {}, {}, {} }
+  for b = 1, 3 do
+    local t = buckets[b]
+    for i = #t, 1, -1 do t[i] = nil end
+  end
   for i = 1, #drops do
     local d = drops[i]
     local b = buckets[layerRank(d)]
@@ -3187,7 +3337,10 @@ local function drawShafts(project, scale, power)
   -- the hour's light, once, and the posts standing in it
   local lr, lg, lb = rainLight()
 
-  local buckets = { {}, {}, {} }
+  for b = 1, 3 do
+    local t = buckets[b]
+    for i = #t, 1, -1 do t[i] = nil end
+  end
   for i = 1, #shafts do
     local s = shafts[i]
     local b = buckets[layerRank(s)]
@@ -3434,10 +3587,11 @@ local function pushImpact(m, sx, sy, s, power, lr, lg, lb)
   local cr, cg, cb = c[1] * lr, c[2] * lg, c[3] * lb
   local base = s * size
   local w = math.max(1, s * 0.5)
+  local lod = m._lod or 0
 
   if surf == "water" then
     -- ------- the column
-    if k < 0.62 then
+    if lod == 0 and k < 0.62 then
       local jk = k / 0.62
       local hh = math.sin(jk ^ 0.7 * 3.1416)
       if hh > 0 then
@@ -3455,7 +3609,8 @@ local function pushImpact(m, sx, sy, s, power, lr, lg, lb)
       end
     end
     -- ------- and the rings behind it, one after another
-    for n = 1, 3 do
+    local nRings = (lod > 0) and 1 or 3
+    for n = 1, nRings do
       local born = (n - 1) * 0.17
       local kk = (k - born) / (1 - born)
       if kk > 0 and kk < 1 then
@@ -3488,7 +3643,7 @@ local function pushImpact(m, sx, sy, s, power, lr, lg, lb)
       local sk = k / 0.62
       local a = (1 - sk) * (1 - sk) * 0.9 * power
       local out = base * (0.6 + sk * 2.6)
-      local n = Weather.SHARD_N
+      local n = (lod > 0) and 3 or Weather.SHARD_N
       local step = 6.2832 / n
       for i = 0, n - 1 do
         local ang = i * step + seed
@@ -3603,30 +3758,29 @@ function Weather.draw(project, scale, w, h)
   if inkGain > 1 then inkGain = 1 end
   local ink = Weather.INK
 
-  -- One pass to place every mote on screen. The impacts are only PROJECTED
-  -- here -- what each of them draws is pushed into the shared buffer below,
-  -- because they are additive and the drips and flakes in this same loop
-  -- are not, and swapping the blend mode per mote is a state change per
-  -- raindrop.
-  for _, m in ipairs(motes) do
+  -- One pass to place every mote on screen. Ink, drips, ejecta and flakes
+  -- used to be one LOVE primitive each — hundreds of draw calls a frame,
+  -- which is what kept this at 10 fps on a desktop. They now ride the same
+  -- mesh as the streaks: one upload, one draw, alpha blend.
+  rainReset(math.max(16, #motes * (Weather.RING_SEGS + 2)))
+  for i = 1, #motes do
+    local m = motes[i]
     local sx, sy, ps = project(m.x, m.y, m.z)
     if sx then
       local s = math.max(1, scale * (ps or 1))
       m._sx, m._sy, m._s = sx, sy, s
+      local dx, dz = m.x - focusX, m.z - focusZ
+      local d2 = dx * dx + dz * dz
+      m._lod = (d2 > 70 * 70) and 1 or 0
       -- and how far away it is, in the buffer's own units, so the shader
       -- can ask whether the house in front of it got there first
       m._d = projectDepth(m.x, m.y, m.z)
+      pushZ = m._d
       if m.kind == "splash" then
         -- ------- the ink, under the light (see THE INK, by the counts)
-        --
-        -- The additive half of this mote is pushed into the shared buffer
-        -- below; here, first and underneath it, goes the dark half --
-        -- the only part of a landing that can survive a white street.
         local base = s * (m.size or 1)
         local surf = m.surf
         if surf == "water" or surf == "pool" then
-          -- the two-tone rim: a dark ring expanding with the crest, the
-          -- way every cel-shaded ripple is inked
           local kk = m.t / m.ttl
           if kk >= 0 and kk <= 1 then
             local r = (surf == "water") and base * (0.45 + kk * 3.1)
@@ -3634,16 +3788,11 @@ function Weather.draw(project, scale, w, h)
             local a = (1 - kk) * (1 - kk) * Weather.INK_RIM_A
                       * mPower * inkGain
             if a > 0.01 then
-              g.setColor(ink[1], ink[2], ink[3], a)
-              g.setLineWidth(math.max(1, s * 0.4))
-              g.ellipse("line", sx, sy, r, r * Weather.RING_SQUASH, 10)
-              g.setLineWidth(1)
+              pushRing(sx, sy, r, math.max(1, s * 0.4),
+                       ink[1], ink[2], ink[3], a)
             end
           end
-        else
-          -- the wet stamp: pops in with the hit, dries over its own
-          -- longer clock. Grass at half strength -- a lawn is already
-          -- dark and half-hides its ground anyway.
+        elseif m._lod == 0 then
           local span = m.ink or m.ttl
           local kk = m.t / span
           if kk >= 0 and kk <= 1 then
@@ -3655,63 +3804,58 @@ function Weather.draw(project, scale, w, h)
               local grow = m.t / 0.12
               if grow > 1 then grow = 1 end
               local rx = base * (0.9 + 0.7 * grow)
-              g.setColor(ink[1], ink[2], ink[3], a)
-              g.ellipse("fill", sx, sy, rx, rx * Weather.RING_SQUASH,
-                        Weather.INK_SEGS)
+              if rx < 0.6 then rx = 0.6 end
+              rainPush(sx + rx, sy, sx - rx, sy,
+                       rx * Weather.RING_SQUASH * 2,
+                       ink[1], ink[2], ink[3], a, a)
             end
           end
         end
       elseif m.kind == "drip" then
         local c = Weather.RAIN_NEAR
         local a = 0.78 * mPower
-        g.setColor(c[1] * lr, c[2] * lg, c[3] * lb, a)
         if m.hang and m.hang > 0 then
-          -- the bead, swelling on the lip until it lets go: drawn from
-          -- how much of its hang is spent, so it visibly grows
           local left = m.hang
           local total = Weather.DRIP_HANG_MIN + Weather.DRIP_HANG_VAR * 0.5
           local swell = 1 - left / total
           if swell < 0.2 then swell = 0.2 elseif swell > 1 then swell = 1 end
           local d = math.max(1.5, s * 0.85 * swell)
-          g.ellipse("fill", sx, sy, d * 0.5, d * 0.62, 8)
+          rainPush(sx, sy + d * 0.62, sx, sy - d * 0.62, d,
+                   c[1] * lr, c[2] * lg, c[3] * lb, a, a)
         else
-          -- falling: a thread with a bright head, so the drop reads as a
-          -- drop and not as a scratch on the wall behind it
           local t = math.max(1, s * 0.7)
           local hgt = s * 2.4
-          g.rectangle("fill", sx - t * 0.5, sy - hgt, t, hgt)
+          rainPush(sx, sy, sx, sy - hgt, t,
+                   c[1] * lr, c[2] * lg, c[3] * lb, a, a * 0.35)
           local hc = Weather.RAIN_CORE
-          g.setColor(hc[1] * lr, hc[2] * lg, hc[3] * lb, math.min(1, a * 1.3))
           local d = math.max(1.5, s * 0.7)
-          g.ellipse("fill", sx, sy, d * 0.5, d * 0.6, 8)
+          local ha = math.min(1, a * 1.3)
+          rainPush(sx, sy + d * 0.6, sx, sy - d * 0.6, d,
+                   hc[1] * lr, hc[2] * lg, hc[3] * lb, ha, ha)
         end
       elseif m.kind == "eject" then
-        -- A thrown drop, and it is deliberately the brightest thing in the
-        -- splash: this is the water that left the surface, catching the
-        -- sky from above while the ring below it is only a wave. One or
-        -- two pixels, no trail -- a streak here would read as a spark.
         local c = Weather.SPLASH
         local a = 0.85 * mPower * (1 - (m.t / m.ttl) ^ 3)
         local d = math.max(1, s * 0.55 * (m.size or 1))
-        g.setColor(c[1] * lr, c[2] * lg, c[3] * lb, a)
-        g.rectangle("fill", sx - d * 0.5, sy - d * 0.5, d, d)
+        rainPush(sx + d, sy, sx - d, sy, d,
+                 c[1] * lr, c[2] * lg, c[3] * lb, a, a)
       else
         local c = Weather.SNOW
-        -- Fades in as it arrives and out as it settles, and the height is
-        -- measured from what it is going to LAND on -- on a town's raised
-        -- paving, world zero is sixteen pixels underground and a flake
-        -- fading toward it never faded at all.
         local above = m.y - (m.yLand or 0)
         local fade = math.min(1, m.t * 3, (above + 2) / 6)
         if m.settled then
           fade = fade * math.max(0, 1 - m.settled / 0.5)
         end
-        g.setColor(c[1] * lr, c[2] * lg, c[3] * lb, 0.92 * fade * mPower)
-        local d = math.max(1, s * m.size)
-        g.rectangle("fill", sx - d * 0.5, sy - d * 0.5, d, d)
+        local a = 0.92 * fade * mPower
+        local d = math.max(1, s * (m.size or 1))
+        rainPush(sx + d, sy, sx - d, sy, d,
+                 c[1] * lr, c[2] * lg, c[3] * lb, a, a)
       end
+    else
+      m._sx = nil
     end
   end
+  pcall(rainFlush, "alpha")
 
   -- ------- the impacts, in the buffer the rain is already using
   --
@@ -3725,19 +3869,19 @@ function Weather.draw(project, scale, w, h)
   -- painted OVER pale paving reads as a sticker; a ring that brightens the
   -- paving reads as wet.
   do
-    -- The widest an impact can be is water's: three rings of RING_SEGS
-    -- chords, the column, and the bead on it. Everything else is smaller,
-    -- so this sizes the buffer for all of them.
+    -- Size the buffer from what is actually bursting this frame, not from
+    -- a water-worst-case times every drying stamp.
     local per = Weather.RING_SEGS * 3 + 2
     local n = 0
     for i = 1, #motes do
-      if motes[i].kind == "splash" then n = n + 1 end
+      local m = motes[i]
+      if m.kind == "splash" and m._sx and m.t < m.ttl then n = n + 1 end
     end
     if n > 0 then
       rainReset(n * per)
       for i = 1, #motes do
         local m = motes[i]
-        if m.kind == "splash" and m._sx then
+        if m.kind == "splash" and m._sx and m.t < m.ttl then
           pushImpact(m, m._sx, m._sy, m._s, mPower, lr, lg, lb)
         end
       end

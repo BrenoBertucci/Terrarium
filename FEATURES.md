@@ -70,6 +70,8 @@ menu.
 | the **TOWER** options row | NEW / CLASSIC — which Pokemon Tower stands in Lavender: the tower modelled by hand (default), or the building kit's plain fold of the same drawing, as it stood before. Flipping it rebuilds the map's meshes on the spot. See below |
 | the **LEDGES** options row | BANK / CLASSIC — what a hop-down ledge is: a bank of earth that rises steeply on the side you stand on, crests, and falls gently toward where you land, the ground's own grass rolling over its top and the drawing's earth showing where the fall is steep; or the profile's six-pixel box wearing the ledge drawing on top, as before. Every route in Kanto. See below |
 | the **HAUNT** options row | ON / OFF — the tower of graves is haunted. Lavender's Pokemon Tower stands as a tower now (plinth, ashlar body with a pointed portal, storeys of pointed windows under cornices, a lantern storey, a pagoda roof and a spire), its glass burns cold, sparse and breathing after dark, and pale wisps drift out of it. The row is the wisps and the cold glass; the tower stands either way. See below |
+| the **CRYPT** options row | NEW / CLASSIC — what the inside of the Pokemon Tower is. NEW stands its seven floors and Agatha's room as a crypt: a tall octagon of grey ashlar climbing out of the light, the near walls cut to a parapet so the camera looks over them, the dark beyond, every headstone on a plinth; candle lanterns in wall sconces, the room held dim and cool, a violet haze and wisps sighing out of the graves on the haunted floors, dark flagstones underfoot. CLASSIC is the profile's pins as they were. Flipping it rebuilds the map's meshes. See below |
+| the **CRYPT-FX** options row | ON / OFF — the crypt's light, in the shader: every wall and headstone lit by the face it actually turns to the lantern, a wet sheen on the stone under each flame, ground mist drifting through the graves, weathered stone and granite on the walls and the headstones with their grain in the light, and the flames blooming into the frame. OFF lights the crypt the way the streets are lit. Only inside the tower, with CRYPT on NEW |
 | the **TOWN** options row | ON / OFF — trainers' Pokemon loose in the streets of every town. Most are out for a stroll (press A to hear them); the one that STARES you down wants to battle, at your own lead's level |
 | the **A-FARM** options row | OFF / P1–P6 — pick a party slot and a bot trains that Pokemon; see below |
 | the **QOL** options row | ON / OFF — ten mercies: the **bag sorted into pockets** (balls, medicine, TMs and HMs, key items), wrapping and taking a held direction; the PC **following a catch** into whichever box it landed in, and a full box rolling forward instead of refusing a deposit; **RENAME** on the party menu, because Kanto has no NAME RATER; **hidden items glint** on the ground (it does not name them or take them — you still walk there and press A); hold **B to run**; **field poison stops at 1 HP** instead of killing; **trade evolutions at level 37** without a second machine; effectiveness markers on the move menu (`+`/`-`/`x` against the Pokémon in front of you); a fresh REPEL used the moment one wears off; and HMs on the A button — A at a tree CUTs, A at water SURFs, A at a boulder wakes STRENGTH, all behind the same badges and checks the menu applies. OFF is the full 1996 friction |
@@ -919,6 +921,60 @@ falling back to the band fold, the stamp records its haunt and the camera's
 occluder height, the shader compiles, the wisps are live at night, frame time
 at a fixed frame day and night — and screenshots from the plaza, the door and
 the orbit, at dawn, day and night (`tests/run_tower.cmd`).
+
+## The crypt — the CRYPT and CRYPT-FX rows
+
+The tower's seven floors and Agatha's room draw with one tileset: a ring of
+wall panels cut out of a grey mass, a field of headstones, a flight up and a
+flight down. The profile stood the ring as a 16px course of boxes wearing the
+panel drawing — in Lavender's palette a ring of red crates on a grey table
+top under a black sky, and the headstones as thin cutouts. A 2D chamber reads
+as a chamber because the eye supplies the walls; a diorama has to build them.
+
+**The walls** (`lib/CryptKit.lua`). Every ring cell that touches the room
+stands as a tall wall of ashlar — courses of blocks with staggered joints, a
+proud plinth, a string course, a pilaster at every corner the ring turns —
+in the drawing's own white held down to grey by light, its top rows falling
+into the dark so the far walls climb out of the light and no ceiling is
+needed. The near walls are cut down to a parapet under a coping — the
+dollhouse cut every fixed-camera crypt is drawn with — so the camera at the
+south looks over them at the room. The grey stock beyond the ring, and the
+ring cells that never touch the room, go to a black slab: the crypt is walls
+standing in darkness. Which model a cell gets is decided per placement
+(which sides face the room, how tall its row stands, whether a lantern hangs
+on it), so a wall knows where the room is without the template having to.
+
+**The graves.** A headstone is a solid: a plinth, the stone on it wearing
+its own drawing front and back, the two small posts beside it; three variants
+by cell hash so a field of them is not a stamp, and about the height of the
+person walking past — taller and a stone in front of the player would hide
+him from the camera, which is the law every authored shot answers to.
+
+**The light** (`lib/Crypt.lua`). Candle lanterns hang in wall sconces where
+the light is — the scene shader's point lights, warm, breathing on the gas
+clock, a flame card with a halo over each — and the interior's flat light is
+held down and cooled, lowest on the haunted floors, because there was never
+too little light indoors, there was too little dark. Dark flagstones lie over
+the white lattice. Every floor carries its own air: a dark haze below, the
+town's violet heavier on 3F–6F, so the far wall sinks back; and on those
+floors one grave in six sighs a wisp, small and low, in still air.
+
+**The shader's share — the CRYPT-FX row.** The lanterns light every flank by
+the face it actually turns to them (the real face normal, from the world
+position's derivatives — exact on voxels), so a wall turned away goes dark;
+a wet sheen sits on the stone under each flame; a ground mist drifts through
+the graves on two octaves of noise, lit where it lies under a pool, and
+stops where the floor stops. The walls wear photographed rubble masonry, the
+headstones polished granite over their own drawing so the design stays, the
+floor worn flagstones (three CC0 surfaces from Poly Haven, see
+`assets/stone/README.md`), each with its relief map turned into the normal
+the lanterns light by — so a flame rakes across real stone — a gloss and a
+sheen per material, soot above every flame, moss and damp at the foot. The
+flames bloom into the frame and throw rays across it, the corners are
+shaded harder, and the frame is finished with a contrast curve, a vignette
+and a breath of grain. The voxel wireframe stands aside while this is on.
+OFF lights the crypt the way the streets are lit; CLASSIC on the **CRYPT**
+row is the interior as it stood before, whole.
 
 ## What a ledge is — the LEDGES row
 

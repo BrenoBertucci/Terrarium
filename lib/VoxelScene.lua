@@ -29,6 +29,14 @@ local Water = V.require("Water")
 local WaterBody = V.require("WaterBody")
 local FloorArt = V.require("FloorArt")
 local Underpass = V.require("Underpass")
+local Crypt = V.require("Crypt")
+local VoxelGrid = V.require("VoxelGrid")
+local RayFX = V.require("RayFX")
+
+-- whether THIS module is the one holding the voxel wireframe off (the
+-- crypt's materials, below); a battle holds it ON through the same knob
+-- and must get it back untouched
+local gridHeld = false
 local Roamer = V.require("Roamer")
 local StreetLamps = V.require("StreetLamps")
 local Skyline = V.require("Skyline")
@@ -1233,6 +1241,40 @@ function VoxelScene.render(state, w, h, vw, vh, paletteFor)
       Voxel3D.tint = { t[1] * k * 0.92, t[2] * k * 0.96, t[3] * k * 1.06 }
     end
   end
+  -- The tower of graves, inside (lib/Crypt.lua): the same lesson as the
+  -- passage. A crypt lit flat is a grey room; held down and cooled, the
+  -- lanterns below have something to push back against, and the stone
+  -- the kit stands (lib/CryptKit.lua) reads as stone.
+  local crypt = (not outdoor) and Crypt.matches(state.map)
+  if crypt then
+    Voxel3D.tint = Crypt.ambient(state.map, Voxel3D.tint)
+    -- the noon rig's shadow from nowhere, held down: the lanterns and
+    -- the occlusion own this room's dark
+    Voxel3D.SHADOW_ALPHA = (Voxel3D.SHADOW_ALPHA or 0) * Crypt.SHADOW_SCALE
+  end
+  Crypt.setMap(crypt and state.map or nil)
+  -- and RayFX's ambient occlusion, asked for at least at its own rung and
+  -- harder than the streets' while the materials are on (a crypt is
+  -- corners); nothing asked for anywhere else
+  local cryptFx = crypt and Crypt.fxOn()
+  RayFX.floor = cryptFx and "ao" or nil
+  Voxel3D.aoPower = cryptFx and Crypt.AO.power or nil
+  Voxel3D.aoRange = cryptFx and Crypt.AO.range or nil
+  -- The voxel wireframe is the diorama's own signature, and it is the one
+  -- thing the crypt's materials (the CRYPT-FX row) cannot share a surface
+  -- with: graph paper ruled over weathered stone. So the frame is drawn
+  -- with the plain shader while the materials are on -- through the same
+  -- override the battle uses to hold the grid ON, and only when nobody
+  -- else is holding it.
+  if crypt and Crypt.fxOn() then
+    if VoxelGrid.override == nil then
+      VoxelGrid.override = false
+      gridHeld = true
+    end
+  elseif gridHeld then
+    VoxelGrid.override = nil
+    gridHeld = false
+  end
   -- and the window glass: the tileset's own panes (found in its art --
   -- GlassMask), lit after dark. Outdoors only, like everything the clock
   -- touches, which also keeps any pane-shaped art in an interior tileset
@@ -1241,6 +1283,13 @@ function VoxelScene.render(state, w, h, vw, vh, paletteFor)
   Voxel3D.glassMask = outdoor and GlassMask.texture(state.map.tileset) or nil
   Voxel3D.glassNight = outdoor and DayNight.windowLight() or 0
   Voxel3D.lampColor = DayNight.lampColor()
+  -- the crypt's light off until the crypt branch below turns it on: these
+  -- are per-frame facts, and one left over is a wet street at noon
+  Voxel3D.lampNormals = 0
+  Voxel3D.lampSpec = 0
+  Voxel3D.mist = nil
+  Voxel3D.mistColor = nil
+  Voxel3D.stone = nil
   -- Send only the nearby active posts to the shader.  This belongs before
   -- beginScene: the ground is the first mesh drawn and must receive the same
   -- warm pools as the post itself.
@@ -1283,6 +1332,30 @@ function VoxelScene.render(state, w, h, vw, vh, paletteFor)
     -- flat zero: a tube on a ballast does not wander, and the uniform being
     -- constant is also what folds the flicker's sin() away
     Voxel3D.lampFlicker = Underpass.FLICKER
+  elseif crypt then
+    -- A CRYPT IS LIT BY CANDLES. The lanterns the kit hangs on the walls
+    -- (their sites are lib/Crypt.lua's table, shared with the geometry so
+    -- a pool always has a flame over it): warm, and breathing on the gas
+    -- clock like the street's own posts.
+    local ok, lamps = pcall(Crypt.lights, state.map, cx, cy)
+    Voxel3D.lampLights = ok and lamps or nil
+    Voxel3D.lampHeight = Crypt.HEIGHT
+    Voxel3D.lampColor = Crypt.COLOR
+    Voxel3D.lampCore = Crypt.CORE
+    Voxel3D.lampFlicker =
+      ((love.timer and love.timer.getTime and love.timer.getTime() or 0)
+       * 2.4) % 6283.185
+    -- and the CRYPT-FX row's share of the light: the lanterns lighting
+    -- every flank by its real face, the sheen, the mist (see the uniforms
+    -- in Voxel3D)
+    local fx = Crypt.fxOn()
+    Voxel3D.lampNormals = fx and 1 or 0
+    Voxel3D.lampSpec = fx and Crypt.SPEC or 0
+    local okM, m, mc = pcall(Crypt.mistFor, state.map)
+    Voxel3D.mist = (okM and m) or nil
+    Voxel3D.mistColor = (okM and mc) or nil
+    local okS, st = pcall(Crypt.stoneFor)
+    Voxel3D.stone = (okS and st) or nil
   else
     Voxel3D.lampLights = nil
     Voxel3D.lampFlicker = 0
@@ -1805,10 +1878,26 @@ function VoxelScene.render(state, w, h, vw, vh, paletteFor)
       pcall(GhostFX.drawWorld)
     end
   end
+  -- and, inside the tower of graves, the flames in the lanterns: cards
+  -- flattened toward their own glow, last, with depth writes off
+  pcall(Crypt.drawWorld)
   Voxel3D.glass(true)
   Voxel3D.seams(true)
 
-  return Voxel3D.endScene()
+  local out = Voxel3D.endScene()
+  -- The crypt's bloom, on the finished diorama and IN PLACE: what the
+  -- overlay draws on next is this same canvas, so the radar and the 2D
+  -- effects stay sharp over it. Here rather than as a pipeline because
+  -- it belongs to one room, not to the frame.
+  if out and Crypt.matches(state.map) and Crypt.fxOn() then
+    local okB, Bloom = pcall(V.require, "Bloom")
+    if okB and Bloom then
+      local ow, oh = out:getDimensions()
+      local okO, opts = pcall(Crypt.bloomOpts, state.map, ow, oh)
+      pcall(Bloom.apply, out, (okO and opts) or Crypt.BLOOM)
+    end
+  end
+  return out
 end
 
 return VoxelScene
