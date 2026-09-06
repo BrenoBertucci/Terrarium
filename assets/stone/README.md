@@ -19,5 +19,10 @@ the wall's albedo by 1.94 and the granite's by 2.2 to bring a mean of
 0.515 / 0.45 back to unity, so the art is the DETAIL and the geometry's own
 light stays the tone).
 
+The wall's HEIGHT (`crypt_wall_h.png`) is not only a bump: `lib/CryptKit.lua`
+stands each stone of it in depth -- proud of its joint, two voxels into the
+room at the highest -- so replacing the albedo without the height, or the
+other way around, will leave the silhouette disagreeing with the picture.
+
 Drop-in contract like the rest of `assets/`: replace a file and it is used,
 delete the wall's and the materials fall back to plain stone.

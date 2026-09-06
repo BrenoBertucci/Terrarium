@@ -94,15 +94,18 @@ local HALL = {
   { 8, 12, "e" }, { 13, 12, "w" },    -- standing lanterns on the low walls
 }
 
+-- (the ambient came down a step when the lanterns went up -- see RADIUS
+-- and POWER below: a candle-lit room is dark BETWEEN the candles, and the
+-- pools only read as pools against that)
 Crypt.MAPS = {
-  POKEMON_TOWER_1F = { sites = OCTAGON, ambient = 0.62, haunted = false },
-  POKEMON_TOWER_2F = { sites = OCTAGON, ambient = 0.56, haunted = false },
-  POKEMON_TOWER_3F = { sites = OCTAGON, ambient = 0.48, haunted = true },
-  POKEMON_TOWER_4F = { sites = OCTAGON, ambient = 0.46, haunted = true },
-  POKEMON_TOWER_5F = { sites = OCTAGON, ambient = 0.46, haunted = true },
-  POKEMON_TOWER_6F = { sites = OCTAGON, ambient = 0.42, haunted = true },
-  POKEMON_TOWER_7F = { sites = HALL, ambient = 0.54, haunted = false },
-  AGATHAS_ROOM = { sites = {}, ambient = 0.68, haunted = true },
+  POKEMON_TOWER_1F = { sites = OCTAGON, ambient = 0.50, haunted = false },
+  POKEMON_TOWER_2F = { sites = OCTAGON, ambient = 0.46, haunted = false },
+  POKEMON_TOWER_3F = { sites = OCTAGON, ambient = 0.41, haunted = true },
+  POKEMON_TOWER_4F = { sites = OCTAGON, ambient = 0.39, haunted = true },
+  POKEMON_TOWER_5F = { sites = OCTAGON, ambient = 0.39, haunted = true },
+  POKEMON_TOWER_6F = { sites = OCTAGON, ambient = 0.35, haunted = true },
+  POKEMON_TOWER_7F = { sites = HALL, ambient = 0.45, haunted = false },
+  AGATHAS_ROOM = { sites = {}, ambient = 0.56, haunted = true },
 }
 
 -- The tileset every one of them draws with. A map on it that the table
@@ -113,8 +116,8 @@ Crypt.DEFAULT = { sites = {}, ambient = 0.62, haunted = false }
 
 -- ------------------------------------------------------------- the light --
 
-Crypt.RADIUS = 104            -- how far a lantern's pool reaches, world px
-Crypt.POWER = 1.45            -- and how hard it burns at the flame
+Crypt.RADIUS = 136            -- how far a lantern's pool reaches, world px
+Crypt.POWER = 2.6             -- and how hard it burns at the flame
 Crypt.HEIGHT = 25             -- world y of a sconce's flame
 Crypt.COLOR = { 1.00, 0.72, 0.40 }   -- candle amber at the rim of a pool
 Crypt.CORE = { 1.00, 0.94, 0.78 }    -- near-white under the flame
@@ -135,7 +138,7 @@ Crypt.MIST_HAUNTED = { amount = 0.58, height = 16, scale = 24,
                        color = { 0.60, 0.52, 0.76 } }
 -- the bloom: what counts as a light (luminance over this), how much of
 -- it comes back, and the reduction the blur runs at
-Crypt.BLOOM = { threshold = 0.82, strength = 0.46, div = 4, passes = 1 }
+Crypt.BLOOM = { threshold = 0.82, strength = 0.52, div = 4, passes = 1 }
 
 -- the materials (see the uniforms): the two surfaces in assets/stone/ with
 -- their relief maps (tools: make_stone2.py bakes albedo and normal from one
@@ -145,26 +148,39 @@ Crypt.STONE = { dir = "assets/stone/",
                 -- Poly Haven's castle_wall_slates and granite_tile_03 (CC0),
                 -- graded for the crypt: see assets/stone/README.md
                 wall = "crypt_wall.jpg", wallNorm = "crypt_wall_n.jpg",
-                -- and the same wall's HEIGHT, 8-bit: the kit carves the
-                -- ring's faces by it, so the voxels stand where the
-                -- photograph's stones stand (lib/CryptKit.lua)
+                -- and the same wall's HEIGHT, 8-bit: the kit stands each
+                -- stone of it in DEPTH -- proud of its joint, two voxels
+                -- into the room at the highest -- so the voxels, the
+                -- albedo and the relief map describe the same stones
+                -- (lib/CryptKit.lua)
                 wallHeight = "crypt_wall_h.png",
                 granite = "crypt_granite.jpg",
                 graniteNorm = "crypt_granite_n.jpg",
                 -- the granite is one slab's interior and does not tile; a
                 -- mirror is invisible on speckle
                 graniteWrap = "mirroredrepeat",
-                scale = 256, mix = 0.94, bump = 1.15 }
+                scale = 256, mix = 0.94, bump = 1.15,
+                -- the hemisphere: how much less of the room's fill a face
+                -- gets for looking along instead of up -- read off the
+                -- relief maps too, so the stone keeps a grain in the fill
+                -- light and not only under a flame (see `stoneHemi`)
+                hemi = 0.60 }
 
 -- RayFX's ambient occlusion, asked for whatever the RTX row says (at least
 -- the `ao` rung), and harder and closer than the streets': a crypt is
--- corners, and the shading in them is what makes the stone solid
--- (2.9 with the carved walls turned every joint into a black stain; the
--- relief already shades itself)
-Crypt.AO = { power = 2.0, range = 12 }
--- the sun pass indoors is the noon rig's shadow from nowhere; held down so
--- the lanterns and the occlusion own the dark
-Crypt.SHADOW_SCALE = 0.45
+-- corners, and the shading in them is what makes the stone solid.
+-- The walls now stand their stones in DEPTH (lib/CryptKit.lua: proud
+-- stones, recessed joints, a chamfered octagon), so the relief already
+-- shades itself -- 2.9 turned every joint into a black stain, 2.0 still
+-- dirtied the mortar once the stones were two voxels proud; 1.75 (up
+-- from 1.55 once the wall lost its black core) lets the lanterns rake
+-- the sides of a stone without filling the joint.
+Crypt.AO = { power = 1.75, range = 12 }
+-- the sun pass indoors is the noon rig's shadow from nowhere: OFF. There
+-- is no sun in a crypt; the lanterns, the hemisphere and the occlusion
+-- own the dark (and the shadow map's fetches are not paid for a light
+-- that is not there)
+Crypt.SHADOW_SCALE = 0
 
 local stoneImgs = {}          -- file -> Image | false
 
@@ -204,13 +220,16 @@ function Crypt.stoneFor()
            granite = loadStone(Crypt.STONE.granite, gw) or art,
            graniteNorm = loadStone(Crypt.STONE.graniteNorm, gw),
            scale = Crypt.STONE.scale, mix = Crypt.STONE.mix,
-           bump = Crypt.STONE.bump }
+           bump = Crypt.STONE.bump, hemi = Crypt.STONE.hemi }
 end
 
 -- ------- the post pass (lib/Bloom.lua): rays off the lanterns, the grade
 Crypt.RAYS = { decay = 0.90, weight = 0.32, max = 4 }
--- exposure 1: the curve keeps black black and only steepens the middle
-Crypt.GRADE = { exposure = 1.0, vignette = 0.50, grain = 0.016, tone = 0.4 }
+-- exposure 1: the curve keeps black black and only steepens the middle;
+-- `split` leans the darks toward the crypt's cool violet and the lights
+-- toward the flame -- the room's two lights, finishing the frame
+Crypt.GRADE = { exposure = 1.0, vignette = 0.52, grain = 0.016, tone = 0.42,
+                split = 0.55 }
 
 -- What the post pass needs this frame: the bloom's numbers, the lanterns'
 -- places on the canvas (for the rays; the nearest few to the centre), the

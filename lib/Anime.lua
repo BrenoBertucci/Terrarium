@@ -138,7 +138,17 @@ Anime.EDGE_BIAS = 0.020
 
 -- ------- what the rest of the mod asks
 
+-- Held OFF from outside (nil = the row decides). The crypt's materials
+-- (lib/Crypt.lua, the CRYPT-FX row) cannot share a surface with the cel
+-- step -- four bands of light dithered over photographed stone -- so
+-- VoxelScene holds this false inside the tower of graves while that row
+-- is on, the way it holds the wireframe, and lets go on the way out. The
+-- scene shader's variant is keyed on `cel`, so the two builds sit side by
+-- side in its cache and the hold costs no recompile.
+Anime.override = nil
+
 function Anime.level()
+  if Anime.override == false then return "off" end
   local ok, v = pcall(Anime.setting.get, Anime.setting)
   if ok and (v == "off" or v == "cel" or v == "full") then return v end
   return "off"

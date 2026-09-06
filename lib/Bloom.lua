@@ -101,6 +101,7 @@ local GRADE = [[
   uniform float grain;
   uniform float time;
   uniform float tone;        // the S-curve's strength, 0 = leave the curve alone
+  uniform float split;       // split tone: darks cool, lights warm; 0 = none
   // Contrast that keeps black black: a smoothstep S-curve mixed in by
   // `tone`, plus a soft shoulder over 1.0 so a flame's core rolls off to
   // white instead of clipping. (The ACES fit was tried here and lifted the
@@ -121,6 +122,13 @@ local GRADE = [[
     vec3 rgb = c.rgb + Texel(glow, tc).rgb * glowK;
     rgb *= exposure;
     rgb = curve(rgb);
+    // the split tone: what is dark leans to the crypt's cool violet,
+    // what is lit leans to the flame -- the room's two lights, agreed on
+    // by the whole frame rather than met surface by surface
+    float l = dot(rgb, vec3(0.2126, 0.7152, 0.0722));
+    vec3 lean = mix(vec3(0.90, 0.92, 1.10), vec3(1.08, 1.00, 0.90),
+                    smoothstep(0.12, 0.70, l));
+    rgb *= mix(vec3(1.0), lean, split);
     // the vignette: the corners fall away, the middle untouched
     vec2 q = tc - 0.5;
     float d = dot(q, q) * 2.4;
@@ -267,6 +275,7 @@ function Bloom.apply(canvas, opts)
       pcall(sg.send, sg, "vignette", tonumber(grade.vignette) or 0)
       pcall(sg.send, sg, "grain", tonumber(grade.grain) or 0)
       pcall(sg.send, sg, "tone", tonumber(grade.tone) or 0.35)
+      pcall(sg.send, sg, "split", tonumber(grade.split) or 0)
       pcall(sg.send, sg, "time",
             ((love.timer and love.timer.getTime and love.timer.getTime()) or 0) % 100)
       g.draw(canvas)

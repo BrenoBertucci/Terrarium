@@ -20,11 +20,138 @@ The old `-mobile` channel is retired. Historical tags keep it (`v1.28.0-mobile` 
 
 Tags and packages:
 
-- Git tag: `v1.30.0`
-- Zip asset: `TERRARIUM-1.30.0.zip`
-- `manifest.json` / catalog `version` field: `1.30.0`
+- Git tag: `v1.30.1`
+- Zip asset: `TERRARIUM-1.30.1.zip`
+- `manifest.json` / catalog `version` field: `1.30.1`
 
-## Unreleased
+## 1.30.1
+
+### The 3D mode could not come up at all on a family of Android GPUs (`lib/Voxel3D.lua`, `main.lua`, `tests/gpu_compat_probe.lua`)
+
+Reported by Android players: the mod installed, the OPTIONS row read ON, and
+the game stayed flat. No error, no crash, nothing in any log. One of them had
+already found the shape of it -- *"i think it had something to do with adreno
+gpu"* -- and was right.
+
+`Voxel3D.available()` is exactly `Voxel3D.shader() ~= nil`, and the scene
+shader is one 26 KB monolith with 104 uniforms. Any single construct a driver
+refuses took the whole diorama with it, in silence -- and the engine offers a
+pipeline's row whether or not the hardware can run it (see the note over
+`stagedBattles`), so the menu went on saying ON for a mode that had already
+decided not to run. There was no way for a player to tell that apart from a
+bad install, which is what they all assumed it was.
+
+Two constructs in that shader are refusable by a conformant GLES2 driver, and
+both of them shipped:
+
+- **The vertex stage samples three textures** -- `waterField`, `crushMap`,
+  `wearMap`. GLES2 is allowed to expose ZERO vertex texture image units. The
+  note over `waterField` knew that and designed the data around it, on the
+  belief that a fetch which cannot happen reads `vec4(0)`. It does not: a
+  vertex shader that samples on such a driver **fails to link**, and the mode
+  is gone before any value is read. Every build since v1.21.0 -- the wear
+  field, 2026-08-17 -- carried this.
+- **Ten samplers bound to the fragment stage** where GLES2 guarantees eight,
+  since the crypt's five photographic materials landed in v1.30.0.
+
+Three changes:
+
+- **A ladder instead of a veto.** Both constructs are compile-time features
+  now (`VERTEX_TEX`, `CRYPT_MATS`), and `Voxel3D.shader()` walks down: full,
+  then without the vertex taps, then without the crypt's stone, then without
+  either. Only the bottom rung failing means no 3D. What a fallen rung costs
+  is the footprints and the remembered wear, or the Tower interior's
+  photographed granite -- not the mode. The rung is sticky and global, so the
+  arena and the overworld cannot land on different ones.
+- **It says so.** `Voxel3D.report()` gives the GPU, the driver, the caps, the
+  rung it settled on, and the driver's own words for every refusal.
+  `main.lua` prints it -- stdout is logcat on Android -- and writes
+  `TERRARIUM-gpu-report.txt` beside the save, once per session, and only when
+  there is something to say. A device that takes the full build stays silent.
+- **The fallback is tested, not hoped for.** `tests/gpu_compat_probe.lua`
+  builds all four rungs every run (a desktop GL takes rung 1, so a GLSL error
+  inside an `#ifdef` that only fires on the devices which NEED the fallback
+  would ship undetected -- the same class of bug over again), then stands a
+  fake driver in front of the real ladder that refuses exactly what an Adreno
+  part refuses, and checks where it lands. That is the only honest answer
+  available here: none of the hardware this was written on has the GPU that
+  motivated it.
+
+
+### The crypt's ring is one wall (`lib/CryptKit.lua`, `lib/Buildings.lua`, `lib/Crypt.lua`)
+
+- The ring inside the Pokemon Tower was a stack of 16px crates. Each cell
+  was its own model and emitted all four of its sides in full, so wherever
+  a neighbour stood shorter (the dollhouse cut steps 88 -> 72 -> 52 -> 34
+  -> 20 -> 14 down the east and west walls) or ended, the seam showed: a
+  lit strip of the white stone class two voxels wide with the wall's black
+  core behind it, at every step and at the end of every run -- and the
+  emitter's baked shade lit those south-facing strips at 1.0 against the
+  wall's own flanks at 0.78, a sun standing to the south of a room with no
+  sun. Three things fix it:
+  - `Buildings.emit` accepts a PHANTOM voxel (any negative index): there
+    for the hidden-face test and the corner AO, never drawn. The kit's
+    signature now says what each side of a cell faces -- the room, another
+    wall cell, the dark -- and past a side another wall cell stands on the
+    model answers that cell's masonry as phantoms, computed by the same
+    world-phased formula, so the two agree to the voxel and no face is
+    emitted where two cells touch. `Buildings.emit` also hands `tint` the
+    face's direction and the shade it would have had; the crypt gives
+    every flank the same share whichever way it turns (`CryptKit.SIDE`),
+    so it is the lanterns and the occlusion that say which way a face
+    looks.
+  - The wall is stone through and through -- no black `mass` core. Whatever
+    face of it a camera finds is a face of stone, and on any wall under the
+    tall band the outside faces are carved like the inside ones (the camera
+    looks over and past those).
+  - The cut is a RAMP, not stairs: along the run the top runs from the
+    cell's own row height to its neighbours' (the signature carries both),
+    two cells meeting at the mean of theirs, a two-row coping of stone
+    riding the cut through the wall's whole thickness, its stones a voxel
+    up or down in six-pixel stones so the top is a wall's top and not a
+    ruled line. A wall ending at the room ends square; a cell with a
+    standing lantern keeps its top flat under it. The fade to black is
+    absolute (row 28 up to the tall band's 88) rather than per cell, so a
+    cut wall's top stays in whatever light the tall wall has left at that
+    height.
+- Every stone of the photograph still stands in DEPTH with CRYPT-FX on
+  (two voxels proud at the highest, one back at the mortar, off
+  `crypt_wall_h.png`), two-face cells still chamfer to the octagon, the
+  plinth batters, tall walls lean back; and the drawn ashlar's courses and
+  joints now fall in WORLD units along the face, so a joint falls where
+  the next cell's joint falls.
+- The headstones' drawing kept its checker crown and ink rim, and on a
+  16px stone that checker of white and grey was the first thing the eye
+  read -- and the shader dressed its white half in wall. The crown and the
+  rim are the panel's own greys now (the rim the darker: a weathered edge
+  in shadow), the sides and the posts too; the bands and the lettering
+  stay. Their flanks take the same directionless share as the walls.
+
+### The crypt is lit like a crypt (`lib/Crypt.lua`, `lib/Voxel3D.lua`, `lib/Bloom.lua`, `lib/Anime.lua`, `lib/VoxelScene.lua`)
+
+- No sun indoors: the noon rig's shadow from nowhere is off inside the
+  tower (`Crypt.SHADOW_SCALE` 0), which also spares the shadow map's
+  fetches. In its place a HEMISPHERE (`stoneHemi`): a face that looks up
+  takes the whole of the room's fill and one that looks along takes less,
+  read through the relief maps, so the stone keeps a grain between the
+  lanterns and not only under a flame. The lanterns reach further and
+  burn harder (radius 104 -> 136, power 1.45 -> 2.6) and the ambient came
+  down a step on every floor (1F 0.62 -> 0.50, 6F 0.42 -> 0.35) to give the
+  pools something to read against. RayFX's indoor occlusion sits at 1.75
+  (it was 2.9 when every joint went black; the wall has no black core to
+  stain now).
+- A slow drift of tone across the wall photograph on a scale no cycle of
+  it has, so the eye never finds the repeat; a split tone in the grade
+  (`Bloom`): the darks lean to the crypt's cool violet, the lights to the
+  flame. Bloom 0.46 -> 0.52.
+- The ANIME row's cel step is held OFF inside the tower while CRYPT-FX is
+  on (`Anime.override`, the way the wireframe is held): four bands of
+  light dithered over photographed stone was the checkerboard on every
+  bright surface in the crypt for anyone playing on CEL or FULL. It lets
+  go on the way out; the shader variant is keyed on it, so no recompile.
+- `tests/tower_interior_probe.lua` pins ANIME to FULL and checks the hold,
+  and checks the occlusion at the crypt's own number (`Crypt.AO.power`)
+  instead of "harder than the streets'", which stopped being the point.
 
 ## 1.30.0
 
