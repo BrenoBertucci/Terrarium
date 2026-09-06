@@ -926,6 +926,16 @@ end
 -- face) or ADJACENT IN THE ATLAS along the run (the drawing continuing
 -- across the face, which is most of a front face or a roof top). Both keep
 -- every texel exactly where the sprite put it.
+-- A model may answer `at` with a PHANTOM: a voxel that is THERE for the
+-- hidden-face test and the corner AO -- the next cell's masonry, which the
+-- kit computes with the same formula so the two agree to the voxel -- but
+-- is never drawn, because the next cell draws it. It is what lets a wall
+-- made of one model per cell stand as one wall: without it every cell
+-- emitted its four sides in full, and wherever a neighbour was shorter or
+-- carved differently the seam showed as a lit strip (lib/CryptKit.lua).
+-- Any negative index is a phantom.
+Buildings.PHANTOM = -1
+
 local function emit(m, sp, atlasW, atlasH)
   local W = m.W
   local quads = { voxels = 0, shell = 0 }
@@ -954,7 +964,7 @@ local function emit(m, sp, atlasW, atlasH)
       for x = xmin, xmax do
         local v = m.at(x, y, z)
         cell[base + x] = v
-        if v then quads.voxels = quads.voxels + 1 end
+        if v and v >= 0 then quads.voxels = quads.voxels + 1 end
       end
     end
   end
@@ -966,7 +976,8 @@ local function emit(m, sp, atlasW, atlasH)
     Budget.tick()
     for z = zmin, zmax do
       for x = xmin, xmax do
-        if ci(x, y, z) and not (ci(x + 1, y, z) and ci(x - 1, y, z)
+        local v = ci(x, y, z)
+        if v and v >= 0 and not (ci(x + 1, y, z) and ci(x - 1, y, z)
             and ci(x, y + 1, z) and ci(x, y - 1, z)
             and ci(x, y, z + 1) and ci(x, y, z - 1)) then
           quads.shell = quads.shell + 1
@@ -1008,10 +1019,15 @@ local function emit(m, sp, atlasW, atlasH)
   -- pale lavender comes out as dark stone without repainting a texel.
   -- Taken before the corner AO so the two compound; a model without one
   -- draws exactly as before.
+  -- The tint is also told which way the face looks (`dir`: s, n, e, w,
+  -- up, down) and the shade it would have had, so a model lit by lamps
+  -- rather than by the sun (the crypt) can hand back the same share to
+  -- every flank: SHADE's south/north/side is a sun standing to the south,
+  -- and indoors that sun is what made a cut wall's end glow.
   local tintOf = m.tint
-  local function lit(shade, y, i)
+  local function lit(shade, y, i, dir)
     if not tintOf then return shade end
-    return shade * tintOf(y, i)
+    return shade * tintOf(y, i, dir, shade)
   end
 
   -- u/v of a run: `n` texels starting at sprite pixel `i`, stepping along
@@ -1037,7 +1053,7 @@ local function emit(m, sp, atlasW, atlasH)
       if n > xn then break end
       local nx = x + n
       local i = ci(nx, y, z)
-      if not i or ci(nx + dx, y + dy, z + dz) then break end
+      if not i or i < 0 or ci(nx + dx, y + dy, z + dz) then break end
       local prev = ci(nx - 1, y, z)
       if sp.ay[i] ~= sp.ay[prev] then break end
       local d = sp.ax[i] - sp.ax[prev]
@@ -1064,7 +1080,8 @@ local function emit(m, sp, atlasW, atlasH)
       for z = zmin, zmax do
         local x = xmin
         while x <= xmax do
-          if ci(x, y, z) and not ci(x, y, z + d) then
+          local v = ci(x, y, z)
+          if v and v >= 0 and not ci(x, y, z + d) then
             local i, strip, n = runX(y, z, 0, 0, d, x)
             local u0, u1, v0, v1 = uvOf(i, strip, n)
             local zf = d == 1 and (z + 1) or z
@@ -1081,12 +1098,12 @@ local function emit(m, sp, atlasW, atlasH)
               put({ x, y, zf }, { x + n, y, zf },
                   { x + n, y + 1, zf }, { x, y + 1, zf },
                   { { u0, v1 }, { u1, v1 }, { u1, v0 }, { u0, v0 } },
-                  shades(lit(shade, y, i), sBL, sBR, sTR, sTL))
+                  shades(lit(shade, y, i, "s"), sBL, sBR, sTR, sTL))
             else
               put({ x + n, y, zf }, { x, y, zf },
                   { x, y + 1, zf }, { x + n, y + 1, zf },
                   { { u1, v1 }, { u0, v1 }, { u0, v0 }, { u1, v0 } },
-                  shades(lit(shade, y, i), sBR, sBL, sTL, sTR))
+                  shades(lit(shade, y, i, "n"), sBR, sBL, sTL, sTR))
             end
             x = x + n
           else
@@ -1108,7 +1125,8 @@ local function emit(m, sp, atlasW, atlasH)
         for z = zmin, zmax do
           local x = xmin
           while x <= xmax do
-            if ci(x, y, z) and not ci(x, y + d, z) then
+            local v = ci(x, y, z)
+            if v and v >= 0 and not ci(x, y + d, z) then
               local i, strip, n = runX(y, z, 0, d, 0, x)
               local u0, u1, v0, v1 = uvOf(i, strip, n)
               local yf = d == 1 and (y + 1) or y
@@ -1125,12 +1143,12 @@ local function emit(m, sp, atlasW, atlasH)
                 put({ x, yf, z }, { x + n, yf, z },
                     { x + n, yf, z + 1 }, { x, yf, z + 1 },
                     { { u0, v0 }, { u1, v0 }, { u1, v1 }, { u0, v1 } },
-                    shades(lit(shade, y, i), f1, f2, f3, f4))
+                    shades(lit(shade, y, i, "up"), f1, f2, f3, f4))
               else
                 put({ x, yf, z + 1 }, { x + n, yf, z + 1 },
                     { x + n, yf, z }, { x, yf, z },
                     { { u0, v1 }, { u1, v1 }, { u1, v0 }, { u0, v0 } },
-                    shades(lit(shade, y, i), f4, f3, f2, f1))
+                    shades(lit(shade, y, i, "down"), f4, f3, f2, f1))
               end
               x = x + n
             else
@@ -1150,7 +1168,7 @@ local function emit(m, sp, atlasW, atlasH)
         local z = zmin
         while z <= zmax do
           local i = ci(x, y, z)
-          if i and not ci(x + d, y, z) then
+          if i and i >= 0 and not ci(x + d, y, z) then
             local n = 1
             while z + n <= zmax do
               local j = ci(x, y, z + n)
@@ -1172,12 +1190,12 @@ local function emit(m, sp, atlasW, atlasH)
               put({ xf, y, z + n }, { xf, y, z },
                   { xf, y + 1, z }, { xf, y + 1, z + n },
                   { { u0, v1 }, { u1, v1 }, { u1, v0 }, { u0, v0 } },
-                  shades(lit(SHADE.side, y, i), fBn, fB0, fT0, fTn))
+                  shades(lit(SHADE.side, y, i, "e"), fBn, fB0, fT0, fTn))
             else
               put({ xf, y, z }, { xf, y, z + n },
                   { xf, y + 1, z + n }, { xf, y + 1, z },
                   { { u0, v1 }, { u1, v1 }, { u1, v0 }, { u0, v0 } },
-                  shades(lit(SHADE.side, y, i), fB0, fBn, fTn, fT0))
+                  shades(lit(SHADE.side, y, i, "w"), fB0, fBn, fTn, fT0))
             end
             z = z + n
           else

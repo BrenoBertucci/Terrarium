@@ -67,13 +67,17 @@ return function(game)
   local ChunkMesher = lib.require("ChunkMesher")
   local FloorArt = lib.require("FloorArt")
   local Bloom = lib.require("Bloom")
+  local Anime = lib.require("Anime")
   local Pipelines = require("src.render.Pipelines")
   Pipelines.setLevel("terrarium_voxel", 4)
   Pipelines.setLevel("terrarium_tiltshift", 0)
 
-  -- Pin everything that would make two runs disagree.
+  -- Pin everything that would make two runs disagree. ANIME on FULL (the
+  -- player's own setting): the crypt must hold the cel step OFF for its
+  -- materials and let it back on the way out.
   CryptKit.setting:sync("new")
   Crypt.fxSetting:sync("on")
+  Anime.setting:sync("full")
   GhostFX.setting:sync("on")
   Weather.setting:sync("off")
   DayNight.setting:sync("day")
@@ -270,9 +274,16 @@ return function(game)
     log(("  rayfx: level=%s floor=%s aoPower=%s rays=%d bloomErr=%s"):format(
         RayFX.level(), tostring(RayFX.floor), tostring(Voxel3D.aoPower),
         Bloom.lastRays, tostring(Bloom.lastError)))
-    check(RayFX.level() ~= "off" and (Voxel3D.aoPower or 0) > RayFX.AO_POWER,
-          name .. ": the occlusion runs, harder than the streets'")
+    check(RayFX.level() ~= "off" and Voxel3D.aoPower == Crypt.AO.power,
+          name .. ": the occlusion runs at the crypt's own number")
     check(Bloom.lastRays > 0, name .. ": the rays march from the lanterns")
+    log(("  anime: level=%s override=%s stoneHemi=%s shadowAlpha=%s"):format(
+        Anime.level(), tostring(Anime.override),
+        tostring(Voxel3D.stone and Voxel3D.stone.hemi), tostring(Voxel3D.SHADOW_ALPHA)))
+    check(Anime.level() == "off" and Anime.override == false,
+          name .. ": the cel step is held off for the materials")
+    check(Voxel3D.stone ~= nil and (Voxel3D.stone.hemi or 0) > 0,
+          name .. ": the hemisphere is on")
     releaseDirs()
     check(shot(name), name .. ": screenshot")
   end
@@ -313,6 +324,8 @@ return function(game)
   arrive("POKEMON_TOWER_1F", 10, 8)
   check(Voxel3D.lampNormals == 0 and Voxel3D.mist == nil,
         "CRYPT-FX off clears the uniforms")
+  check(Anime.level() == "full" and Anime.override == nil,
+        "CRYPT-FX off lets the cel step back")
   shot("t1f_nofx")
   arrive("POKEMON_TOWER_4F", 4, 8)
   shot("t4f_nofx")

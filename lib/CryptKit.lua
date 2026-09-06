@@ -15,20 +15,44 @@
 -- grid, read from the atlas by Buildings.read, uploaded by Buildings.emit):
 --
 --   WALL    every ring cell that touches the room stands as a tall wall of
---           ashlar -- courses of blocks, staggered joints, a proud plinth,
---           a string course, a pilaster at every corner the ring turns --
---           and it is lit rather than painted: `tint` holds the drawing's
---           WHITE down to grey stone and lets the top rows fall to black,
---           so the far walls climb out of the light and no ceiling is
---           needed. The near walls are cut down to a parapet with a coping
---           (the dollhouse cut), so the fixed camera at the south looks
---           over them; how tall a row stands is lib/Crypt.lua's to say.
---           A cell the lantern table names carries an iron bracket and a
---           lantern at exactly the point the scene shader burns its light.
+--           stone, and it is ONE wall: a cell knows what stands beside it
+--           (the room, another wall cell, the dark) and builds its share
+--           to meet it -- the next cell's masonry is answered to the
+--           hidden-face test as a PHANTOM (Buildings.emit), computed by
+--           the same formula, so no face is ever drawn where two cells
+--           touch. The ring used to be sixteen-pixel crates: each cell
+--           emitted its four sides in full and every seam where a
+--           neighbour was shorter, or carved differently, showed as a lit
+--           strip with a black core behind it. The wall is stone through
+--           and through now, whichever face of it a camera finds.
+--           Where the ring steps down toward the camera (the dollhouse
+--           cut, lib/Crypt.lua's height per row) the top RAMPS from one
+--           cell's height to the next instead of stepping, a course of
+--           coping rides the cut, and the coping is a little ragged, the
+--           way a wall's top is. The stone is lit rather than painted:
+--           `tint` holds the drawing's WHITE down to grey and lets the
+--           top rows fall to black, so the far walls climb out of the
+--           light and no ceiling is needed -- and every flank gets the
+--           SAME share whichever way it turns (the emitter's own south/
+--           north/side is a sun standing to the south; there is no sun in
+--           here), so it is the lanterns and the occlusion that say
+--           which way a face looks. A cell the lantern table names
+--           carries an iron bracket and a lantern at exactly the point
+--           the scene shader burns its light.
+--           With the photograph on (the CRYPT-FX row) every stone of the
+--           wall's height map stands proud of its joint -- two voxels
+--           into the room at the highest, one voxel back at the mortar --
+--           so the silhouette IS the picture the shader paints, not a box
+--           wearing it; two-face cells chamfer to a true octagon, the
+--           plinth batters into the room, tall walls lean back a voxel
+--           every few courses.
 --   GRAVE   a headstone as a solid: a plinth, the stone on it wearing its
---           own drawing (front AND back), the two small posts beside it.
---           Three variants by cell hash so a field of them is not a stamp;
---           on a haunted floor some report a `haunt` so lib/GhostFX.lua
+--           own drawing (front AND back) with the drawing's checker crown
+--           and ink rim turned to the same grey as its panel -- a checker
+--           of white and grey on a 16px stone is a pattern the eye reads
+--           before it reads the stone -- and the lettering kept. Three
+--           variants by cell hash so a field of them is not a stamp; on a
+--           haunted floor some report a `haunt` so lib/GhostFX.lua
 --           breathes wisps out of them.
 --   MASS    the grey stock beyond the ring, and the ring cells that never
 --           touch the room, go to a black slab: the crypt is walls standing
@@ -37,13 +61,14 @@
 --           plateau.)
 --
 -- Which cell gets which model is decided PER PLACEMENT: Buildings.build
--- asks `signature` for a short string (the wall's height band, which sides
--- face the room, a lantern side, a variant) and builds one model per
--- distinct signature, so a wall knows where the room is without the
--- template having to. Coordinates handed to `at` are the model's own:
--- x east, y up from the floor, z south (toward the camera), the cell 0..15
--- either way; a sconce overhangs the cell into the room the way a cornice
--- overhangs a facade -- never at ground level, where somebody walks.
+-- asks `signature` for a short string (the wall's height band and its two
+-- neighbours' along the run, what each side faces, a lantern side, a
+-- variant, the photograph's phase) and builds one model per distinct
+-- signature, so a wall knows where the room is without the template
+-- having to. Coordinates handed to `at` are the model's own: x east, y up
+-- from the floor, z south (toward the camera), the cell 0..15 either way;
+-- a sconce overhangs the cell into the room the way a cornice overhangs a
+-- facade -- never at ground level, where somebody walks.
 --
 -- Every visible voxel still wears a texel of the room's own atlas (the
 -- palette row a template composites above its drawing: the all-white tile
@@ -62,6 +87,10 @@ local Crypt = V.require("Crypt")
 local CryptKit = {}
 
 local floor, sin = math.floor, math.sin
+
+-- Buildings.PHANTOM: the next cell's voxel, present for the hidden-face
+-- test and never drawn (any negative index)
+local PHANTOM = -1
 
 -- ------------------------------------------------------------- the row --
 --
@@ -126,17 +155,24 @@ CryptKit.SHADE = {
   joint  = 0.26,    -- the mortar, and the vertical joints
   trim   = 0.62,    -- plinth top, string course, coping, capitals
   damp   = 0.34,    -- the plinth's face
-  mass   = 0.16,    -- faces that look into the dark
+  mass   = 0.16,    -- (kept for the classic slab's neighbours)
   glow   = 1.05,    -- the lantern's glass (the flame card carries the light)
   black  = 1.0,     -- ironwork and the void slab (black is black)
 }
-CryptKit.FADE_FROM = 30       -- rows above this climb out of the light ...
-CryptKit.FADE_TO = 0.05       -- ... down to this share at the top of a tall wall
+-- Every vertical face's share of the emitter's shade, whichever way it
+-- turns (see `tint`): the emitter's south is 1.0, its flanks 0.78, its
+-- north 0.68 -- a sun to the south, which a crypt has not got. The tops
+-- keep their own (0.95): what little fill there is comes from above.
+CryptKit.SIDE = 0.90
+CryptKit.FADE_FROM = 28       -- rows above this climb out of the light ...
+CryptKit.FADE_TO = 0.05       -- ... down to this share at the top of a TALL wall
 CryptKit.FOOT = 0.84          -- the damp foot: the lowest course's share
 CryptKit.COURSE = 8           -- an ashlar course, in voxels (7 stone + 1 joint)
 CryptKit.PLINTH = 5           -- the plinth's top row
 CryptKit.STRING = 40          -- the string course's first row (tall walls)
 CryptKit.CAP = 44             -- a pilaster's capital (walls tall enough)
+CryptKit.LOW = 34             -- a wall this low is a parapet: coping, no batter
+CryptKit.COPING = 2           -- rows of coping on every cut wall
 
 -- --------------------------------------------------------------- texels --
 --
@@ -171,6 +207,9 @@ end
 local ROOM = { [0x01] = true, [0x05] = true, [0x03] = true, [0x0B] = true,
                [0x02] = true, [0x1D] = true, [0x22] = true,
                [0x27] = true, [0x37] = true, [0x3D] = true }
+-- and the cells that are the RING itself, by the same tile: the chamber's
+-- wall panel and Agatha's band (the two templates below)
+local RING = { [0x09] = true, [0x20] = true }
 
 local function mapId(map)
   local def = map and map.def
@@ -179,6 +218,15 @@ end
 
 -- The short string one placement of template `t` builds under. `tileAt`
 -- reads the map in TILE coordinates; (tx, ty) is the placement's top-left.
+--
+--   w<H>:<n><e><s><w>:<site>:<seed>:<Hn>.<Hs>[:p<px>.<py>]
+--
+-- Each side is one of `r` (the room: a face, worn and lit), `w` (a wall
+-- cell that touches the room: the wall goes on, nothing to draw between
+-- the two) or `o` (open to the dark: the black slabs, the void past the
+-- map's edge -- a face, worn where the camera can see a wall's outside).
+-- Hn and Hs are the rows' heights to the north and the south, for the
+-- ramp a cut wall's top runs between them.
 function CryptKit.signature(t, tileAt, tx, ty, map)
   local kind = t.crypt
   if kind == "mass" then return "m" end
@@ -194,18 +242,25 @@ function CryptKit.signature(t, tileAt, tx, ty, map)
     local tile = tileAt(x, y)
     return tile ~= nil and ROOM[tile] == true
   end
-  local n = room(tx, ty - 2) and 1 or 0
-  local e = room(tx + 2, ty) and 1 or 0
-  local s = room(tx, ty + 2) and 1 or 0
-  local w = room(tx - 2, ty) and 1 or 0
+  local function touches(x, y)
+    if not RING[tileAt(x, y)] then return false end
+    return room(x, y - 2) or room(x + 2, y) or room(x, y + 2) or room(x - 2, y)
+  end
+  local function side(dx, dy)
+    if room(tx + dx, ty + dy) then return "r" end
+    if touches(tx + dx, ty + dy) then return "w" end
+    return "o"
+  end
+  local n, e, s, w = side(0, -2), side(2, 0), side(0, 2), side(-2, 0)
   -- a ring cell that touches no room is backing: it goes to the dark
-  if n + e + s + w == 0 then return "m" end
+  if n ~= "r" and e ~= "r" and s ~= "r" and w ~= "r" then return "m" end
   local cx, cy = floor(tx / 2), floor(ty / 2)
   local H = Crypt.heightFor(id, cy)
+  local Hn, Hs = Crypt.heightFor(id, cy - 1), Crypt.heightFor(id, cy + 1)
   local site = Crypt.siteAt(id, cx, cy)
   -- a lantern must hang on a face that looks into the room
-  if site and not ((site == "n" and n == 1) or (site == "e" and e == 1)
-                   or (site == "s" and s == 1) or (site == "w" and w == 1)) then
+  if site and not ((site == "n" and n == "r") or (site == "e" and e == "r")
+                   or (site == "s" and s == "r") or (site == "w" and w == "r")) then
     site = nil
   end
   -- With the photograph on, the wall is carved by the photograph's own
@@ -220,8 +275,8 @@ function CryptKit.signature(t, tileAt, tx, ty, map)
     if cells < 1 then cells = 1 end
     phase = (":p%d.%d"):format(cx % cells, cy % cells)
   end
-  return ("w%d:%d%d%d%d:%s:%d%s"):format(H, n, e, s, w, site or "-", h % 3,
-                                        phase)
+  return ("w%d:%s%s%s%s:%s:%d:%d.%d%s"):format(H, n, e, s, w, site or "-",
+                                             h % 3, Hn, Hs, phase)
 end
 
 local function parse(sig)
@@ -230,14 +285,16 @@ local function parse(sig)
     S.variant = tonumber(sig:sub(2, 2)) or 0
     S.haunted = sig:find("H", 1, true) ~= nil
   elseif S.kind == "w" then
-    local H, nesw, site, seed = sig:match("^w(%d+):(%d%d%d%d):(.):(%d)")
+    local H, nesw, site, seed, Hn, Hs =
+      sig:match("^w(%d+):(%a%a%a%a):(.):(%d):(%d+)%.(%d+)")
+    if not H then return S end
     S.H = tonumber(H) or Crypt.TALL
-    S.n = nesw:sub(1, 1) == "1"
-    S.e = nesw:sub(2, 2) == "1"
-    S.s = nesw:sub(3, 3) == "1"
-    S.w = nesw:sub(4, 4) == "1"
+    S.side = { n = nesw:sub(1, 1), e = nesw:sub(2, 2),
+               s = nesw:sub(3, 3), w = nesw:sub(4, 4) }
     S.site = site ~= "-" and site or nil
     S.seed = tonumber(seed) or 0
+    S.Hn = tonumber(Hn) or S.H
+    S.Hs = tonumber(Hs) or S.H
     local px, py = sig:match(":p(%d+)%.(%d+)$")
     if px then
       S.photo = true
@@ -306,8 +363,19 @@ local function heightAt(u, v)
   return sum * 0.25
 end
 
-CryptKit.RELIEF_THRESHOLD = 0.56   -- height under which a voxel of face is a joint
-CryptKit.RELIEF_MAX = 1.0          -- (kept for the probe: one voxel of carving)
+-- How the photograph (and the drawn ashlar) stand in DEPTH, not just on
+-- a box. d = 0 is the cell's room-facing plane; negative is into the
+-- room; positive is into the wall. A stone at 0.80 of the height map
+-- stands two voxels proud; mortar recedes one. The old binary "outermost
+-- voxel or nothing" left the ring a stack of 16px crates with holes
+-- punched in the paper -- the texture never sat, because the silhouette
+-- was still a rectangle.
+CryptKit.RELIEF_THRESHOLD = 0.46   -- flush stone vs joint
+CryptKit.RELIEF_MAX = 2            -- voxels into the room at the highest stones
+CryptKit.RELIEF_RECESS = 1         -- voxels into the wall at the mortar
+CryptKit.CHAMFER = 5               -- 45-cut on two-face cells, in voxels
+CryptKit.BATTER_EVERY = 28         -- 1 voxel of lean-back per this many rows
+CryptKit.RAG = 6                   -- the coping's stones, world px each
 
 -- ------------------------------------------------------------------ mass --
 
@@ -325,26 +393,39 @@ end
 
 local function wallModel(sp, S)
   local H = S.H
-  local low = H <= 34
+  local K = S.side
+  local ex = { n = K.n == "r", e = K.e == "r", s = K.s == "r", w = K.w == "r" }
+  local TALL = Crypt.TALL or 88
+  local isTall = H >= TALL
+  local low = H <= CryptKit.LOW
   local tall = H >= 52
-  local ex = { n = S.n, e = S.e, s = S.s, w = S.w }
-  -- a low wall is looked at from the outside too (the parapets the camera
-  -- looks over), so every side of it wears the stone
-  local wear = low and { n = true, e = true, s = true, w = true } or ex
+  -- Which sides wear the stone: one that looks into the room; and, on a
+  -- wall the camera looks over or past (anything under the tall band),
+  -- one that looks out into the dark -- its outside shows. A side against
+  -- another wall cell is the wall's own inside and wears nothing: that
+  -- boundary is answered to the emitter as phantom masonry (see `at`).
+  local wear = {}
+  for _, k in ipairs({ "n", "e", "s", "w" }) do
+    wear[k] = (K[k] == "r") or (K[k] == "o" and not isTall)
+  end
 
   -- With the photograph on (see `ashlar` and the signature's phase) the
-  -- wall's face is CARVED BY THE PHOTOGRAPH: the outermost voxel of every
-  -- room-facing side stands where the picture's height says a stone is
-  -- and is missing where it says a joint is, so the stones the albedo
-  -- and the relief map paint are the stones the voxels stand as -- the
-  -- lantern, the occlusion and the silhouette all agree. The drawn
-  -- dressings (pilasters, string course) stand aside for the same reason
-  -- the courses do: the picture carries the masonry. Off, the wall is the
-  -- ashlar the kit always drew.
+  -- wall's face is CARVED BY THE PHOTOGRAPH IN DEPTH: each stone of the
+  -- height map stands proud of its joint -- two voxels into the room at
+  -- the highest, flush in the middle, one voxel back at the mortar --
+  -- so the silhouette, the albedo, the relief map and the occlusion all
+  -- describe the same stones. Two-face cells take a 45-cut so the ring
+  -- is an octagon, not a stack of crates; the plinth batters into the
+  -- room; tall walls lean back. The drawn dressings (pilasters, string
+  -- course) stand aside for the same reason the courses do: the picture
+  -- carries the masonry. Off, the wall is the ashlar the kit always
+  -- drew, with the same depth (a joint sits back, a block sits proud)
+  -- so even without the picture the wall is masonry, not a painted box.
   local photo = S.photo and loadHeight() ~= nil
   local phaseX = (S.px or 0) * 16
   local phaseY = (S.py or 0) * 16
-  -- corner pilasters: one for every pair of adjacent room-facing sides
+  -- corner pilasters: one for every pair of adjacent room-facing sides.
+  -- The photograph chamfers those corners instead (see `chamferRecess`).
   local piers = {}
   if not photo then
     if ex.s and ex.e then piers[#piers + 1] = { 13, 15, 13, 15 } end
@@ -353,21 +434,6 @@ local function wallModel(sp, S)
     if ex.n and ex.w then piers[#piers + 1] = { 0, 2, 0, 2 } end
   end
   local capY = (H >= 34 and not photo) and math.min(CryptKit.CAP, H - 6) or nil
-  -- the face's world coordinate along it, for the height map: an x for a
-  -- south or north face, a z for an east or west one
-  local function alongWorld(x, z)
-    local d, side = 99, nil
-    if wear.s and 15 - z < d then d, side = 15 - z, "s" end
-    if wear.n and z < d then d, side = z, "n" end
-    if wear.e and 15 - x < d then d, side = 15 - x, "e" end
-    if wear.w and x < d then d, side = x, "w" end
-    if side == "e" or side == "w" then return phaseY + z end
-    return phaseX + x
-  end
-  local function stoneProud(x, y, z)
-    local hgt = heightAt(alongWorld(x, z), y)
-    return hgt ~= nil and hgt >= CryptKit.RELIEF_THRESHOLD
-  end
 
   local function inPier(x, z, grow)
     grow = grow or 0
@@ -381,36 +447,120 @@ local function wallModel(sp, S)
     return false
   end
 
-  -- depth from the nearest worn side, and the coordinate along it
-  local function depth(x, z)
-    local d, u = 99, x
-    if wear.s and 15 - z < d then d, u = 15 - z, x end
-    if wear.n and z < d then d, u = z, x end
-    if wear.e and 15 - x < d then d, u = 15 - x, z end
-    if wear.w and x < d then d, u = x, z end
-    return d, u
+  -- d = 0 is the cell's face plane on the nearest worn side (x/z = 0 or
+  -- 15); negative is out past it, positive into the wall. `u` runs along
+  -- the face -- an x on a south/north, a z on an east/west -- which is
+  -- also the photograph's u (the shader maps a Z-facing wall in world XY,
+  -- an X-facing wall in world ZY, so moving in depth does not slide the
+  -- art off the stones we stand). Answered for positions outside the
+  -- cell too: u past 0..15 is simply the next cell's u.
+  local function faceDepth(x, z)
+    local d, u, side = 99, x, nil
+    if wear.s then
+      local ds = 15 - z
+      if ds < d then d, u, side = ds, x, "s" end
+    end
+    if wear.n then
+      local dn = z
+      if dn < d then d, u, side = dn, x, "n" end
+    end
+    if wear.e then
+      local de = 15 - x
+      if de < d then d, u, side = de, z, "e" end
+    end
+    if wear.w then
+      local dw = x
+      if dw < d then d, u, side = dw, z, "w" end
+    end
+    return d, u, side
+  end
+
+  local function alongWorld(u, side)
+    if side == "e" or side == "w" then return phaseY + u end
+    return phaseX + u
+  end
+
+  -- 45-cut on a two-face cell: k is manhattan distance from the inner
+  -- corner of the L, so k = 0 is the 90-degree nose. Recessing that
+  -- nose by CHAMFER voxels turns the crate-corner into an octagon
+  -- facet. Axis-aligned still -- the greedy mesher only emits those --
+  -- but the silhouette reads as a diagonal from the authored south
+  -- camera, which is the whole point of the dollhouse.
+  local CHAMFER = CryptKit.CHAMFER
+  local function chamferRecess(x, z)
+    if CHAMFER <= 0 then return 0 end
+    local extra = 0
+    local function cut(k)
+      if k < CHAMFER then
+        local e = CHAMFER - k
+        if e > extra then extra = e end
+      end
+    end
+    if ex.s and ex.e then cut((15 - x) + (15 - z)) end
+    if ex.s and ex.w then cut(x + (15 - z)) end
+    if ex.n and ex.e then cut((15 - x) + z) end
+    if ex.n and ex.w then cut(x + z) end
+    return extra
   end
 
   local seed = S.seed
   local plinth = CryptKit.PLINTH
   local course = CryptKit.COURSE
+  local BATTER_EVERY = CryptKit.BATTER_EVERY
+  local PROUD_MAX = CryptKit.RELIEF_MAX
 
   -- With the CRYPT-FX row on, the masonry is the PHOTOGRAPH's (the wall
   -- wears Poly Haven's rubble stone, its own joints and all -- see
   -- lib/Crypt.lua), so the drawn courses step aside: one stone class, no
   -- joints, and the picture is not ruled over with a second grid. Off,
-  -- the courses are what says "ashlar". Decided at build time, which is
-  -- why the row remeshes.
-  local function ashlar(u, y)
+  -- the courses are what says "ashlar" -- laid in WORLD units along the
+  -- face, so a joint falls where the next cell's joint falls. Decided at
+  -- build time, which is why the row remeshes.
+  local function ashlar(wu, y)
     if photo then return T.stoneA end
     local yy = y - plinth - 1
     if yy % course == course - 1 then return T.joint end
     local c = floor(yy / course)
-    local stagger = ((c + seed) % 2) * 8
-    if (u + stagger) % 16 == 0 then return T.joint end
-    local blockIx = floor((u + stagger) / 16)
-    local r = hash2(c * 3 + seed, blockIx * 5 + 1)
+    local stagger = (c % 2) * 8
+    if (wu + stagger) % 16 == 0 then return T.joint end
+    local blockIx = floor((wu + stagger) / 16)
+    local r = hash2(c * 3 + 1, blockIx * 5 + 1)
     return STONES[1 + floor(r * 2.999)]
+  end
+
+  -- height samples repeat across a column of depths; cache per (u, y)
+  local hcache = {}
+  local function heightCached(wu, y)
+    local key = wu * 4096 + y
+    local h = hcache[key]
+    if h ~= nil then
+      if h < 0 then return nil end
+      return h
+    end
+    local got = heightAt(wu, y)
+    hcache[key] = got or -1
+    return got
+  end
+
+  -- how many voxels this (along, y) stands out past the face (negative =
+  -- recessed into the wall). The height map's own gradients bevel the
+  -- stones: a neighbour at a lower proud is the stone's side.
+  local function proudOf(u, y, side)
+    local wu = alongWorld(u, side)
+    if not photo then
+      local yy = y - plinth - 1
+      if yy >= 0 and yy % course == course - 1 then return -1 end
+      local c = floor(yy / course)
+      local stagger = (c % 2) * 8
+      if (wu + stagger) % 16 == 0 then return -1 end
+      return 1
+    end
+    local h = heightCached(wu, y)
+    if h == nil then return 0 end
+    if h >= 0.80 then return PROUD_MAX end
+    if h >= 0.62 then return 1 end
+    if h >= CryptKit.RELIEF_THRESHOLD then return 0 end
+    return -CryptKit.RELIEF_RECESS
   end
 
   -- the sconce, in cell coordinates, from the shared table
@@ -450,71 +600,146 @@ local function wallModel(sp, S)
     return nil
   end
 
-  local function at(x, y, z)
-    if y < 0 then return nil end
-    -- outside the cell: only a capital's overhang and the sconce live there
-    if x < 0 or x > 15 or z < 0 or z > 15 then
-      if capY and y >= capY and y <= capY + 1 and inPier(x, z, 1) then
-        return T.trim
-      end
-      return lantern(x, y, z)
-    end
-    if y >= H then return lantern(x, y, z) end
-    local d, u = depth(x, z)
-    local pier = inPier(x, z)
-    if d == 0 then
-      -- the outermost layer: present only where the profile stands proud
-      -- -- and, carved by the photograph, wherever the picture's own
-      -- stones stand (the plinth and a low wall's coping stay whole)
-      local proud
-      if photo then
-        proud = (y <= plinth) or (low and y >= H - 2) or stoneProud(x, y, z)
-      else
-        proud = (y <= plinth) or pier
-                or (tall and (y == CryptKit.STRING or y == CryptKit.STRING + 1))
-                or (low and y >= H - 2)
-      end
-      if not proud then return nil end
-    end
-    -- the profile's own dressings
-    if low and y >= H - 2 then return T.trim end
-    if capY and pier and y >= capY and y <= capY + 1 then return T.trim end
-    if d <= 1 then
-      if photo then
-        -- the picture carries every dressing; the foot is the shader's
-        -- damp and moss, so the class stays one stone
-        return T.stoneA
-      end
-      if y == plinth then return T.trim end
-      if y < plinth then return T.damp end
-      if tall and (y == CryptKit.STRING or y == CryptKit.STRING + 1) then
-        return T.trim
-      end
-      if pier then return T.stoneA end
-      return ashlar(u, y)
-    end
-    -- inside: whatever looks out of a non-worn side looks into the dark
-    return T.mass
+  -- THE TOP. Along the run (north to south: the rows are what the
+  -- dollhouse cut is authored by) the top ramps from the cell's own
+  -- height toward each neighbour's -- a neighbour that is wall or dark;
+  -- a wall ending at the room ends square. Cell centres carry the row's
+  -- height, so two cells meet at the mean of theirs and the ramp is
+  -- continuous across the seam. A standing lantern needs its coping
+  -- level: that cell keeps its height flat. The tall band has no ramp
+  -- to speak of (its neighbours are tall) and no rag: its top is in the
+  -- dark anyway.
+  local Hn = (K.n ~= "r") and S.Hn or H
+  local Hs = (K.s ~= "r") and S.Hs or H
+  if standing then Hn, Hs = H, H end
+  local function rampAt(z)
+    if z < 8 then return Hn + (H - Hn) * ((z + 8) / 16) end
+    return H + (Hs - H) * ((z - 8) / 16)
+  end
+  -- the rag: the coping's stones stand a voxel up or down in stones of
+  -- RAG world px along the face -- a wall's top, not a ruled line
+  local runX = (ex.n or ex.s) and not (ex.e or ex.w)
+  local RAG = CryptKit.RAG
+  local function ragAt(x, z)
+    if isTall or standing then return 0 end
+    local wu = runX and (phaseX + x) or (phaseY + z)
+    local r = hash2(floor(wu / RAG) * 7 + seed, 3)
+    if r < 0.18 then return -1 end
+    if r > 0.86 then return 1 end
+    return 0
+  end
+  local function topAt(x, z)
+    return floor(rampAt(z) + 0.5) + ragAt(x, z)
   end
 
-  -- the light: the class's own share, falling away up a tall wall
+  local function at(x, y, z)
+    if y < 0 then return nil end
+    -- the lantern first: it lives outside the cell and above the wall
+    local L = lantern(x, y, z)
+    if L then return L end
+    local outX = (x < 0) and -1 or ((x > 15) and 1 or 0)
+    local outZ = (z < 0) and -1 or ((z > 15) and 1 or 0)
+    local outside = outX ~= 0 or outZ ~= 0
+    -- a capital's overhang (non-photo)
+    if outside and capY and y >= capY and y <= capY + 1 and inPier(x, z, 1) then
+      return T.trim
+    end
+    local top = topAt(x, z)
+    if y >= top then return nil end
+    -- past a side that another wall cell stands on, what is there is
+    -- that cell's masonry: phantom, for the hidden-face test
+    local crossW = (outX == -1 and K.w == "w") or (outX == 1 and K.e == "w")
+                   or (outZ == -1 and K.n == "w") or (outZ == 1 and K.s == "w")
+    -- past a corner of the cell only the neighbour's own overhang lives
+    if outside and not crossW and outX ~= 0 and outZ ~= 0 then return nil end
+
+    local d, u, side = faceDepth(x, z)
+    local proud = side and proudOf(u, y, side) or 0
+    -- the plinth is a solid step, two voxels proud at the foot so the
+    -- wall sits on a base instead of rising as a plane
+    if y <= plinth then
+      local foot = (y <= 1) and 2 or 1
+      if proud < foot then proud = foot end
+    end
+    -- the coping stays whole (the dollhouse lip the camera looks over),
+    -- a voxel proud
+    local coping = (not isTall) and y >= top - CryptKit.COPING
+    if coping and proud < 1 then proud = 1 end
+    -- non-photo dressings: piers and the string course stand proud
+    local pier = (not photo) and inPier(x, z)
+    if pier and proud < 2 then proud = 2 end
+    if (not photo) and tall
+        and (y == CryptKit.STRING or y == CryptKit.STRING + 1)
+        and proud < 1 then
+      proud = 1
+    end
+    -- a few footing stones scatter along the foot so the wall meets
+    -- the flagstones as masonry, not a ruled line
+    if y == 0 and side and hash2(alongWorld(u, side) * 0.37 + 5, 19) < 0.32
+        and proud < PROUD_MAX then
+      proud = proud + 1
+    end
+
+    local batter = 0
+    if (not low) and y > plinth and BATTER_EVERY > 0 then
+      batter = floor((y - plinth) / BATTER_EVERY)
+      if batter > 2 then batter = 2 end
+    end
+
+    local need = -proud + chamferRecess(x, z) + batter
+    if side and d < need then return nil end
+
+    if outside then
+      if crossW then return PHANTOM end
+      -- past a worn face: the overhang, straight out of that face
+      if not side or d >= 0 then return nil end
+      local straight = (outX == 1 and side == "e") or (outX == -1 and side == "w")
+                       or (outZ == 1 and side == "s") or (outZ == -1 and side == "n")
+      if not straight then return nil end
+    end
+
+    -- the texel: a cut wall's top course is coping through its whole
+    -- thickness (a wall shows its top); the rest is stone through and
+    -- through -- whichever face of it a camera finds is a face of stone
+    if coping then return T.trim end
+    if capY and pier and y >= capY and y <= capY + 1 then return T.trim end
+    if photo then return T.stoneA end
+    if y == plinth then return T.trim end
+    if y < plinth then return T.damp end
+    if tall and (y == CryptKit.STRING or y == CryptKit.STRING + 1) then
+      return T.trim
+    end
+    if pier then return T.stoneA end
+    return ashlar(side and alongWorld(u, side) or x, y)
+  end
+
+  -- the light: the class's own share, falling away up the wall -- from
+  -- the same row on every wall, so a cut wall's top stays in the light
+  -- the tall band has left by that height
   local fadeFrom, fadeTo = CryptKit.FADE_FROM, CryptKit.FADE_TO
   local function vert(y)
-    if low or y <= fadeFrom then return 1 end
-    local t = (y - fadeFrom) / (H - fadeFrom)
+    if y <= fadeFrom then return 1 end
+    local t = (y - fadeFrom) / (TALL - fadeFrom)
     if t > 1 then t = 1 end
     return 1 - (1 - fadeTo) * t * t * (3 - 2 * t)
   end
-  local function tint(y, i)
+  local SIDE = CryptKit.SIDE
+  local function tint(y, i, dir, shade)
     local name = i and CLASS[i]
     if not name then return 1 end
     local f = CryptKit.SHADE[name] or 1
     if name == "glow" or name == "black" then return f end
     if y < CryptKit.COURSE and name ~= "trim" then f = f * CryptKit.FOOT end
-    return f * vert(y)
+    f = f * vert(y)
+    -- lit, not sunlit: every flank the same share whichever way it
+    -- turns; the lanterns and the occlusion say which way is which
+    if shade and shade > 0 and dir ~= "up" and dir ~= "down" then
+      f = f * (SIDE / shade)
+    end
+    return f
   end
 
-  local ytop = H - 1
+  local ytop = floor(math.max(H, (H + Hn) / 2, (H + Hs) / 2)) + 1
   if site then ytop = math.max(ytop, floor(fy) + 2) end
   return {
     at = at, W = W, ytop = ytop, tint = tint,
@@ -526,7 +751,7 @@ end
 --
 -- The drawing ($05/$06 over $15/$16), rows 0..15 of the cell:
 --   rows  1..10  the headstone, columns 3..12 (a black rim, a checker
---                band, a framed panel)
+--                crown, a framed panel with its lettering)
 --   rows  7..10  two small posts flanking it, columns 1..2 and 13..14
 --   rows 11..15  the plinth, columns 1..14 (a light top rim, a dark face,
 --                a black foot)
@@ -536,9 +761,15 @@ end
 -- from the fixed camera -- the LAW every authored shot answers to.
 local PLINTH_H = 4
 local STONE_H = { 12, 10, 14 }
+local GRAVE_SIDE = 0.86       -- every flank's share (see wallModel's tint)
 local function graveModel(sp, S)
   local off = 8
   local function pix(x, r) return (off + r) * W + x end
+  -- the drawing's greys by name: the panel's light grey and the frame's
+  -- dark grey are what the shader dresses in granite (its whites would
+  -- come out as wall, its blacks as ink -- see the material block)
+  local LIGHT = pix(5, 5)
+  local DARK = pix(4, 4)
   local v = S.variant or 0
   local stoneH = STONE_H[v + 1]
   local pz0, pz1 = ({ 5, 6, 4 })[v + 1], ({ 12, 11, 12 })[v + 1]
@@ -557,6 +788,16 @@ local function graveModel(sp, S)
       end
     end
     span[r] = { x0 or 3, x1 or 12 }
+  end
+  -- the face: the drawing, its checker crown and its ink rim turned to
+  -- the stone's own greys (the crown light, the rim a weathered edge in
+  -- shadow), the bands and the lettering kept
+  local function face(x, r)
+    if r <= 3 then
+      return (x <= 3 or x >= 12) and DARK or LIGHT
+    end
+    if x == 3 or x == 12 then return DARK end
+    return pix(x, r)
   end
   local function at(x, y, z)
     if x < 0 or x > 15 or z < 0 or z > 15 or y < 0 then return nil end
@@ -581,24 +822,27 @@ local function graveModel(sp, S)
       -- faces a voxel in at the very top so the crown rounds
       if y == H - 1 then
         if x == sx0 or x == sx1 or z == 7 or z == 10 then return nil end
-        return pix(5, 2)
+        return LIGHT
       end
       if (z == 10 or z == 7) and (x == sx0 or x == sx1) and y >= H - 3 then
         return nil
       end
-      if z == 10 or z == 7 then return pix(x, r) end
-      return pix(4, r)
+      if z == 10 or z == 7 then return face(x, r) end
+      return LIGHT
     end
     -- the posts
     if y <= PLINTH_H + 3 and z >= 7 and z <= 9
         and ((x >= 1 and x <= 2) or (x >= 13 and x <= 14)) then
-      return pix(x, 7 + (PLINTH_H + 3 - y))
+      return DARK
     end
     return nil
   end
-  local function tint(y, i)
-    if y < PLINTH_H then return 0.82 end
-    return 1
+  local function tint(y, i, dir, shade)
+    local f = (y < PLINTH_H) and 0.82 or 1
+    if shade and shade > 0 and dir ~= "up" and dir ~= "down" then
+      f = f * (GRAVE_SIDE / shade)
+    end
+    return f
   end
   local m = {
     at = at, W = W, ytop = H - 1, tint = tint,
@@ -625,8 +869,11 @@ function CryptKit.model(sp, t, sig)
   local S = parse(tostring(sig))
   if S.kind == "m" then return massModel() end
   if S.kind == "g" then return graveModel(sp, S) end
-  if S.kind == "w" and S.H then return wallModel(sp, S) end
+  if S.kind == "w" and S.H and S.side then return wallModel(sp, S) end
   return nil, "bad signature " .. tostring(sig)
 end
+
+-- for the probes: what a signature says
+CryptKit.parse = parse
 
 return CryptKit

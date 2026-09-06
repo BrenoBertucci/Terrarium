@@ -241,6 +241,46 @@ function voidFill.check()
   voidFill.last = now
 end
 
+-- ------- saying WHY the diorama is not there, once, where it can be found
+--
+-- Voxel3D.available() answering false is the entire 3D mode not happening,
+-- and it happened in total silence: no error, no log line, and an OPTIONS row
+-- the engine offers anyway (see the note over stagedBattles). Android players
+-- reinstalled the mod for weeks against a build that had already decided not
+-- to run. Voxel3D.shader()'s ladder is the fix; this is how anyone finds out
+-- which rung they landed on and what the driver actually said.
+--
+-- Printed -- stdout is logcat on Android and the launcher's log on desktop --
+-- and written beside the save, because a phone has no console. Once per
+-- session, and only when there is something to say: a device that takes the
+-- full build stays silent, which is every device that was already fine.
+local gpuReported = false
+local function reportGPU()
+  if gpuReported then return end
+  gpuReported = true
+  local avail = Voxel3D.available()
+  if avail and Voxel3D.rung == 1 then return end
+  local head = avail
+    and ("TERRARIUM: this driver refused part of the 3D shader. The mode is "
+         .. "running on the '" .. tostring(Voxel3D.rungName()) .. "' build.")
+     or ("TERRARIUM: the 3D pass could not be built on this driver, so the "
+         .. "game is drawing flat. The report below is what a bug report "
+         .. "needs -- please paste it whole.")
+  local text = head .. "\n" .. Voxel3D.report() .. "\n"
+  if love.filesystem and love.filesystem.write then
+    if pcall(love.filesystem.write, "TERRARIUM-gpu-report.txt", text) then
+      -- Named in the printed copy as well as written, because a phone has no
+      -- console to read the print in and somebody has to be told where to go
+      -- looking. getSaveDirectory is the engine's answer, not a guess.
+      local ok, dir = pcall(love.filesystem.getSaveDirectory)
+      text = text .. "(also written to "
+             .. (ok and tostring(dir) or "the save folder")
+             .. "/TERRARIUM-gpu-report.txt)"
+    end
+  end
+  print(text)
+end
+
 mod.content.render_pipelines:register(PIPE_VOXEL, {
   label = "VOXEL",
   levels = Voxel.ANGLE_LABELS,
@@ -255,7 +295,14 @@ mod.content.render_pipelines:register(PIPE_VOXEL, {
   -- answer false here, and the engine keeps the vanilla 2D path -- which
   -- is why no caller ever has to guard for a missing 3D pass.
   available = function()
-    return Voxel3D.available()
+    -- The engine asks this when it builds the OPTIONS list, which is the
+    -- first moment the answer exists and the last one before a player is
+    -- shown a row for a mode that may not run. So the report rides here
+    -- rather than on load: no shader is compiled at boot for somebody who
+    -- never opens the menu, and nobody who does open it is left guessing.
+    local ok = Voxel3D.available()
+    reportGPU()
+    return ok
   end,
 
   -- the engine hands over the live level; we ease the camera toward it.
@@ -896,17 +943,17 @@ local SETTINGS = {
   -- on its own step (CryptKit.setting:row), like TREES.
   { CryptKit.setting,
     "What the inside of the Pokemon Tower is. NEW stands its seven floors "
-    .. "and Agatha's room as a crypt: the ring of wall panels becomes a "
-    .. "tall octagon of grey ashlar -- courses and joints, a plinth, a "
-    .. "string course, a pilaster at every turn -- lit rather than "
-    .. "painted, its top rows falling into the dark; the near walls are "
-    .. "cut to a parapet so the camera looks over them; the grey beyond "
-    .. "goes to black; every headstone stands on a plinth wearing its own "
-    .. "drawing. Candle lanterns hang where the light is: warm pools on "
-    .. "the stone, flames breathing, the room held dim and cool, a "
-    .. "violet haze on the haunted floors, and on those floors wisps sigh "
-    .. "out of the graves (the HAUNT row). CLASSIC is the profile's pins "
-    .. "as they were. Flipping it rebuilds the map's meshes.",
+    .. "and Agatha's room as a crypt: the ring of wall panels becomes one "
+    .. "continuous octagon of grey stone -- the stones stand proud of "
+    .. "their joints, the corners chamfer, a plinth batters into the room "
+    .. "-- lit rather than painted, its top rows falling into the dark; "
+    .. "the near walls ramp down to a coped parapet so the camera looks "
+    .. "over them; the grey beyond goes to black; every headstone stands "
+    .. "on a plinth wearing its own drawing. Candle lanterns hang where the light is: "
+    .. "warm pools on the stone, flames breathing, the room held dim and "
+    .. "cool, a violet haze on the haunted floors, and on those floors "
+    .. "wisps sigh out of the graves (the HAUNT row). CLASSIC is the "
+    .. "profile's pins as they were. Flipping it rebuilds the map's meshes.",
     full = true },
   -- `full = true` like CRYPT: the crypt's light is the look of the place.
   -- Remeshes on its own step (CryptKit gives the row that): the walls
@@ -918,9 +965,13 @@ local SETTINGS = {
     .. "a ground mist through the graves -- heavier and violet on the "
     .. "haunted floors, lit where it lies under a pool -- and blooms the "
     .. "flames, the lantern glass and the wisps so they spill light into "
-    .. "the frame instead of sitting on it as drawings. OFF lights the "
-    .. "crypt the way the streets are lit. Only inside the Pokemon Tower "
-    .. "and Agatha's room, and only with the CRYPT row on NEW.",
+    .. "the frame instead of sitting on it as drawings. The walls wear "
+    .. "photographed rubble masonry and STAND those stones in depth, so a "
+    .. "lantern rakes the side of a block; there is no sun in here, only "
+    .. "a fill from above read through the stone's grain. The wireframe "
+    .. "and the ANIME row's cel step stand aside while this is on. OFF "
+    .. "lights the crypt the way the streets are lit. Only inside the "
+    .. "Pokemon Tower and Agatha's room, and only with the CRYPT row on NEW.",
     full = true },
   -- `full = true` like TOWER: what a ledge is made of is the look of every
   -- route, not a knob on the camera. Remeshes on its own step, like TREES.
@@ -2137,7 +2188,7 @@ end)
 -- first so this cannot drift again: this literal sat five minors behind the
 -- manifest, and in a feature-encoded form the versioning rules in CHANGELOG.md
 -- forbid outright (`.snow.1` -- features live in the changelog, not here).
-mod.exports.version = mod.version or "1.30.0"
+mod.exports.version = mod.version or "1.30.1"
 -- exposed so a companion mod can pin its own tiles' shapes or read the
 -- camera without reaching into this mod's file layout
 mod.exports.lib = V

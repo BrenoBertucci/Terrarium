@@ -30,6 +30,7 @@ local WaterBody = V.require("WaterBody")
 local FloorArt = V.require("FloorArt")
 local Underpass = V.require("Underpass")
 local Crypt = V.require("Crypt")
+local Anime = V.require("Anime")
 local VoxelGrid = V.require("VoxelGrid")
 local RayFX = V.require("RayFX")
 
@@ -37,6 +38,7 @@ local RayFX = V.require("RayFX")
 -- crypt's materials, below); a battle holds it ON through the same knob
 -- and must get it back untouched
 local gridHeld = false
+local animeHeld = false
 local Roamer = V.require("Roamer")
 local StreetLamps = V.require("StreetLamps")
 local Skyline = V.require("Skyline")
@@ -1266,14 +1268,26 @@ function VoxelScene.render(state, w, h, vw, vh, paletteFor)
   -- with the plain shader while the materials are on -- through the same
   -- override the battle uses to hold the grid ON, and only when nobody
   -- else is holding it.
+  -- The cel step (the ANIME row) is held off the same way: four bands of
+  -- light dithered over photographed stone is neither look.
   if crypt and Crypt.fxOn() then
     if VoxelGrid.override == nil then
       VoxelGrid.override = false
       gridHeld = true
     end
-  elseif gridHeld then
-    VoxelGrid.override = nil
-    gridHeld = false
+    if Anime.override == nil then
+      Anime.override = false
+      animeHeld = true
+    end
+  else
+    if gridHeld then
+      VoxelGrid.override = nil
+      gridHeld = false
+    end
+    if animeHeld then
+      Anime.override = nil
+      animeHeld = false
+    end
   end
   -- and the window glass: the tileset's own panes (found in its art --
   -- GlassMask), lit after dark. Outdoors only, like everything the clock

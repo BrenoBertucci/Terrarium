@@ -236,7 +236,13 @@ local SHADER = [[
     float amp = 1.0;
     if (waterFieldOn > 0.5) {
       vec2 uv = clamp((xz - waterFieldOrigin) * waterFieldInv, 0.0, 1.0);
+      // The fragment stage always reads it. The vertex stage only does on a
+      // driver that HAS vertex texture units -- see the VERTEX_TEX note over
+      // the wearMap declaration. Without the tap `size` stays 1.0, which is
+      // open water, which is the same value the field-less build uses.
+#if defined(PIXEL) || defined(VERTEX_TEX)
       size = 1.0 - Texel(waterField, uv).r;
+#endif
       // max() rather than the bare value: pow(0, k) is undefined in GLSL ES
       // and a driver is free to hand back a NaN, which would take the whole
       // vertex with it -- a hole in the lake rather than a flat one.
@@ -339,7 +345,9 @@ local SHADER = [[
   // Same vertex-texture contract as waterField: GLES2 with zero vertex
   // texture units reads vec4(0), which is "no trail", which is the build
   // this replaced. Unbound is a crash, crushMapOn is the switch.
+#ifdef VERTEX_TEX
   uniform Image crushMap;
+#endif
   uniform float crushMapOn;
   uniform vec2 crushOrigin;   // world XZ of the field's corner
   uniform vec2 crushInv;      // 1 / its extent in world pixels
@@ -359,7 +367,25 @@ local SHADER = [[
   // wearOn is the switch. The blank stand-in is R=0 G=1 -- and the GREEN
   // matters, because a field of zeroes would multiply the wind amplitude
   // by nothing and stop every meadow in the world dead.
+// ------- VERTEX_TEX: whether this driver lets the VERTEX stage sample
+//
+// crushMap, wearMap and waterField are the only three textures this shader
+// reads outside the fragment stage, and GLES2 is allowed to expose ZERO
+// vertex texture image units. The note over waterField above used to say a
+// fetch that cannot happen reads vec4(0) -- it does not. A vertex shader
+// that samples on a driver reporting zero units FAILS TO LINK, and since
+// Voxel3D.available() is exactly "the shader built", that took the entire 3D
+// mode down with it, silently, on every device in that family. (Reported by
+// Android players on Adreno parts; it built on the Mali this was written on,
+// which is why it shipped.)
+//
+// So the taps are a compile-time feature now, and Voxel3D.shader() drops
+// them and rebuilds rather than giving up. What is lost on that rung: the
+// walked path and the remembered wear, and the vertex half of the water
+// size field. What is kept: the mode.
+#ifdef VERTEX_TEX
   uniform Image wearMap;
+#endif
   uniform float wearOn;
   uniform vec2 wearOrigin;    // world XZ of this map's corner
   uniform float wearInv;      // 1 / extent in world px (square, so scalar)
@@ -583,6 +609,7 @@ local SHADER = [[
         // Sampled on vWorld rather than w.xz for the same reason `id` is:
         // a cell name that moved as the blade bent would make the blade's
         // own wear flicker as it leaned across a texel boundary.
+#ifdef VERTEX_TEX
         if (wearOn > 0.5) {
           vec2 wuv = (vWorld.xz - wearOrigin) * wearInv;
           if (wuv.x > 0.0 && wuv.x < 1.0 && wuv.y > 0.0 && wuv.y < 1.0) {
@@ -591,6 +618,7 @@ local SHADER = [[
             shelter = ws.g;
           }
         }
+#endif
       }
 
       float wet  = clamp(grassLoad.x, 0.0, 1.0);
@@ -743,6 +771,7 @@ local SHADER = [[
       // rather than another disc test. Direction rides G/B when a crumb
       // wrote one; otherwise the wind, which is a hint not a corridor --
       // the live-foot uniforms still open the wake under the walker.
+#ifdef VERTEX_TEX
       if (crushMapOn > 0.5) {
         vec2 uv = (w.xz - crushOrigin) * crushInv;
         if (uv.x > 0.0 && uv.x < 1.0 && uv.y > 0.0 && uv.y < 1.0) {
@@ -760,6 +789,7 @@ local SHADER = [[
           }
         }
       }
+#endif
 
       // ------- and what has piled on this blade (see vGrassCap)
       //
@@ -1241,6 +1271,17 @@ local SHADER = [[
   // by: a bump, so a flame rakes across grain instead of across paint.
   // The tone stays the geometry's (vShade carries the kit's courses and
   // joints); the art is the DETAIL, normalised by its own mean.
+// ------- CRYPT_MATS: the five photographic samplers
+//
+// These five plus sunMap, waterArt, floorArt, glassMask and the engine's own
+// MainTex are TEN textures bound to the fragment stage, and GLES2 guarantees
+// only EIGHT (GL_MAX_TEXTURE_IMAGE_UNITS). A driver at the guaranteed floor
+// refuses the link -- and a refused link is Voxel3D.available() == false,
+// which is the whole mode gone rather than the crypt's stone. So they are a
+// compile-time feature and Voxel3D.shader() can drop them: what is lost is
+// the Tower interior's photographed granite and its relief, which falls back
+// to the tone the geometry already carries.
+#ifdef CRYPT_MATS
   uniform Image stoneArt;
   uniform Image graniteArt;
   // and their RELIEF: tangent-space normal maps baked from the same height
@@ -1250,10 +1291,17 @@ local SHADER = [[
   uniform Image stoneNorm;
   uniform Image graniteNorm;
   uniform Image floorNorm;
+#endif
   uniform float stoneOn;
   uniform float stoneScale;   // world px per cycle of the art
   uniform float stoneMix;     // how far toward the art
   uniform float stoneBump;    // the relief's strength
+  // the crypt's HEMISPHERE: a room with no sun is lit from above -- the
+  // open tower over it, the sky it has not got -- so a face that looks
+  // up takes the whole fill and one that looks along takes less, and the
+  // relief maps read into that as they read into a lamp: a stone keeps
+  // its grain between the lanterns. 0 = off (the streets)
+  uniform float stoneHemi;
   // SNOW ON THE GEOMETRY ITSELF. 0..1, and it lands on the faces that point
   // at the sky -- vUp, which is a real face normal rather than a guess read
   // off how bright the face draws (see the `lie` line below for what that
@@ -1415,6 +1463,9 @@ local SHADER = [[
     // broad lobe at the row's strength; the materials below retune it
     float gloss = 30.0;
     float specK = lampSpec;
+    // 1 once a material below has put a relief into N (the hemisphere
+    // reads it; a sprite card keeps its flat fill)
+    float matHit = 0.0;
     if (floorArtOn > 0.5 && vUp > 0.5 && vWorld.y < floorYMax
         && (inBox(p.rgb, floorKeyLo, floorKeyHi)
          || inBox(p.rgb, floorKey2Lo, floorKey2Hi))) {
@@ -1425,6 +1476,7 @@ local SHADER = [[
       // away a mirror and hand back the seam it exists to hide.
       vec2 fuv = vWorld.xz / floorArtScale;
       fart = Texel(floorArt, fuv).rgb;
+#ifdef CRYPT_MATS
       if (stoneOn > 0.5) {
         // the flagstones' own relief -- bevels, joints, the slabs' tilt --
         // into the normal the lanterns light by, and a wet, glossy floor
@@ -1432,8 +1484,12 @@ local SHADER = [[
         N = normalize(vec3(nm.x * stoneBump, nm.z, nm.y * stoneBump));
         gloss = 26.0;
         specK = lampSpec * 1.1;
+        matHit = 1.0;
       }
-    } else if (stoneOn > 0.5 && glassOn > 0.5) {
+#endif
+    }
+#ifdef CRYPT_MATS
+    else if (stoneOn > 0.5 && glassOn > 0.5) {
       float plum = lum3(p.rgb);
       // the face's own axis picks the projection; T and B are the two
       // world axes the art's u and v run along, which is also the tangent
@@ -1456,7 +1512,12 @@ local SHADER = [[
         vec3 s = Texel(stoneArt, uv).rgb * 1.94;
         vec3 nm = Texel(stoneNorm, uv).rgb * 2.0 - 1.0;
         N = normalize(T * (nm.x * stoneBump) + B * (nm.y * stoneBump) + N * nm.z);
+        // and a slow drift of tone across the wall, on a scale no
+        // cycle of the photograph has, so the eye never finds the
+        // repeat: a wall is never one colour end to end
+        s *= 0.86 + 0.14 * mistNoise(uv * 2.7 + 11.0);
         albedo = mix(albedo, s, stoneMix);
+        matHit = 1.0;
         // rough stone: a low, broad sheen
         gloss = 9.0;
         specK = lampSpec * 0.35;
@@ -1491,9 +1552,17 @@ local SHADER = [[
         vec3 nm = Texel(graniteNorm, guv).rgb * 2.0 - 1.0;
         N = normalize(T * (nm.x * stoneBump * 0.6) + B * (nm.y * stoneBump * 0.6) + N * nm.z);
         albedo = mix(albedo, albedo * s, stoneMix * 0.9);
+        matHit = 1.0;
         gloss = 48.0;
         specK = lampSpec * 1.3;
       }
+    }
+#endif
+    // the hemisphere (see the uniform): the fill from above, through the
+    // relief the materials just put into N
+    if (matHit > 0.5 && stoneHemi > 0.0) {
+      float up = clamp(N.y * 0.5 + 0.5, 0.0, 1.0);
+      light *= 1.0 - stoneHemi * (1.0 - up) * 0.5;
     }
     vec3 lamps = localLamp(lamp0, N, gloss, specK) + localLamp(lamp1, N, gloss, specK)
                + localLamp(lamp2, N, gloss, specK) + localLamp(lamp3, N, gloss, specK)
@@ -2406,6 +2475,49 @@ end
 -- The scene shader. `grid` asks for the wireframe variant, and nil comes
 -- back when that one will not build -- callers then fall back to the plain
 -- one rather than losing the whole 3D pass.
+-- ------- the COMPATIBILITY LADDER
+--
+-- One shader was one veto. Voxel3D.available() is exactly "the scene shader
+-- built", so any single construct a driver refused took the whole 3D mode
+-- with it -- no error, no message, an OPTIONS row that still said ON, and a
+-- player looking at the flat game wondering what they installed wrong.
+--
+-- Two constructs in here are refusable by a conformant GLES2 driver, and
+-- both of them shipped:
+--
+--   VERTEX_TEX  the vertex stage samples three textures. GLES2 is allowed
+--               to expose ZERO vertex texture units, and then the shader
+--               does not link. See the note over the wearMap declaration.
+--   CRYPT_MATS  ten samplers bound to the fragment stage where GLES2
+--               guarantees eight. See the note over stoneArt.
+--
+-- So the build walks down. Each rung gives up one feature and tries again;
+-- only the bottom rung failing means no 3D, and by then there are four
+-- driver messages on record instead of none.
+--
+-- Ordered by what it costs to lose. VERTEX_TEX goes first because the
+-- footprints and the remembered wear are the smallest thing here, and
+-- because zero vertex texture units is the likelier refusal of the two.
+local LADDER = {
+  { name = "full",     vtf = true,  crypt = true  },
+  { name = "no-vtf",   vtf = false, crypt = true  },
+  { name = "no-crypt", vtf = true,  crypt = false },
+  { name = "minimal",  vtf = false, crypt = false },
+}
+
+-- The rung the session settled on. Sticky and GLOBAL rather than per key:
+-- once a driver has refused the vertex taps, every later variant starts
+-- below them. Otherwise the arena and the overworld could land on different
+-- rungs -- the same meadow remembering footprints in one and not the other
+-- -- and it would cost a refused compile per variant to get there.
+Voxel3D.rung = 1
+
+-- Every refusal, in order: { key, rung, name, err }. This is the only thing
+-- that ever says WHY the mode is off, so it outlives the probes that used to
+-- be its only readers: Voxel3D.report() prints it and main.lua puts it in
+-- front of the player.
+Voxel3D.compileLog = {}
+
 function Voxel3D.shader(grid)
   grid = grid and true or false
   local oneTap = not Quality.softShadows()
@@ -2426,22 +2538,140 @@ function Voxel3D.shader(grid)
       -- is not part of the key
       local normals = derivativesOK()
       Voxel3D.normalsOK = normals
-      local src = (grid and "#define VOXEL_GRID 1\n" or "")
-                  .. (oneTap and "#define SUN_ONE_TAP 1\n" or "")
-                  .. ((soft and not oneTap) and "#define SUN_SOFT 1\n" or "")
-                  .. (cel and "#define ANIME_CEL 1\n" or "")
-                  .. (normals and "#define LAMP_NORMALS 1\n" or "")
-                  .. SHADER
-      local ok, sh = pcall(love.graphics.newShader, src)
-      shaders[key] = ok and sh or false
-      -- A variant that will not build falls back silently, which is the
-      -- contract -- but silently is also how a typo in a define-gated branch
-      -- stays hidden for a release. The driver's own log is the only thing
-      -- that ever says why, so it is kept where a probe can read it.
-      if not ok then Voxel3D.shaderError = tostring(sh) end
+      local head = (grid and "#define VOXEL_GRID 1\n" or "")
+                   .. (oneTap and "#define SUN_ONE_TAP 1\n" or "")
+                   .. ((soft and not oneTap) and "#define SUN_SOFT 1\n" or "")
+                   .. (cel and "#define ANIME_CEL 1\n" or "")
+                   .. (normals and "#define LAMP_NORMALS 1\n" or "")
+      local built, err = nil, nil
+      for r = Voxel3D.rung, #LADDER do
+        local rung = LADDER[r]
+        local src = head
+                    .. (rung.vtf and "#define VERTEX_TEX 1\n" or "")
+                    .. (rung.crypt and "#define CRYPT_MATS 1\n" or "")
+                    .. SHADER
+        local ok, sh = pcall(love.graphics.newShader, src)
+        if ok then
+          built = sh
+          -- Only ever downward: a later variant that happens to build at
+          -- full must not drag the session back up past a rung something
+          -- else already proved this driver refuses.
+          if r > Voxel3D.rung then Voxel3D.rung = r end
+          break
+        end
+        err = tostring(sh)
+        Voxel3D.compileLog[#Voxel3D.compileLog + 1] =
+          { key = key, rung = r, name = rung.name, err = err }
+      end
+      shaders[key] = built or false
+      -- Kept for the probes that read it, and for report() below.
+      if not built then Voxel3D.shaderError = err end
     end
   end
   return shaders[key] or nil
+end
+
+-- The rung's own name, for the menu and the report. Nil before anything has
+-- been built, which is not the same as rung 1.
+function Voxel3D.rungName()
+  local r = LADDER[Voxel3D.rung]
+  return r and r.name or nil
+end
+
+Voxel3D.rungCount = #LADDER
+
+-- Test hook: forget every build and start the ladder over.
+--
+-- Only tests/gpu_compat_probe.lua calls this, and it exists for one question
+-- that no machine here can answer honestly -- "on a driver that refuses the
+-- vertex taps, does the mode still come up?" With this, the probe can stand a
+-- refusing driver up in front of the ladder (a newShader that says no to the
+-- sources it does not like) and watch where it lands. Without it the answer
+-- would be waiting on somebody else's phone.
+function Voxel3D.resetShaders()
+  for k in pairs(shaders) do shaders[k] = nil end
+  activeShader = nil
+  Voxel3D.rung = 1
+  Voxel3D.compileLog = {}
+  Voxel3D.shaderError = nil
+end
+
+-- Test hook: build ONE rung explicitly, past the cache and past the ladder.
+--
+-- The ladder only ever compiles rungs a driver forced it down to, so on the
+-- desktop GPU this is developed on rungs 2 to 4 are never built at all -- and
+-- a GLSL error living inside an #ifdef that only fires on the devices that
+-- NEED the fallback is exactly the bug this whole change exists to stop
+-- shipping. tests/gpu_compat_probe.lua builds all four, every time.
+--
+-- Returns ok, err. Nothing here touches the cache or Voxel3D.rung.
+function Voxel3D.buildRung(i, grid)
+  local rung = LADDER[i]
+  if not rung then return false, "no such rung: " .. tostring(i) end
+  local normals = derivativesOK()
+  local src = ((grid and true or false) and "#define VOXEL_GRID 1\n" or "")
+              .. (Quality.softShadows() and "" or "#define SUN_ONE_TAP 1\n")
+              .. (Anime.cel() and "#define ANIME_CEL 1\n" or "")
+              .. (normals and "#define LAMP_NORMALS 1\n" or "")
+              .. (rung.vtf and "#define VERTEX_TEX 1\n" or "")
+              .. (rung.crypt and "#define CRYPT_MATS 1\n" or "")
+              .. SHADER
+  local ok, sh = pcall(love.graphics.newShader, src)
+  return ok and true or false, ok and rung.name or tostring(sh)
+end
+
+-- ------- what to tell somebody whose 3D did not come up
+--
+-- Everything a bug report about this needs and nothing it does not: which
+-- GPU, what the driver admits to supporting, which rung the mode settled on,
+-- and the driver's own words for each refusal. Plain text, because it has to
+-- survive being retyped off a phone screen into a chat window.
+function Voxel3D.report()
+  local out = {}
+  local function add(...)
+    local p = {}
+    for i = 1, select("#", ...) do p[i] = tostring((select(i, ...))) end
+    out[#out + 1] = table.concat(p, " ")
+  end
+
+  local okI, name, ver, vendor, dev = pcall(love.graphics.getRendererInfo)
+  if okI then
+    add("gpu:     ", tostring(dev))
+    add("driver:  ", tostring(name), tostring(ver))
+    add("vendor:  ", tostring(vendor))
+  else
+    add("gpu:      (getRendererInfo unavailable)")
+  end
+
+  local okC, caps = pcall(love.graphics.getSupported)
+  if okC and caps then
+    add("glsl3:   ", caps.glsl3 == true)
+    add("derivs:  ", caps.shaderderivatives == true)
+    add("highp:   ", caps.pixelshaderhighp == true)
+  end
+
+  local avail = Voxel3D.available()
+  add("3D:      ", avail and "ON" or "OFF -- the mode could not build")
+  local rung = LADDER[Voxel3D.rung]
+  add("rung:    ", Voxel3D.rung, rung and rung.name or "?",
+      rung and ("(vertex taps " .. (rung.vtf and "on" or "OFF")
+                .. ", crypt stone " .. (rung.crypt and "on" or "OFF") .. ")")
+            or "")
+
+  if #Voxel3D.compileLog == 0 then
+    add("refusals: none")
+  else
+    add("refusals:", #Voxel3D.compileLog)
+    for i = 1, #Voxel3D.compileLog do
+      local e = Voxel3D.compileLog[i]
+      -- First line only. A driver log can run to hundreds of lines and the
+      -- first one is the one that names the construct.
+      local first = tostring(e.err):match("^[^\r\n]*") or ""
+      add("  [" .. e.rung .. " " .. e.name .. "] key=" .. e.key
+          .. ": " .. first)
+    end
+  end
+  return table.concat(out, "\n")
 end
 
 -- Whether the 3D path can run at all. False on a headless test run (no
@@ -2909,6 +3139,7 @@ function Voxel3D.beginScene(w, h, cx, cy, vw, vh, sky, slot)
     pcall(sh.send, sh, "stoneScale", (st and st.scale) or 128)
     pcall(sh.send, sh, "stoneMix", (st and st.mix) or 0)
     pcall(sh.send, sh, "stoneBump", (st and st.bump) or 0)
+    pcall(sh.send, sh, "stoneHemi", (st and st.hemi) or 0)
   end
   -- and the water: the swell, its two wave trains, and the slope window a
   -- crest has to reach to catch the sun. The window is measured FROM the

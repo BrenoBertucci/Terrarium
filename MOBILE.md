@@ -200,3 +200,45 @@ cooldown da batida e tudo o mais que um passo recusado já faz.
 `interact()` o encontra na célula da frente. O `talkTo` inteiro é sobre
 texto, item, treinador e script de um objeto de mapa — nada que um Pokémon
 tenha —, então ele é respondido antes.
+
+## Quando o modo 3D simplesmente nao aparece
+
+Se o mod instala, a linha **VOXEL** aparece no OPTIONS, voce liga e nada
+acontece -- o jogo continua chapado -- o que houve foi o driver da GPU
+**recusar o shader**. Nao e instalacao errada, e nao adianta reinstalar.
+
+Ate a v1.30.0 isso era o fim: o shader da cena e um bloco unico, e qualquer
+construcao que o driver recusasse derrubava o modo inteiro, calado. Duas
+construcoes dele sao legitimamente recusaveis por um driver GLES2 conforme, e
+as duas estavam no ar:
+
+- o **estagio de vertice amostra tres texturas**. GLES2 pode expor ZERO
+  unidades de textura no vertice, e ai o shader nao linka. Foi o que pegou os
+  aparelhos com GPU **Adreno**;
+- o estagio de fragmento usa **dez samplers**, e GLES2 garante oito.
+
+Agora a compilacao **desce uma escada** em vez de desistir:
+
+| degrau | o que perde |
+|---|---|
+| `full` | nada |
+| `no-vtf` | as pegadas e o desgaste lembrado do capim |
+| `no-crypt` | o granito fotografado do interior da Torre |
+| `minimal` | os dois |
+
+So o ultimo degrau falhar significa ficar sem 3D -- e nesse caso o mod passa
+a **dizer o porque**. O relatorio sai no log do sistema (`logcat` no Android)
+e num arquivo `TERRARIUM-gpu-report.txt` ao lado do save:
+
+```
+gpu:      Adreno (TM) 640
+driver:   OpenGL ES 3.2 v1.r0p0
+glsl3:    true
+derivs:   true
+3D:       OFF -- the mode could not build
+rung:     4 minimal (vertex taps OFF, crypt stone OFF)
+refusals: 4
+  [1 full] key=-1-: <o que o driver disse>
+```
+
+**Esse bloco e o que um relato de bug precisa.** Cole ele inteiro.
