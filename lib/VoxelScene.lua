@@ -37,6 +37,9 @@ local Map = require("src.world.Map")
 
 local VoxelScene = {}
 
+-- how far a walker rises mid-step, world px (see drawEntity's bob)
+VoxelScene.WALK_BOB = 1.4
+
 -- When the grass pass last ran, in love.timer seconds. The grass springs
 -- and the walked trail are integrated per PASS rather than per frame (see
 -- the crush block in render), so this is what tells them how much time
@@ -371,8 +374,8 @@ end
 -- faces south faces the camera by construction. That is what the note on
 -- YAW above means by "the character cards themselves never yaw".
 --
--- The moment a camera CAN turn -- lib/MarioCam.lua's radial orbit, which
--- swings most of a half circle across a town -- that stops being true and
+-- The moment a camera CAN turn -- lib/MarioCam.lua's orbit, a quarter
+-- turn per key press -- that stops being true and
 -- the failure is spectacular rather than subtle: the card keeps facing
 -- south while the camera looks east, so it is seen edge-on and the
 -- character reads as LYING FLAT ON THE GROUND at an angle. Not a wrong
@@ -449,12 +452,12 @@ VoxelScene._cardPitch = cardPitch
 -- figure would read as a second character.
 local function billboardMatrix(px, py, y, mirror)
   local m = Mat4.translate(px + 8, y, py + 8)
-  -- the PRESENTATION yaw rides on top of the camera-facing turn: between
-  -- two cardinals the card under-rotates toward the angle its drawing was
-  -- made for, so the lens always catches it slightly turned -- see
-  -- MarioCam.presentYaw. Zero at every cardinal, zero with the row off,
-  -- so the flat game's matrix is bit-for-bit the one it always had.
-  local yaw = cardYaw() + V.require("MarioCam").presentYaw()
+  -- dead-on at the camera. A "best side" under-rotation toward the
+  -- drawing's own cardinal lived here for a while (MarioCam.presentYaw);
+  -- it turned the card visibly askew at every diagonal the camera rested
+  -- at, and the camera no longer rests at diagonals, so it is gone. Zero
+  -- with the row off, so the flat game's matrix is the one it always had.
+  local yaw = cardYaw()
   if yaw ~= 0 then m = Mat4.mul(m, Mat4.rotateY(yaw)) end
   m = Mat4.mul(m, Mat4.rotateX(cardPitch() - math.pi / 2))
   if mirror then m = Mat4.mul(m, Mat4.scale(-1, 1, 1)) end
@@ -531,6 +534,19 @@ local function drawEntity(sprite, px, py, facing, phase, flip, gh, colors,
     tex = TerrainAtlas.forSprite(def.image, colors) or tex
   end
   local y = gh + (lift or 0)
+  -- the walk BOB: a walker (the player, the follower, any NPC) rises a
+  -- hair through each step and lands on the tile -- one smooth hump per
+  -- tile, read off the sub-tile offset so it needs no clock from the
+  -- engine and stops dead on a cell. Two poses at 1 px a frame read as
+  -- a slide; the same two poses with the body lifting between them read
+  -- as walking. The shadow stays on the ground (drawShadow has none).
+  if def.walker and VoxelScene.WALK_BOB > 0 then
+    local fx, fy = (px or 0) % 16, (py or 0) % 16
+    local frac = (fx ~= 0) and (fx / 16) or (fy / 16)
+    if frac > 0 then
+      y = y + math.sin(frac * math.pi) * VoxelScene.WALK_BOB
+    end
+  end
 
   -- pick the very frame the 2D path would draw (same tables). The card
   -- always faces SOUTH -- the direction the 2D game implies -- and only
@@ -869,7 +885,7 @@ VoxelScene.lastView = { 0, 0, 160, 144 }
 --
 -- Every term above says "north" because the free-roam orbit has no yaw:
 -- it looks north, from the south, always. lib/MarioCam.lua breaks that --
--- its whole radial mode is a camera that swings round the map -- and a box
+-- its orbit turns a quarter at a time round the player -- and a box
 -- that still reaches north while the camera looks west is a box that culls
 -- most of what is on screen. Holes in the world, in a straight line down
 -- the middle of the frame.
@@ -1275,6 +1291,28 @@ function VoxelScene.render(state, w, h, vw, vh, paletteFor)
   end
   local g = VoxelScene.glintStep(glint, cx, cy)
   Voxel3D.glassPhase, Voxel3D.glassGlint = g.phase, g.amp
+  -- The haunted building, if this map stands one (Buildings.stamp records
+  -- a TowerKit model's `haunt` on the structure cache -- the Pokemon
+  -- Tower's). Outdoors only, like the glass it colours, so an interior
+  -- never inherits the tower's cold; peek, never build -- the cache is
+  -- the mesher's to fill.
+  Voxel3D.haunt = nil
+  if outdoor then
+    local okS, Structures = pcall(V.require, "Structures")
+    local okP, S = false, nil
+    if okS and Structures and Structures.peek then
+      okP, S = pcall(Structures.peek, state.map)
+    end
+    local list = okP and S and S.haunts or nil
+    Voxel3D.haunt = list and list[1] or nil
+    -- the breathing runs on the lamps' clock, which a map without a lit
+    -- street lamp would leave at zero
+    if Voxel3D.haunt and (Voxel3D.lampFlicker or 0) == 0 then
+      Voxel3D.lampFlicker =
+        ((love.timer and love.timer.getTime and love.timer.getTime() or 0)
+         * 2.4) % 6283.185
+    end
+  end
 
   local function atlasFor(map)
     return TerrainAtlas.forMap(map, modeColors(paletteFor, map))
@@ -1697,6 +1735,25 @@ function VoxelScene.render(state, w, h, vw, vh, paletteFor)
   pcall(Underpass.draw, state.map)
   Voxel3D.seams(true)
 
+  -- ------- THE WATER SURFACE, over everything it covers
+  --
+  -- The terrain pass drew the basin -- the bed and the banks (see
+  -- Water.BED) -- and everything since stood on the ground or in the air.
+  -- The sheet goes down last of the solid world and BLENDED, so the bed
+  -- shows through it, and before the air so spray and motes still test
+  -- against it. Seams off: a liquid is the one thing out here not built
+  -- out of voxels. It samples the tileset atlas, so the glass mask stays
+  -- honest and stays on.
+  Voxel3D.seams(false)
+  Voxel3D.drawWater(terrain and terrain.water, atlasFor(state.map), nil, box)
+  for i, nb in ipairs(state.neighbors or {}) do
+    local nbGroup = nbMesh[i]
+    Voxel3D.drawWater(nbGroup and nbGroup.water, atlasFor(nb.map),
+                      Mat4.translate(nb.ox, 0, nb.oy),
+                      shifted(box, nb.ox, nb.oy))
+  end
+  Voxel3D.seams(true)
+
   -- ------- AND THE AIR, INSIDE THE PASS RATHER THAN OVER IT
   --
   -- Wind motes used to be painted in main.lua's overlay, which has no
@@ -1730,6 +1787,22 @@ function VoxelScene.render(state, w, h, vw, vh, paletteFor)
     local okA, AmbientLife = pcall(V.require, "AmbientLife")
     if okA and AmbientLife and AmbientLife.drawWorld then
       pcall(AmbientLife.drawWorld)
+    end
+  end
+  -- and the chimney smoke, LAST and with depth writes off: a puff is
+  -- translucent, and one that filed a depth would hide the roof it is
+  -- drifting past. Lazily, for the same require-cycle caution.
+  do
+    local okH, HearthFX = pcall(V.require, "HearthFX")
+    if okH and HearthFX and HearthFX.drawWorld then
+      pcall(HearthFX.drawWorld)
+    end
+  end
+  -- and the tower's wisps, translucent like the smoke and after it
+  do
+    local okG, GhostFX = pcall(V.require, "GhostFX")
+    if okG and GhostFX and GhostFX.drawWorld then
+      pcall(GhostFX.drawWorld)
     end
   end
   Voxel3D.glass(true)

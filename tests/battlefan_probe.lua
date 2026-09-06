@@ -137,6 +137,102 @@ return function(game)
           ("raise=%.3f unselMax=%.3f"):format(selR, unselMax))
   shot("fan_moves.png")
 
+  -- ------- the PP meter: full / low / empty / blocked, read off the
+  -- faces and shot. The moves' pp and the disabled slot are set on the
+  -- battle for the picture and put back afterwards.
+  do
+    local moves = battle.player.curMoves
+    local saved = {}
+    for i, mv in ipairs(moves) do saved[i] = mv.pp end
+    local savedDis = battle.player.disabledSlot
+    if #moves >= 3 then
+      moves[2].pp = 1
+      moves[3].pp = 0
+      battle.player.disabledSlot = 4
+      if #moves < 4 then battle.player.disabledSlot = 3 end
+    end
+    wait(20)
+    local fd = BattleFanXY.faceDebug and BattleFanXY.faceDebug() or {}
+    local okStates = (fd[1] == "full" or fd[1] == "mid")
+                     and fd[2] == "low" and fd[3] == "empty"
+                     and (#moves < 4 or fd[4] == "disabled")
+    verdict(okStates, "the PP meter shows full, low, empty and blocked",
+            ("states=%s,%s,%s,%s"):format(tostring(fd[1]), tostring(fd[2]),
+                                          tostring(fd[3]), tostring(fd[4])))
+    shot("fan_pp.png")
+    for i, mv in ipairs(moves) do mv.pp = saved[i] end
+    battle.player.disabledSlot = savedDis
+    wait(6)
+  end
+
+  -- ------- the chosen move's element runs on its card
+  do
+    local FX = lib.require("BattleGlassFX")
+    local Box = lib.require("BattleBoxXY")
+    local mv = battle.player and battle.player.curMoves
+               and battle.player.curMoves[battle.moveIndex or 1]
+    local def = mv and battle.data and battle.data.moves
+                and battle.data.moves[mv.id]
+    local want = def and Box.typeName(def.type)
+    wait(20)
+    local td = FX.typeDebug and FX.typeDebug() or {}
+    verdict((td.draws or 0) > 0 and td.last == want,
+            "the chosen card wears its type's element",
+            ("draws=%d last=%s want=%s err=%s"):format(td.draws or 0,
+              tostring(td.last), tostring(want), tostring(td.err)))
+    -- the showcase: the same card wearing other elements, for the eye
+    -- (typeName is read at draw time; the face keeps its own art)
+    local realTypeName = Box.typeName
+    for _, tn in ipairs({ "ELECTRIC", "FIRE", "WATER", "GRASS" }) do
+      Box.typeName = function() return tn end
+      wait(24)
+      shot("fan_type_" .. tn:lower() .. ".png")
+      wait(12)
+      shot("fan_type_" .. tn:lower() .. "_2.png")
+    end
+    Box.typeName = realTypeName
+    wait(6)
+
+    -- and each element's brush on a clean pane, off the arena: the
+    -- overlay drawn through an identity map onto a card-sized canvas
+    -- for thirty frames (the particle pools need the time), then saved
+    local g = love.graphics
+    local Card = lib.require("BattleCardFX")
+    local unitOk, sheetOk = 0, 0
+    for _, tn in ipairs({ "ELECTRIC", "FIRE", "WATER", "GRASS", "ICE",
+                          "PSYCHIC", "GHOST", "FIGHTING", "ROCK",
+                          "FLYING", "POISON", "NORMAL" }) do
+      local okC, cv = pcall(g.newCanvas, 220, 310)
+      if okC and cv then
+        local drew, drewSheet = false, false
+        local ident = function(x, y) return x, y end
+        for f = 1, 40 do
+          local prev = g.getCanvas()
+          g.setCanvas(cv)
+          if f == 40 then g.clear(0.10, 0.11, 0.14, 1) end
+          drewSheet = Card.draw("unit:" .. tn, ident, 1, 220, 310, tn, 1)
+                      or drewSheet
+          drew = FX.overlayType("unit:" .. tn, ident, 1, 220, 310, tn, 1,
+                                "frame") or drew
+          g.setCanvas(prev)
+          coroutine.yield()
+        end
+        if drew then unitOk = unitOk + 1 end
+        if drewSheet then sheetOk = sheetOk + 1 end
+        local data = cv:newImageData()
+        local f = io.open(OUT .. "/fan_unit_" .. tn:lower() .. ".png", "wb")
+        if f then f:write(data:encode("png"):getString()) f:close() end
+      end
+    end
+    local td2 = FX.typeDebug()
+    local cd = Card.debug()
+    verdict(unitOk == 12, "the frame draws on a clean pane for every type",
+            ("ok=%d/12 err=%s"):format(unitOk, tostring(td2.err)))
+    verdict(sheetOk == 12, "every type plays its authored sheets",
+            ("ok=%d/12 draws=%d err=%s"):format(sheetOk, cd.draws or 0,
+                                                 tostring(cd.err)))
+  end
+
   -- ------- claim 2: pin the drift at both extremes; the fan must move
   local P = BattleCam.PAN_PERIOD
   BattleCam.t = P * 0.25

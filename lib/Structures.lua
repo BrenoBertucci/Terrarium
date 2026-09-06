@@ -131,6 +131,14 @@ local function keyOf(tx, ty)
   return (ty + 64) * 4096 + (tx + 64)
 end
 
+-- The cache, READ WITHOUT BUILDING. For anything that only wants to
+-- know what already stands on a map (HearthFX asks for the chimneys)
+-- and must not start a build from inside the update hook: the scene
+-- pass owns when a map gets built, and this answers nil until it has.
+function Structures.peek(map)
+  return (map and map.id and cache[map.id]) or nil
+end
+
 function Structures.forMap(map)
   local S = cache[map.id]
   if S then return S end
@@ -226,6 +234,7 @@ function Structures.forMap(map)
         runs = {}, skip = {}, ground = {}, doorFold = {}, objectQuads = {},
         grassQuads = {}, grassInstances = {}, flowerQuads = {}, spriteQuads = {},
         roundStamps = {}, treeSites = {}, figures = {} }
+  Structures.stage = { map = map.id, pass = "buildings" }
   Buildings.build(S, map, pixels(tileset), perRow)
 
   -- Fold doors into their buildings. A door cell is WALKABLE (the player
@@ -304,12 +313,15 @@ function Structures.forMap(map)
       end
     end
   end
+  Structures.stage = { map = map.id, pass = "cylinders" }
   Structures.buildCylinders(S, map, x0, x1, y0, y1, groundTiles)
 
   -- ---- stairs: profile-pinned cells that render as real steps ----
+  Structures.stage = { map = map.id, pass = "stairs" }
   Structures.buildStairs(S, map, x0, x1, y0, y1)
 
   -- ---- bookcases: pinned shelves collapsed to one cell of depth ----
+  Structures.stage = { map = map.id, pass = "bookcases" }
   Structures.buildBookcases(S, map, x0, x1, y0, y1)
 
   -- ---- figures: a person drawn INTO furniture, lifted off it ----
@@ -318,8 +330,10 @@ function Structures.forMap(map)
   -- (Its own tiles are authored furniture or walkable floor either way, so
   -- no pass below would have claimed them -- but the repaint is what those
   -- passes should see, and this needs no pixel access to do it.)
+  Structures.stage = { map = map.id, pass = "figures" }
   Structures.buildFigures(S, map, x0, x1, y0, y1)
 
+  Structures.stage = { map = map.id, pass = "flood" }
   -- ---- flood-fill regions of structural tiles ----
   local seen = {}
   local regions = {}
@@ -356,6 +370,7 @@ function Structures.forMap(map)
     end
   end
 
+  Structures.stage = { map = map.id, pass = "regions" }
   -- ---- model each region: carve out per-pixel objects, volume the rest --
   local data = pixels(tileset)
   for _, region in ipairs(regions) do
@@ -368,6 +383,7 @@ function Structures.forMap(map)
     end
   end
 
+  Structures.stage = { map = map.id, pass = "billboards" }
   -- ---- profile-pinned billboards (signs): forced per-pixel slabs ----
   if data then
     local seenB = {}
@@ -486,6 +502,7 @@ function Structures.forMap(map)
     Structures.buildFlowers(S, map, tw, th, x0, x1, y0, y1, data)
   end
 
+  Structures.stage = { map = map.id, pass = "propground" }
   -- ---- authored ground under pinned props ----
   -- The profile can name the tile a pinned prop stands on (a tileset
   -- entry's prop_ground: prop tile id -> ground tile id), overriding
@@ -522,6 +539,7 @@ function Structures.forMap(map)
     if g == false then S.ground[k] = best end
   end
 
+  Structures.stage = { map = map.id, pass = "done" }
   cache[map.id] = S
   return S
 end

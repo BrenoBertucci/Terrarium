@@ -80,7 +80,10 @@ ShadowMap.res = 1024      -- the rung in use; read by the main pass's filter
 -- run well under this, and the margin it buys costs only resolution --
 -- with the sun this low the frustum has to widen by most of HEIGHT again
 -- on every side to catch what casts in from off-screen.
-ShadowMap.HEIGHT = 160
+-- 240 since the Pokemon Tower stands as a tower (lib/TowerKit.lua, spire
+-- tip at ~233): the old 160 clipped its upper storeys out of the sun pass
+-- and their shadow off the plaza with them.
+ShadowMap.HEIGHT = 240
 
 -- Depth slack at the comparison, in world pixels. Too little and a lit
 -- surface shadows itself in a moire of acne; too much and a shadow detaches

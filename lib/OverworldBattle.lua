@@ -56,6 +56,7 @@ local BattleHudXY = V.require("BattleHudXY")
 local BattleBoxXY = V.require("BattleBoxXY")
 local BattleScreenXY = V.require("BattleScreenXY")
 local BattlePics = V.require("BattlePics")
+local MonPack = V.require("MonPack")
 local Voxel3D = V.require("Voxel3D")
 local ChunkMesher = V.require("ChunkMesher")
 
@@ -83,23 +84,32 @@ function OverworldBattle.enabled()
   return OverworldBattle.setting:get() and true or false
 end
 
--- ------- BACK SPRITES: the player's own mon stays on the menu
+-- ------- BACK SPRITES: the player's own mon seen from behind, IN the shot
 --
 -- The staged shot stands BOTH mons on the map, which is the mode's whole
 -- claim -- but it costs the one piece of framing Gen 1 is most recognisable
--- by: your own Pokemon, seen from behind, sitting on top of the battle menu
--- with its feet on the box. That silhouette is the series' shot.
+-- by: your own Pokemon, seen from behind, big in the foreground. That
+-- silhouette is the series' shot.
 --
--- So BACK SPRITES is offered as a middle setting rather than a compromise
--- imposed on everyone. With it on the foe is still geometry standing on its
--- tile at the far end of the arena, and the player's side goes back to being
--- the GB's own flat back pic in the GB's own slot: same art, same 2x, same
--- feet on row 96.
--- Nothing else about the shot moves -- the arena, the camera and the drift are
--- solved exactly as they were, so the foe stands where it always stood and the
--- player's cell is simply empty ground in the foreground.
+-- So BACK SPRITES puts the back view back -- and keeps the mon IN the
+-- arena. With it on the player's side wears the GB's back pic (the pack's
+-- Gen 5 back sprite when it has one) and stands on its own cell the way the
+-- foe does: a card in the 3D pass, depth-tested, shadow-mapped, under the
+-- hour's light, and grown by BACK_HERO so it reads as the foreground hero
+-- the classic 2x slot made it. Nothing else about the shot moves -- the
+-- arena, the camera and the drift are solved exactly as they were.
 --
--- OFF by default: what the mode advertises is the pair of them out there.
+-- It used to be the GB's own flat pic, pinned over the finished frame in
+-- the GB's own slot. That put the one thing in the fight that was not
+-- geometry ABOVE everything that was: the move fan, the panels and the
+-- capsules are drawn into the world canvas, and the UI canvas composites
+-- over that -- so the mon sat on top of its own move cards, and had to be
+-- tucked (shrunk to half) to get out of their way. The pin is still the
+-- fallback for a frame whose texture could not be rendered (see
+-- drawPicsLayer).
+--
+-- OFF by default: what the mode advertises is the pair of them out there,
+-- facing each other.
 OverworldBattle.BACK_KEY = "battleBack"
 OverworldBattle.BACK_LABEL = "BACK SPRITES"
 
@@ -107,9 +117,24 @@ OverworldBattle.backSetting = ModSetting.new(OverworldBattle.BACK_KEY,
                                              OverworldBattle.BACK_LABEL,
                                              { false, true }, { "OFF", "ON" })
 
+-- How much bigger the back view stands than a front pic on the same cell.
+-- The GB drew the back pic 2x for a reason: it is the mon nearest the
+-- camera, and a foreground the size of the far end reads flat. 1 is the
+-- foe's own scale. Applied to the CARD, about its feet (BattleScene
+-- .monMatrix) -- the texture keeps the artwork's own even pixels -- so the
+-- mon still stands on its tile and its shadow still falls from it.
+OverworldBattle.BACK_HERO = 1.5
+-- ...but never past the top of the frame. The grow is capped so the pic's
+-- own height, in texture pixels (GB units: a pack back sprite is 96 x 2/3
+-- = 64 tall at most, a two-bit one 32 x 2), times the grow stays under
+-- this: a squat Raticate takes the whole BACK_HERO, a Blastoise that
+-- already fills its box stands at about 0.9 and keeps its head on screen.
+-- 58 puts the top of a capped mon around GB row 16 with the tele rig.
+OverworldBattle.BACK_MAX_PIC = 58
+
 -- Gated on 3D-BTL rather than read alone: with staged battles off there is no
--- staged shot for a back pic to be pinned in FRONT of, and the engine's own
--- battle screen already draws exactly this.
+-- arena to stand the mon in, and the engine's own battle screen already draws
+-- exactly this -- the back pic, in its slot.
 function OverworldBattle.backPinned()
   if not OverworldBattle.enabled() then return false end
   -- Gold (v1): always pinned.  The player's back pic stays in the engine's
@@ -489,6 +514,9 @@ function OverworldBattle.update(dt)
   -- the turn ribbon glides its medallions toward whoever the round
   -- belongs to (see BattleRibbon)
   pcall(BattleRibbon.observe, session.battle, dt)
+  -- the animated mons advance a frame when their clock says so, BEFORE
+  -- the side textures are rendered from them (see MonPack.tick)
+  pcall(MonPack.tick, dt)
   -- the costume's dpad wrap needs the live battle so it can steal the
   -- press before BattleState walks the Game Boy grid (see BattleNav).
   -- A broken scene falls back to the engine's own screens: do not remap.
@@ -526,6 +554,12 @@ function OverworldBattle.update(dt)
     V.mod.log:warn("overworld battle scene failed: %s -- this battle draws "
                    .. "on the plain battle background", tostring(shot))
     return
+  end
+  -- whether the player's mon made it onto the field this frame. The pics
+  -- layer reads it: a BACK SPRITES frame whose texture did not render falls
+  -- back to the GB's own pinned pic (see drawPicsLayer)
+  if shot then
+    shot.playerStaged = (textures and textures.player) and true or false
   end
   session.snapped = false
   if shot and shot.canvas then
@@ -735,16 +769,31 @@ OverworldBattle.TEX_AX, OverworldBattle.TEX_AY = TEX_AX, TEX_AY
 
 -- Which side is being rendered, or nil. The placement wrappers read it.
 local texturing = nil
+-- the height the player's pic last stood at in its texture, GB units --
+-- (h - pad) * scale, recorded by the backPlacement wrapper -- for the
+-- hero cap (see BACK_MAX_PIC). Kept across frames: the send-out grow
+-- draws past the placement helper, and the last answer is the right one
+local playerPicH = nil
+
+function OverworldBattle.backPicHeight()
+  return playerPicH
+end
 
 local texCanvas = {}
 local innerPics = nil                   -- captured by install()
 local innerHUDs = nil                   -- likewise, for the snapped HUD layer
 
+-- DENSITY x the Game Boy frame: the pics are drawn scaled up by that
+-- much into it, so a Gen 1 pic lands at 3x (as crisp as before -- the
+-- quad used to blow the 1x texture up anyway) and a pack sprite at its
+-- own even blow-up (MonPack.SCALE x DENSITY = 2). Anchors and placement
+-- stay in GB units: the card maps the whole canvas by UV.
 local function texCanvasFor(side)
   local c = texCanvas[side]
   if c then return c end
-  local ok, made = pcall(love.graphics.newCanvas, BattleScene.GB_W,
-                         BattleScene.GB_H, { dpiscale = 1 })
+  local d = MonPack.DENSITY or 1
+  local ok, made = pcall(love.graphics.newCanvas, BattleScene.GB_W * d,
+                         BattleScene.GB_H * d, { dpiscale = 1 })
   if not ok then return nil end
   made:setFilter("nearest", "nearest")
   texCanvas[side] = made
@@ -850,7 +899,11 @@ function OverworldBattle.sideTexture(battle, side)
     g.clear(0, 0, 0, 0)
     g.setBlendMode("alpha")
     g.setColor(1, 1, 1, 1)
+    -- the pics layer draws in GB units; the canvas is DENSITY x that
+    g.push()
+    g.scale(MonPack.DENSITY or 1, MonPack.DENSITY or 1)
     innerPics(battle, 0, 0, 0)
+    g.pop()
   end)
 
   texturing = nil
@@ -887,20 +940,24 @@ end
 
 -- Both sides, or nil when neither has anything to show.
 --
--- One side under BACK SPRITES: the player's mon is not standing on the map at all
--- there, it is on the menu, so it has no card to be a texture for -- and
--- nothing downstream has to know that. No billboard, and no shadow on the
--- ground under a mon that is not on it.
+-- Under BACK SPRITES the player's texture carries the back pic (the engine
+-- picked it: wantsFront answered no) and is marked for the scene: `back`,
+-- so the card is not mirrored -- the back view already looks up the field
+-- toward the foe -- and `hero`, the card's grow (see BACK_HERO).
 function OverworldBattle.textures(battle)
   if not battle then return nil end
   local out = {}
   local okE, enemy = pcall(OverworldBattle.sideTexture, battle, "enemy")
-  local okP, player = true, nil
-  if not OverworldBattle.backPinned() then
-    okP, player = pcall(OverworldBattle.sideTexture, battle, "player")
-  end
+  local okP, player = pcall(OverworldBattle.sideTexture, battle, "player")
   out.enemy = okE and enemy or nil
   out.player = okP and player or nil
+  if out.player and OverworldBattle.backPinned() then
+    out.player.back = true
+    local picH = playerPicH or 0
+    local cap = (picH > 0) and (OverworldBattle.BACK_MAX_PIC / picH)
+                or OverworldBattle.BACK_HERO
+    out.player.hero = math.min(OverworldBattle.BACK_HERO, cap)
+  end
   if not (out.enemy or out.player) then return nil end
   out.flash = OverworldBattle.flashing(battle)
   return out
@@ -999,21 +1056,61 @@ function OverworldBattle.install()
   local innerScale = BattleState.resolveBattleScale
   function BattleState.resolveBattleScale(data, side, path, species)
     local base = innerScale(data, side, path, species)
-    -- 1:1 into the billboard texture: the artwork's own pixels, with the
-    -- quad's world size doing every bit of the scaling. Anything else would
-    -- resample the sprite twice -- once into the texture and again on the way
-    -- to the screen -- and a twice-resampled Gen 1 pic is mush.
-    if texturing then return 1 end
+    -- a pack sprite (MonPack) is 96 px art where the engine expects 56:
+    -- into the billboard texture at SCALE (an integer blow-up once the
+    -- texture's DENSITY is counted, so the pixels stay even), on the
+    -- menu at half the GB's 2x so it stays inside the frame
+    local packed = OverworldBattle.shot()
+                   and MonPack.has(species, side == "back")
+    local snapped = math.max(1, math.floor((tonumber(base) or 1) + 0.5))
+    if texturing then
+      if packed then return MonPack.SCALE end
+      -- the back view stands at the GB's own 2x (BACK SPRITES): the pack's
+      -- back art lands at the same 64 px through SCALE, so either road puts
+      -- the same-sized mon on the cell and BACK_HERO means the same thing
+      -- on both. A FRONT pic on the player's side (BACK SPRITES off) is the
+      -- foe's own 56 px art and stays at 1, whatever the engine's back
+      -- default says for that slot
+      if side == "back" and OverworldBattle.backPinned() then
+        return snapped
+      end
+      return 1
+    end
     if not OverworldBattle.shot() then return base end
-    return math.max(1, math.floor((tonumber(base) or 1) + 0.5))
+    if packed then return snapped * MonPack.MENU_SCALE end
+    return snapped
   end
 
   -- Keyed-out whites inside a pic used to be filled by the white field
   -- behind it. There is a world back there now, so they are filled here
   -- instead -- see BattlePics, which puts the paper back without touching
   -- the silhouette.
+  --
+  -- ...unless the mon pack has a sprite for this battler: full-colour art
+  -- with its own alpha needs no paper, no palette remap and no fill. It
+  -- is matched by identity -- the battler's own sprite image -- so the
+  -- trainer pics, which are not species, keep taking the engine's road.
+  -- The intro slide and a blackout show the engine's black silhouette;
+  -- the pack answers those with its own.
   local innerPic = BattleState.picImage
   function BattleState:picImage(img)
+    if OverworldBattle.shot() and img then
+      local species, back
+      if self.enemy and img == self.enemy.sprite and self.enemy.mon then
+        species, back = self.enemy.mon.species, false
+      elseif self.player and img == self.player.sprite and self.player.mon then
+        species, back = self.player.mon.species, true
+      end
+      if species then
+        if self.blackedOut or (self.introSlide or 0) > 0 then
+          local sil = MonPack.silhouette(species, back)
+          if sil then return sil end
+        else
+          local packed = MonPack.image(species, back)
+          if packed then return packed end
+        end
+      end
+    end
     local out = innerPic(self, img)
     if not OverworldBattle.shot() then return out end
     return BattlePics.filled(out)
@@ -1028,6 +1125,7 @@ function OverworldBattle.install()
   function BattleState.backPlacement(w, h, pad, padL, scale)
     local x, y, s = innerBack(w, h, pad, padL, scale)
     if not texturing then return x, y, s end
+    if texturing == "player" then playerPicH = (h - pad) * scale end
     return TEX_AX - w * scale / 2, TEX_AY - (h - pad) * scale, s
   end
 
@@ -1077,17 +1175,19 @@ function OverworldBattle.install()
   -- nothing left to do here. Skipped rather than left to draw underneath, or
   -- every Pokemon would appear twice: once on its tile and once in its slot.
   --
-  -- Except under BACK SPRITES, where the player's side never became geometry and this
-  -- layer is the only thing that draws it. The engine's own onlySide argument
-  -- does the whole job: one call, the player's branches alone, in the slot and
-  -- at the scale the GB always put them -- feet on the box, 2x, back view.
+  -- The one exception is a BACK SPRITES frame whose player texture did not
+  -- render (shot.playerStaged is off: sideTexture refused). The GB's own
+  -- pinned back pic then takes the slot, over the frame, the way it always
+  -- did: the engine's onlySide argument does the whole job -- the player's
+  -- branches alone, feet on the box, 2x, back view.
   innerPics = BattleState.drawPicsLayer
   function BattleState:drawPicsLayer(slide, sx, sy, onlySide, skipMenuClip)
     local shot = self.dramaticShapeShot
     if not shot then
       return innerPics(self, slide, sx, sy, onlySide, skipMenuClip)
     end
-    if OverworldBattle.backPinned() and onlySide ~= "enemy" then
+    if OverworldBattle.backPinned() and onlySide ~= "enemy"
+       and not shot.playerStaged then
       -- under the hour's own light, like everything else in the frame -- see
       -- withTint, and the tint BattleScene hands over with the shot.
       --
@@ -1520,6 +1620,9 @@ function OverworldBattle.snapHUDs(battle, shot)
                shot.ly + band[2] * shot.scale, 0, shot.scale, shot.scale)
       end
     end
+    -- the damage figure rises from the defender's capsule, over the
+    -- capsules and the panels (see BattleHitFX.drawTop)
+    if not screenUp then pcall(BattleHitFX.drawTop, battle, shot) end
     -- Poke Ball hop, after the chips so it sits on them
     pcall(function() V.require("BattleNav").draw(shot) end)
   end)

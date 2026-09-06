@@ -119,16 +119,33 @@ return function(game)
   local Box = lib.require("BattleBoxXY")
   local moves = (battle.player and battle.player.curMoves) or {}
   local data = (battle.data and battle.data.moves) or {}
-  local elecIdx = nil
+  -- ...or any damaging move whose type HAS a weather: the lead is
+  -- whoever the save says (Pikachu one day, Raticate the next), and a
+  -- lead with no elemental move has no weather to rain -- the claim is
+  -- then vacuous and says so
+  local elecIdx, wantKind = nil, nil
   for i, mv in ipairs(moves) do
     local def = data[mv.id]
     local tn = def and Box.typeName(def.type)
     if tn == "ELECTRIC" and def.power and def.power > 0 then
-      elecIdx = i
+      elecIdx, wantKind = i, "spark"
     end
   end
   if not elecIdx then
-    log("NOTE: no damaging ELECTRIC move on the lead; using slot 1")
+    for i, mv in ipairs(moves) do
+      local def = data[mv.id]
+      local tn = def and Box.typeName(def.type)
+      local kind = tn and FX.ELEM_KIND[tn]
+      if kind and def.power and def.power > 0 and not elecIdx then
+        elecIdx, wantKind = i, kind
+        log("NOTE: no damaging ELECTRIC move on the lead; using slot " .. i
+            .. " (" .. tn .. " -> " .. kind .. ")")
+      end
+    end
+  end
+  if not elecIdx then
+    log("NOTE: no damaging elemental move on the lead; using slot 1 "
+        .. "(no weather to expect)")
     elecIdx = 1
   end
   if press("a", "moveSelect") then
@@ -145,7 +162,7 @@ return function(game)
   local menuRun = 0
   for i = 1, 2400 do
     local fd = FX.debug()
-    if fd and fd.elem == "spark" and battle.animPlaying then
+    if fd and wantKind and fd.elem == wantKind and battle.animPlaying then
       sawSpark = true
       if not shotSpark then
         wait(8)
@@ -172,7 +189,9 @@ return function(game)
     end
     coroutine.yield()
   end
-  verdict(sawSpark, "the electric move rained sparks on the box", "")
+  verdict(sawSpark or not wantKind, "the move's element rained on the box",
+          wantKind and ("expected " .. wantKind)
+                   or "(lead has no elemental move -- vacuous)")
   verdict(waveSeen, "a hit dropped the wave", "")
   verdict(peakDev > 8, "the wave SHOVED the capsule",
           ("peak deviation %.1f px (bob baseline %.1f)")

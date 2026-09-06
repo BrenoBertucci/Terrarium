@@ -94,6 +94,10 @@ end
 
 local models = {}          -- "<tileset>:<index>" -> prebuilt local quads
 
+-- Instruments for the probes: what the ledge branch did in this session.
+Buildings.ledgeLog = { placements = 0, builds = 0, seconds = 0, lastKey = nil,
+                       maps = 0 }
+
 -- ------------------------------------------------------------------ read --
 
 -- Composite the template out of the atlas and flood the silhouette in from
@@ -109,11 +113,17 @@ local models = {}          -- "<tileset>:<index>" -> prebuilt local quads
 -- is built from the complete drawing and the tower rises to its real
 -- height instead of folding as two half-buildings.
 local function read(t, data, perRow)
-  local tiles = t.tiles
+  -- `paint`, when a template carries it, is the grid the PIXELS come
+  -- from while `tiles` stays the grid that is matched: the Pokemon
+  -- Center's couch is matched with the man drawn into it and painted
+  -- from the artist's own empty version of the same tiles (the figure
+  -- pass stands him up separately).
+  local tiles = t.paint or t.tiles
   if t.topRows then
+    local src = tiles
     tiles = {}
     for _, row in ipairs(t.topRows) do tiles[#tiles + 1] = row end
-    for _, row in ipairs(t.tiles) do tiles[#tiles + 1] = row end
+    for _, row in ipairs(src) do tiles[#tiles + 1] = row end
   end
   local bh, bw = #tiles, #t.tiles[1]
   local W, H = bw * 8, bh * 8
@@ -410,6 +420,20 @@ local function model(sp, pr, t)
   local T = {}
   for x = 0, W - 1 do T[x] = ytop - top[x] end
 
+  -- The chimney's MOUTH, in model space, for whatever wants to put
+  -- something on it (lib/HearthFX.lua puts smoke). The Center's rooftop
+  -- ball wears the same box and is an ornament, not a flue: it answers
+  -- nothing here.
+  local chimney = nil
+  if ch and x0d and not ch.ball then
+    local cxm = math.floor(ch.x + ch.w / 2)
+    local cxc = cxm < x0d and x0d or (cxm > x1d and x1d or cxm)
+    if top[cxc] < roofRows then
+      chimney = { x = ch.x + ch.w / 2, y = T[cxc] + ch.h + 1,
+                  z = ch.z + ch.w / 2 }
+    end
+  end
+
   local function at(x, y, z)
     -- roof: a solid of constant thickness following the elevation
     -- profile, overhanging the drawn span by `eave` on the sides and the
@@ -520,7 +544,7 @@ local function model(sp, pr, t)
     return pr.interior[i]
   end
 
-  return { at = at, W = W,
+  return { at = at, W = W, chimney = chimney,
            ytop = ytop + (ch and ch.h or 0),
            xmin = math.min(0, ex0 or 0),
            xmax = math.max(W - 1, ex1 or (W - 1)),
@@ -880,7 +904,18 @@ local function modelParts(t, data, perRow)
     end
     return nil
   end
-  return { at = at, W = fullW, ytop = ytop,
+  -- the first part with a chimney lends the union its mouth, offset
+  -- into the full drawing's space the same way its voxels are
+  local chimney = nil
+  for i = 1, #parts do
+    local P = parts[i]
+    local c = P.m.chimney
+    if c then
+      chimney = { x = P.px0 + c.x, y = c.y, z = P.pz0 + c.z }
+      break
+    end
+  end
+  return { at = at, W = fullW, ytop = ytop, chimney = chimney,
            xmin = xmin, xmax = xmax, zmin = zmin, zmax = zmax }
 end
 
@@ -902,6 +937,10 @@ local function emit(m, sp, atlasW, atlasH)
   local xmin, xmax = m.xmin or 0, m.xmax or (W - 1)
   local zn = zmax - zmin + 1
   local xn = xmax - xmin + 1
+  if Buildings.progress then
+    Buildings.progress.step = "emit:cells"
+    Buildings.progress.box = ("%dx%dx%d"):format(xn, ytop + 1, zn)
+  end
   local function ci(x, y, z)
     if x < xmin or x > xmax or y < 0 or y > ytop or z < zmin or z > zmax then
       return nil
@@ -922,6 +961,7 @@ local function emit(m, sp, atlasW, atlasH)
   -- the shell: what survives hidden-face culling. Counted here rather than
   -- derived from the quads because it is the number
   -- tools/building_voxels.py checks this build against.
+  if Buildings.progress then Buildings.progress.step = "emit:shell" end
   for y = 0, ytop do
     Budget.tick()
     for z = zmin, zmax do
@@ -962,6 +1002,18 @@ local function emit(m, sp, atlasW, atlasH)
     return { base * f1, base * f2, base * f3, base * f4 }
   end
 
+  -- A model may carry its own light (TowerKit's `tint`): a factor on the
+  -- face shade from the row -- the foot in the town's shadow, the top in
+  -- the sky -- and from the texel the run wears, which is how a drawing's
+  -- pale lavender comes out as dark stone without repainting a texel.
+  -- Taken before the corner AO so the two compound; a model without one
+  -- draws exactly as before.
+  local tintOf = m.tint
+  local function lit(shade, y, i)
+    if not tintOf then return shade end
+    return shade * tintOf(y, i)
+  end
+
   -- u/v of a run: `n` texels starting at sprite pixel `i`, stepping along
   -- the atlas when the run is a strip and standing still when it is flat.
   local function uvOf(i, strip, n)
@@ -982,6 +1034,7 @@ local function emit(m, sp, atlasW, atlasH)
     local i0 = ci(x, y, z)
     local strip, n = nil, 1
     while true do
+      if n > xn then break end
       local nx = x + n
       local i = ci(nx, y, z)
       if not i or ci(nx + dx, y + dy, z + dz) then break end
@@ -1003,6 +1056,7 @@ local function emit(m, sp, atlasW, atlasH)
   end
 
   -- ---- faces along +-Z (the facade, the roof's rims): merge along x ----
+  if Buildings.progress then Buildings.progress.step = "emit:z" end
   for _, d in ipairs({ 1, -1 }) do
     local shade = d == 1 and SHADE.south or SHADE.north
     for y = 0, ytop do
@@ -1027,12 +1081,12 @@ local function emit(m, sp, atlasW, atlasH)
               put({ x, y, zf }, { x + n, y, zf },
                   { x + n, y + 1, zf }, { x, y + 1, zf },
                   { { u0, v1 }, { u1, v1 }, { u1, v0 }, { u0, v0 } },
-                  shades(shade, sBL, sBR, sTR, sTL))
+                  shades(lit(shade, y, i), sBL, sBR, sTR, sTL))
             else
               put({ x + n, y, zf }, { x, y, zf },
                   { x, y + 1, zf }, { x + n, y + 1, zf },
                   { { u1, v1 }, { u0, v1 }, { u0, v0 }, { u1, v0 } },
-                  shades(shade, sBR, sBL, sTL, sTR))
+                  shades(lit(shade, y, i), sBR, sBL, sTL, sTR))
             end
             x = x + n
           else
@@ -1044,6 +1098,7 @@ local function emit(m, sp, atlasW, atlasH)
   end
 
   -- ---- faces along +-Y (roof surfaces, undersides): merge along x ----
+  if Buildings.progress then Buildings.progress.step = "emit:y" end
   for _, d in ipairs({ 1, -1 }) do
     local shade = d == 1 and SHADE.top or SHADE.bottom
     for y = 0, ytop do
@@ -1070,12 +1125,12 @@ local function emit(m, sp, atlasW, atlasH)
                 put({ x, yf, z }, { x + n, yf, z },
                     { x + n, yf, z + 1 }, { x, yf, z + 1 },
                     { { u0, v0 }, { u1, v0 }, { u1, v1 }, { u0, v1 } },
-                    shades(shade, f1, f2, f3, f4))
+                    shades(lit(shade, y, i), f1, f2, f3, f4))
               else
                 put({ x, yf, z + 1 }, { x + n, yf, z + 1 },
                     { x + n, yf, z }, { x, yf, z },
                     { { u0, v1 }, { u1, v1 }, { u1, v0 }, { u0, v0 } },
-                    shades(shade, f4, f3, f2, f1))
+                    shades(lit(shade, y, i), f4, f3, f2, f1))
               end
               x = x + n
             else
@@ -1088,6 +1143,7 @@ local function emit(m, sp, atlasW, atlasH)
   end
 
   -- ---- faces along +-X (the flanks): merge along z, one texel each ----
+  if Buildings.progress then Buildings.progress.step = "emit:x" end
   for _, d in ipairs({ 1, -1 }) do
     for y = 0, ytop do
       for x = xmin, xmax do
@@ -1116,12 +1172,12 @@ local function emit(m, sp, atlasW, atlasH)
               put({ xf, y, z + n }, { xf, y, z },
                   { xf, y + 1, z }, { xf, y + 1, z + n },
                   { { u0, v1 }, { u1, v1 }, { u1, v0 }, { u0, v0 } },
-                  shades(SHADE.side, fBn, fB0, fT0, fTn))
+                  shades(lit(SHADE.side, y, i), fBn, fB0, fT0, fTn))
             else
               put({ xf, y, z }, { xf, y, z + n },
                   { xf, y + 1, z + n }, { xf, y + 1, z },
                   { { u0, v1 }, { u1, v1 }, { u1, v0 }, { u0, v0 } },
-                  shades(SHADE.side, fB0, fBn, fTn, fT0))
+                  shades(lit(SHADE.side, y, i), fB0, fBn, fTn, fT0))
             end
             z = z + n
           else
@@ -1132,10 +1188,72 @@ local function emit(m, sp, atlasW, atlasH)
     end
   end
 
+  -- the mouth rides out on the quads, so stamp can place it
+  quads.chimney = m.chimney
+  -- and so does the haunt (TowerKit): the box the cold glass burns in and
+  -- where the wisps rise, in model space until stamp places them too
+  quads.haunt = m.haunt
   return quads
 end
 
 -- ------------------------------------------------------------- placement --
+
+-- The TOWER options row (lib/TowerKit.lua) decides whether a `tower`
+-- template is modelled by the kit or folded like any other building. Read
+-- at build time; the row's own step drops every cached mesh (and, through
+-- Structures.invalidate, the models here) so the choice is re-read. A
+-- build without the kit answers as it always did: the fold.
+local function towerOn()
+  local ok, TowerKit = pcall(V.require, "TowerKit")
+  if not (ok and TowerKit and TowerKit.enabled) then return false end
+  local okE, on = pcall(TowerKit.enabled)
+  return okE and on ~= false
+end
+
+-- The LEDGES row (lib/LedgeKit.lua): whether a `bank` template stands as
+-- a bank or is left to the profile's ledge class. Same contract as towerOn.
+local function ledgeOn()
+  local ok, LedgeKit = pcall(V.require, "LedgeKit")
+  if not (ok and LedgeKit and LedgeKit.enabled) then return false end
+  local okE, on = pcall(LedgeKit.enabled)
+  return okE and on ~= false
+end
+
+-- The ground a plot stands on: the commonest flat tile around its feet, so
+-- a house on a path keeps its path. Shared by stamp (what it paints under
+-- a model) and the ledge banks (what their tops wear when the high side
+-- gives no answer).
+local function groundVote(S, tx, ty, bw, bh)
+  local votes, best, bestN = {}, nil, 0
+  local function vote(x, y)
+    local k = keyOf(x, y)
+    local ns = S.shapeAt[k]
+    if ns and ns.flat and ns.class ~= "void" then
+      local tile = S.tileAt[k]
+      votes[tile] = (votes[tile] or 0) + 1
+      if votes[tile] > bestN then best, bestN = tile, votes[tile] end
+    end
+  end
+  for c = 0, bw - 1 do
+    vote(tx + c, ty - 1)
+    vote(tx + c, ty + bh)
+  end
+  for r = 0, bh - 1 do
+    vote(tx - 1, ty + r)
+    vote(tx + bw, ty + r)
+  end
+  return best
+end
+
+-- `maps`: a template that belongs to named maps only -- a set of map ids.
+-- Lavender's terrace wall (TowerKit.precinct) stands on LEDGE tiles that
+-- every route in Kanto also draws, as ledges, which there they are.
+local function placedOn(t, map)
+  if not t.maps then return true end
+  local def = map and map.def
+  local id = def and (def.id or def.name)
+  return (id and t.maps[id]) and true or false
+end
 
 -- Does the template's tile grid sit at (tx, ty)?
 local function matches(S, t, tx, ty)
@@ -1166,10 +1284,17 @@ function Buildings.build(S, map, data, perRow)
   local atlasH = tileset.imageHeight or 48
   local tw, th = map.def.width * 4, map.def.height * 4
   local quads = S.objectQuads
+  Buildings.ledgeLog.maps = Buildings.ledgeLog.maps + 1
+  Buildings.ledgeLog.lastMap = tostring(map.id)
 
   for index, t in ipairs(list) do
-    if type(t.tiles) == "table" and #t.tiles > 0 then
+    if type(t.tiles) == "table" and #t.tiles > 0 and placedOn(t, map) then
       local bh, bw = #t.tiles, #t.tiles[1]
+      Buildings.progress = { map = tostring(map.id), index = index,
+                             id = tostring(t.id), phase = "scan" }
+      -- `where`: a tile rectangle { tx0, ty0, tx1, ty1 } a placement's
+      -- top-left must fall inside (same reason as `maps`, finer)
+      local where = t.where
       local first = t.tiles[1][1]
       local built = nil
       for ty = 0, th - bh do
@@ -1184,6 +1309,10 @@ function Buildings.build(S, map, data, perRow)
           -- list order below is the priority order -- the tower's own
           -- templates come first precisely so they take those cells.
           local free = S.tileAt[keyOf(tx, ty)] == first
+          if free and where then
+            free = tx >= where[1] and ty >= where[2]
+                   and tx <= where[3] and ty <= where[4]
+          end
           if free then
             for r = 0, bh - 1 do
               for c = 0, bw - 1 do
@@ -1196,7 +1325,62 @@ function Buildings.build(S, map, data, perRow)
             end
           end
           if free and matches(S, t, tx, ty) then
-            if not built then
+            Buildings.progress.phase = "model"
+            Buildings.progress.tx, Buildings.progress.ty = tx, ty
+            if t.bank then
+              -- (`bank`, not `ledge`: the band templates already spell
+              -- their awning as `ledge`, and a Center's awning read as
+              -- strokes composited a two-tile palette row over an
+              -- eight-tile drawing and took the whole city's build down
+              -- with a nil tile -- silently, behind the mesher's pcall.)
+              Buildings.ledgeLog.placements = Buildings.ledgeLog.placements + 1
+              -- A ledge bank (lib/LedgeKit.lua) wears the HIGH side's
+              -- ground on its top, and that is a fact about the placement
+              -- rather than the template: one model per (template, ground
+              -- tile), the ground composited above the drawing as a
+              -- palette row. Off with the LEDGES row on CLASSIC -- an empty
+              -- model stamps and claims nothing, and the profile's ledge
+              -- class stands the tiles as it always did.
+              built = {}
+              if ledgeOn() then
+                local okL, LedgeKit = pcall(V.require, "LedgeKit")
+                local g = nil
+                if okL and LedgeKit and LedgeKit.groundFor then
+                  local okG, got = pcall(LedgeKit.groundFor, t,
+                    function(cx, cy) return S.tileAt[keyOf(cx, cy)] end,
+                    tx, ty)
+                  if okG then g = got end
+                end
+                g = g or groundVote(S, tx, ty, bw, bh)
+                if g then
+                  local key = tileset.id .. ":" .. index .. "@" .. g
+                  if not models[key] then
+                    local t0 = os.clock()
+                    Buildings.ledgeLog.builds = Buildings.ledgeLog.builds + 1
+                    Buildings.ledgeLog.lastKey = key
+                    local tv = setmetatable({ topRows = { { g, g } } },
+                                            { __index = t })
+                    local sp = read(tv, data, perRow)
+                    local okM, m = false, nil
+                    if okL and LedgeKit and LedgeKit.model then
+                      okM, m = pcall(LedgeKit.model, sp, tv)
+                    end
+                    if okM and m then
+                      local q = emit(m, sp, atlasW, atlasH)
+                      q.claimMask = m.claimMask
+                      models[key] = q
+                    else
+                      Buildings.lastError = "ledge " .. tostring(t.id)
+                                            .. ": " .. tostring(m)
+                      models[key] = {}
+                    end
+                    Buildings.ledgeLog.seconds = Buildings.ledgeLog.seconds
+                                                 + (os.clock() - t0)
+                  end
+                  built = models[key]
+                end
+              end
+            elseif not built then
               local key = tileset.id .. ":" .. index
               if not models[key] then
                 if t.claimOnly then
@@ -1214,10 +1398,13 @@ function Buildings.build(S, map, data, perRow)
                   -- kit (slab/eaves/chimney) WITHOUT .tex so the Center
                   -- still stands instead of an empty claimed lot.
                   local rel = spriteRel(t.sprite)
+                  Buildings.progress.step = "sprite:read"
                   local sp = readSprite(rel)
+                  Buildings.progress.step = "sprite:image"
                   local tex = sp and loadSpriteImage(rel) or nil
                   local q = nil
                   if sp and tex then
+                    Buildings.progress.step = "sprite:model"
                     local m = modelFrontSprite(sp, t)
                     q = emit(m, sp, m.atlasW or sp.W, m.atlasH or sp.H)
                   end
@@ -1225,10 +1412,72 @@ function Buildings.build(S, map, data, perRow)
                     q.tex = rel
                     models[key] = q
                   else
+                    Buildings.progress.step = "sprite:fallback"
                     local sp2 = read(t, data, perRow)
                     local pr = measure(sp2, t)
                     models[key] = emit(model(sp2, pr, t), sp2, atlasW, atlasH)
                   end
+                elseif t.room then
+                  -- interior furniture / room walls (lib/RoomKit.lua):
+                  -- a hand-modelled piece wearing the drawing's own
+                  -- texels. An unknown kind claims nothing, so the tiles
+                  -- fall back to their class pins.
+                  local sp = read(t, data, perRow)
+                  local okR, RoomKit = pcall(V.require, "RoomKit")
+                  local okM, m = false, nil
+                  if okR and RoomKit and RoomKit.model then
+                    okM, m = pcall(RoomKit.model, sp, t)
+                  end
+                  if okM and m then
+                    local q = emit(m, sp, atlasW, atlasH)
+                    q.standH = t.standH
+                    models[key] = q
+                  else
+                    models[key] = {}
+                  end
+                elseif t.tower and towerOn() then
+                  -- the Pokemon Tower (lib/TowerKit.lua): a tower modelled
+                  -- by hand in the drawing's own texels, on the same
+                  -- read/emit pipeline. A model that will not build falls
+                  -- back to the band pipeline, so the tower always stands
+                  -- -- and so does the TOWER row on CLASSIC, by skipping
+                  -- this branch for the plain fold below.
+                  local sp = read(t, data, perRow)
+                  local okT, TowerKit = pcall(V.require, "TowerKit")
+                  local okM, m = false, nil
+                  if okT and TowerKit and TowerKit.model then
+                    okM, m = pcall(TowerKit.model, sp, t)
+                  end
+                  if okM and m then
+                    models[key] = emit(m, sp, atlasW, atlasH)
+                  else
+                    Buildings.lastError = "tower " .. tostring(t.id) .. ": "
+                                          .. tostring(m)
+                    local pr = measure(sp, t)
+                    models[key] = emit(model(sp, pr, t), sp, atlasW, atlasH)
+                  end
+                elseif t.precinct then
+                  -- Lavender's terrace wall (TowerKit.precinct): one piece
+                  -- per cell shape, standing the ledge tiles as the
+                  -- tower's own ashlar. Off with the TOWER row on CLASSIC:
+                  -- an empty model stamps nothing and claims nothing, so
+                  -- the ledges stand as the profile always stood them.
+                  local q = {}
+                  if towerOn() then
+                    local sp = read(t, data, perRow)
+                    local okT, TowerKit = pcall(V.require, "TowerKit")
+                    local okM, m = false, nil
+                    if okT and TowerKit and TowerKit.precinct then
+                      okM, m = pcall(TowerKit.precinct, sp, t)
+                    end
+                    if okM and m then
+                      q = emit(m, sp, atlasW, atlasH)
+                    else
+                      Buildings.lastError = "precinct " .. tostring(t.id)
+                                            .. ": " .. tostring(m)
+                    end
+                  end
+                  models[key] = q
                 elseif t.parts then
                   -- two structures in one drawing (the Indigo Plateau):
                   -- each part models its own crop, emit takes the union
@@ -1243,7 +1492,12 @@ function Buildings.build(S, map, data, perRow)
               end
               built = models[key]
             end
-            Buildings.stamp(S, map, built, tx, ty, bw, bh)
+            -- `claimRows`: a template may match more rows than it stands
+            -- on (a wall's end matches the grass beyond it) -- claim only
+            -- its own
+            Buildings.progress.phase = "stamp"
+            Buildings.stamp(S, map, built, tx, ty, bw, t.claimRows or bh)
+            Buildings.progress.phase = "scan"
           end
         end
       end
@@ -1284,36 +1538,27 @@ function Buildings.stamp(S, map, quads, tx, ty, bw, bh)
   if not quads then return end
   if #quads == 0 and not quads.claim then return end
 
-  local shape = { class = "building", h = 0, art = "building",
-                  flat = false, authored = true }
+  -- `standH`: how high something standing on this model stands (the
+  -- couch's authored figure reads it as the seat); buildings carry none
+  local shape = { class = "building", h = quads.standH or 0,
+                  art = "building", flat = false, authored = true }
 
   -- the ground the building stands on: the commonest flat tile around its
   -- feet, so a house on a path keeps its path
-  local votes, best, bestN = {}, nil, 0
-  local function vote(x, y)
-    local k = keyOf(x, y)
-    local ns = S.shapeAt[k]
-    if ns and ns.flat and ns.class ~= "void" then
-      local tile = S.tileAt[k]
-      votes[tile] = (votes[tile] or 0) + 1
-      if votes[tile] > bestN then best, bestN = tile, votes[tile] end
-    end
-  end
-  for c = 0, bw - 1 do
-    vote(tx + c, ty - 1)
-    vote(tx + c, ty + bh)
-  end
-  for r = 0, bh - 1 do
-    vote(tx - 1, ty + r)
-    vote(tx + bw, ty + r)
-  end
+  local best = groundVote(S, tx, ty, bw, bh)
 
+  -- `claimMask` (LedgeKit): a model that shares its cell with tiles that
+  -- are not its own -- the grass over an eight-deep ledge -- claims only
+  -- its own; the rest keep their art and class for the mesher
+  local mask = quads.claimMask
   for r = 0, bh - 1 do
     for c = 0, bw - 1 do
-      local k = keyOf(tx + c, ty + r)
-      S.shapeAt[k] = shape
-      S.skip[k] = true
-      S.ground[k] = best or false
+      if not mask or mask[r * bw + c + 1] then
+        local k = keyOf(tx + c, ty + r)
+        S.shapeAt[k] = shape
+        S.skip[k] = true
+        S.ground[k] = best or false
+      end
     end
   end
 
@@ -1337,6 +1582,32 @@ function Buildings.stamp(S, map, quads, tx, ty, bw, bh)
   end
 
   local mx, mz = tx * 8, ty * 8
+  -- the chimney's mouth in WORLD space, on the map's structure cache,
+  -- so whatever puts something on it (HearthFX) asks the cache and
+  -- never the model. tx/ty ride along as the stable name a per-house
+  -- hash keys on.
+  if quads.chimney and S then
+    local c = quads.chimney
+    local list = S.chimneys
+    if not list then list = {} S.chimneys = list end
+    list[#list + 1] = { x = mx + c.x, y = c.y, z = mz + c.z,
+                        tx = tx, ty = ty }
+  end
+  -- The haunt, in WORLD space on the same cache, for the scene (the cold
+  -- glass box, Voxel3D.haunt) and the wisps (lib/GhostFX.lua) to read.
+  if quads.haunt and S then
+    local h = quads.haunt
+    local list = S.haunts
+    if not list then list = {} S.haunts = list end
+    local wisps = {}
+    for i, w in ipairs(h.wisps or {}) do
+      wisps[i] = { x = mx + w[1], y = w[2], z = mz + w[3], kind = w[4] }
+    end
+    list[#list + 1] = { x0 = mx + h.box[1], z0 = mz + h.box[2],
+                        x1 = mx + h.box[3] + 1, z1 = mz + h.box[4] + 1,
+                        top = h.top, color = h.color, wisps = wisps,
+                        tx = tx, ty = ty }
+  end
   if quads.tex then
     S.spriteQuads = S.spriteQuads or {}
   end
@@ -1371,11 +1642,15 @@ function Buildings.stats()
   return out
 end
 
--- Drop the prebuilt models (hot reload, or a mod shadowing the profile).
+-- Drop the prebuilt models (hot reload, a mod shadowing the profile, or
+-- the TOWER row flipping). The per-cell heights go with them: every stamp
+-- is about to be redone, and a height kept from a model that no longer
+-- stands would park the camera over a tower that is not there.
 function Buildings.invalidate()
   spec = nil
   models = {}
   for k in pairs(spriteImg) do spriteImg[k] = nil end
+  Buildings.clearTall()
 end
 
 return Buildings

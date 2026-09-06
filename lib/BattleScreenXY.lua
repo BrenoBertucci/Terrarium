@@ -236,8 +236,23 @@ local function partyCard(game, mon, x, y, w, h, opts)
   -- exactly as it does on the Game Boy screen
   local iconS = (h * 0.72) / 16
   local ix = x + pad
+  -- the mon pack's sprite first, fitted to the icon's box (a chosen row's
+  -- mon bobs in place); the engine's two-bit icon when the pack has none
+  local drewIcon = false
+  do
+    local okMP, MonPack = pcall(V.require, "MonPack")
+    if okMP and MonPack and MonPack.drawIcon then
+      local box = 16 * iconS
+      local bob = sel and (math.sin((opts.counter or 0) * 0.25) * box * 0.04 + box * 0.04) or 0
+      love.graphics.setColor(1, 1, 1, a)
+      local okD, d = pcall(MonPack.drawIcon, mon.species, ix,
+                           y + (h - box) * 0.55, box,
+                           { bob = bob, alpha = fnt and 0.45 or 1 })
+      drewIcon = okD and d or false
+    end
+  end
   local okPM, PartyMenu = pcall(require, "src.ui.PartyMenu")
-  if okPM and PartyMenu and PartyMenu.drawIcon then
+  if not drewIcon and okPM and PartyMenu and PartyMenu.drawIcon then
     love.graphics.push()
     love.graphics.translate(ix, y + (h - 16 * iconS) * 0.55)
     love.graphics.scale(iconS, iconS)

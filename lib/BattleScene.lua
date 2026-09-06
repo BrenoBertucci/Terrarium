@@ -196,9 +196,17 @@ end
 -- The player's TRAINER pic is the exception, and it is exempted below. That
 -- one is a BACK view -- the player seen from behind, already turned to face
 -- up the field -- so it arrives pointing the right way and mirroring it would
--- turn it around to face the camera it is standing in front of.
+-- turn it around to face the camera it is standing in front of. The mon's
+-- own back pic under BACK SPRITES (`tex.back`) is the same case.
+--
+-- `tex.hero` grows the card about its feet: the back view is the near end
+-- of the shot, and the GB drew it 2x for that reason -- a foreground the
+-- size of the far end reads flat (see OverworldBattle.BACK_HERO). The
+-- anchor offsets are taken from the grown size, so the feet stay on the
+-- tile and the shadow still falls from it.
 local function monMatrix(tex, x, groundY, z, mirror)
   local k = BattleBillboard.FULL_W / BattleBillboard.FULL_PIC
+            * (tex.hero or 1)
   local w = BattleScene.GB_W * k
   local h = BattleScene.GB_H * k
   local ox = -((tex.ax / BattleScene.GB_W) - 0.5) * w
@@ -218,7 +226,7 @@ local function monCards(arena, groundY, textures)
     local tex = textures[side]
     local cell = (side == "player") and arena.player or arena.enemy
     if tex and tex.canvas and cell then
-      local mirror = (side == "player") and not tex.trainer
+      local mirror = (side == "player") and not tex.trainer and not tex.back
       out[#out + 1] = { tex = tex.canvas,
                         model = monMatrix(tex, cell[1], groundY, cell[2],
                                           mirror) }
@@ -446,6 +454,13 @@ function BattleScene.render(state, arena, textures, token)
       Voxel3D.drawGroup(nbMesh[i], atlasFor(nb.map),
                         Mat4.translate(nb.ox, 0, nb.oy), nil, nil, nil)
     end
+    -- What the blows left on the floor, and the floating panes' contact
+    -- shadows: flat decals between the terrain and the mons, so they lie
+    -- UNDER the defender's feet and take the hour's light (BattleHitFX).
+    pcall(function()
+      local okH, H = pcall(V.require, "BattleHitFX")
+      if okH and H and H.drawGround then H.drawGround(host, arena, groundY) end
+    end)
     -- The mons, standing on their tiles. Depth-tested like everything else,
     -- so a ledge or a tree between the camera and a Pokemon really is in
     -- front of it, and the alpha discard cuts the sprite's own outline out of

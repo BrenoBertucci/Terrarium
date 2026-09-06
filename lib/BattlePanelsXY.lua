@@ -49,15 +49,18 @@ BattlePanelsXY.MSG_UP = 2.2
 BattlePanelsXY.MSG_YAW = math.rad(14)
 BattlePanelsXY.MSG_CLOSE = 0.72      -- the fan's size knob (see CLOSE there)
 
-BattlePanelsXY.BTN_RIGHT = 12.1      -- cluster centre, along camera right
-BattlePanelsXY.FIGHT_UP = 6.6
+-- past the hero's head, for the reason the fan's RIGHT_OFF is (see
+-- BattleFanXY): the mon under BACK SPRITES stands up to BACK_HERO cells
+-- wide, and FIGHT sat on its face
+BattlePanelsXY.BTN_RIGHT = 19.5      -- cluster centre, along camera right
+BattlePanelsXY.FIGHT_UP = 5.6
 BattlePanelsXY.ROW_UP = 3.0
-BattlePanelsXY.ROW_STEP = 5.2        -- spacing of the bottom three
+BattlePanelsXY.ROW_STEP = 5.9        -- spacing of the bottom three
 BattlePanelsXY.FIGHT_W = 6.2
-BattlePanelsXY.SMALL_W = 4.4
+BattlePanelsXY.SMALL_W = 5.1         -- wider since the ball shares the pill
 BattlePanelsXY.BTN_YAW = math.rad(-12)
 BattlePanelsXY.BTN_CLOSE = 0.74
-BattlePanelsXY.UNSEL_ALPHA = 0.70
+BattlePanelsXY.UNSEL_ALPHA = 0.82
 BattlePanelsXY.UNSEL_MUL = 0.90
 BattlePanelsXY.UNSEL_SINK = -0.40
 BattlePanelsXY.UNSEL_CLOSE = 0.035
@@ -187,6 +190,44 @@ local function outlineText(str, x, y, th, color)
 end
 
 -- The kit's corner brackets, gold, one L per corner.
+-- A Poke Ball drawn from primitives, `d` across, centred on (cx, cy):
+-- top half in `top` (the command's colour on a chip, red on the box),
+-- bottom half pale, the band and the button ring in ink, the button
+-- white. Primitives rather than the pack's sprite so it takes any tint
+-- and any size without a resample.
+local function pokeBall(g, cx, cy, d, top, alpha)
+  local r = d * 0.5
+  alpha = alpha or 1
+  local prevScissor = { g.getScissor() }
+  -- top half
+  g.setColor(top[1], top[2], top[3], alpha)
+  g.setScissor(math.floor(cx - r - 1), math.floor(cy - r - 1),
+               math.ceil(d + 2), math.ceil(r + 1))
+  g.circle("fill", cx, cy, r)
+  -- bottom half
+  g.setColor(0.93, 0.94, 0.96, alpha)
+  g.setScissor(math.floor(cx - r - 1), math.floor(cy),
+               math.ceil(d + 2), math.ceil(r + 2))
+  g.circle("fill", cx, cy, r)
+  if prevScissor[1] then g.setScissor(unpack(prevScissor))
+  else g.setScissor() end
+  -- the band, the outline, the button
+  g.setColor(0.08, 0.08, 0.10, alpha)
+  g.setLineWidth(math.max(1.5, d * 0.09))
+  g.line(cx - r, cy, cx + r, cy)
+  g.circle("line", cx, cy, r)
+  g.circle("fill", cx, cy, d * 0.19)
+  g.setColor(1, 1, 1, alpha)
+  g.circle("fill", cx, cy, d * 0.11)
+  g.setLineWidth(1)
+end
+
+-- the Game Boy's advance arrow, `s` tall, tip down, at (cx, top)
+local function advanceArrow(g, cx, top, s, color)
+  g.setColor(color[1], color[2], color[3], color[4] or 1)
+  g.polygon("fill", cx - s * 0.6, top, cx + s * 0.6, top, cx, top + s)
+end
+
 local function cornerTicks(g, x, y, w, h)
   local len, lw = 30, 5
   local x2, y2 = x + w, y + h
@@ -232,34 +273,44 @@ local function drawButtonFace(slot, B, cmd, selected, W, H)
         g.rectangle("line", bx, by, bw, bh, r, r)
       end
     end
-    -- lighter than they were: the frost underneath carries the body now
-    g.setColor(B.PANEL[1], B.PANEL[2], B.PANEL[3],
-               selected and 0.30 or 0.40)
+    -- the capsule (concept 14): the box's own smoked charcoal, the
+    -- command's colour only as a low tint and on the rim -- the colour's
+    -- real carrier is the Poke Ball at the left
+    local P = B.PANEL
+    g.setColor(P[1], P[2], P[3], selected and 0.78 or 0.70)
     g.rectangle("fill", bx, by, bw, bh, r, r)
-    g.setColor(c[1], c[2], c[3], selected and 0.66 or 0.38)
+    g.setColor(c[1], c[2], c[3], selected and 0.30 or 0.22)
     g.rectangle("fill", bx, by, bw, bh, r, r)
-    -- gloss across the crown
-    g.setColor(1, 1, 1, selected and 0.22 or 0.14)
-    g.rectangle("fill", bx + bw * 0.07, by + bh * 0.10,
-                bw * 0.86, bh * 0.36, bh * 0.18, bh * 0.18)
-    -- the rim: gold when chosen, the command's own colour brightened when
-    -- not -- stepped back but still tellable apart at a glance
+    -- the glass's depth: a cool sheen over the crown, a darker foot
+    g.setColor(0.55, 0.62, 0.80, selected and 0.16 or 0.11)
+    g.rectangle("fill", bx + 3, by + 3, bw - 6, bh * 0.40, r, r)
+    g.setColor(0, 0, 0, 0.18)
+    g.rectangle("fill", bx + 3, by + bh * 0.70, bw - 6, bh * 0.30 - 3, r, r)
+    -- the rim: gold when chosen, the command's own colour when not
     if selected then
       g.setColor(GOLD[1], GOLD[2], GOLD[3], 0.95)
       g.setLineWidth(6)
     else
-      g.setColor(c[1] * 0.55 + 0.45, c[2] * 0.55 + 0.45,
-                 c[3] * 0.55 + 0.45, 1)
-      g.setLineWidth(4.5)
+      g.setColor(c[1] * 0.7 + 0.3, c[2] * 0.7 + 0.3, c[3] * 0.7 + 0.3, 0.9)
+      g.setLineWidth(4)
     end
     g.rectangle("line", bx, by, bw, bh, r, r)
     g.setLineWidth(1)
 
-    -- the label, the game's own word, shrunk to fit the capsule's flat
-    -- middle rather than clipped by its round ends -- in Unova's font
-    -- when the sheet is loaded
+    -- the Poke Ball, tinted in the command's colour, at the left end
+    local d = bh * 0.64
+    local ballX = bx + bh * 0.52
+    local sel = selected and 1 or 0.85
+    pokeBall(g, ballX, by + bh * 0.5, d,
+             { c[1] * sel + (1 - sel) * 0.5, c[2] * sel + (1 - sel) * 0.5,
+               c[3] * sel + (1 - sel) * 0.5 }, selected and 1 or 0.9)
+
+    -- the label, the game's own word, right of the ball, shrunk to fit
+    -- the capsule's flat middle -- in Unova's font when the sheet is
+    -- loaded, with a shadow for depth on the smoked glass
     local C = capsule()
-    local maxw = bw - bh * 0.8
+    local left = ballX + d * 0.5 + bh * 0.22
+    local maxw = bx + bw - bh * 0.45 - left
     if C then
       local kk = (bh * 0.50) / 9
       local tw = C.textWidth(cmd.label) * kk
@@ -267,8 +318,12 @@ local function drawButtonFace(slot, B, cmd, selected, W, H)
         kk = kk * maxw / tw
         tw = maxw
       end
+      local lx = left + (maxw - tw) * 0.5
+      local lyy = by + (bh - 9 * kk) * 0.5
+      g.setColor(0, 0, 0, 0.7)
+      C.text(cmd.label, lx + 3, lyy + 3, kk)
       g.setColor(1, 1, 1, selected and 1 or 0.9)
-      C.text(cmd.label, bx + (bw - tw) * 0.5, by + (bh - 9 * kk) * 0.5, kk)
+      C.text(cmd.label, lx, lyy, kk)
       g.setColor(1, 1, 1, 1)
     else
       local th = bh * 0.46
@@ -277,8 +332,8 @@ local function drawButtonFace(slot, B, cmd, selected, W, H)
         th = th * maxw / tw
         tw = maxw
       end
-      outlineText(cmd.label, bx + (bw - tw) * 0.5, by + (bh - th) * 0.5, th,
-                  { 1, 1, 1, selected and 1 or 0.9 })
+      outlineText(cmd.label, left + (maxw - tw) * 0.5, by + (bh - th) * 0.5,
+                  th, { 1, 1, 1, selected and 1 or 0.9 })
     end
   end)
   if prevCanvas then g.setCanvas(prevCanvas) else g.setCanvas() end
@@ -340,26 +395,42 @@ local function drawMsgFace(slot, B, msgLines, uFrac, showCaret)
     g.setCanvas(slot.canvas)
     g.clear(0, 0, 0, 0)
     g.setBlendMode("alpha")
-    local r = 14
-    -- barely a tint: the REAL frost is the sampled blur laid under this
-    -- face (frostPass); a strong fill here would paint over it
-    g.setColor(0.90, 0.94, 1.00, 0.13)
+    local r = 16
+    -- SMOKED glass, the capsules' own charcoal (B2W2 plates are dark):
+    -- the clear pane of the first kit put white type over whatever the
+    -- frost blurred behind it -- a pale floor, a blue mon -- and the
+    -- words dissolved. Dark enough that white reads on any floor, open
+    -- enough that the frost's blurred world still shows through.
+    local P = B.PANEL
+    g.setColor(P[1], P[2], P[3], 0.74)
     g.rectangle("fill", px, py, pw, ph, r, r)
-    g.setColor(1, 1, 1, 0.07)
-    g.rectangle("fill", px, py, pw, ph * 0.42, r, r)
-    -- luminous border: a soft halo under a crisp line
-    g.setColor(1, 1, 1, 0.14)
-    g.setLineWidth(11)
+    -- the glass's depth: a cool sheen down the top third, a darker foot
+    g.setColor(0.55, 0.62, 0.80, 0.14)
+    g.rectangle("fill", px + 3, py + 3, pw - 6, ph * 0.38, r, r)
+    g.setColor(0, 0, 0, 0.20)
+    g.rectangle("fill", px + 3, py + ph * 0.70, pw - 6, ph * 0.30 - 3, r, r)
+    -- the rim: the Game Boy text box's DOUBLE border, read as two thin
+    -- pale lines in the glass (concept 13) under a soft outer glow
+    g.setColor(0.75, 0.82, 1.00, 0.16)
+    g.setLineWidth(10)
     g.rectangle("line", px, py, pw, ph, r, r)
-    g.setColor(1, 1, 1, 0.92)
-    g.setLineWidth(3.5)
+    g.setColor(0.90, 0.93, 1.00, 0.95)
+    g.setLineWidth(2.5)
     g.rectangle("line", px, py, pw, ph, r, r)
+    g.setColor(0.90, 0.93, 1.00, 0.55)
+    g.setLineWidth(2)
+    g.rectangle("line", px + 9, py + 9, pw - 18, ph - 18, r - 7, r - 7)
     g.setLineWidth(1)
-    cornerTicks(g, px, py, pw, ph)
+    -- the emblem: a Poke Ball sat on the top-left corner, over the rim
+    pokeBall(g, px + 8, py + 8, 38, { 0.90, 0.20, 0.22 }, 1)
 
     local ly = py + padY
     for _, line in ipairs(msgLines) do
       if C then
+        -- a shadow a hair under the type, then the type: on smoked glass
+        -- white needs no outline, only a little depth
+        g.setColor(0, 0, 0, 0.75)
+        C.text(line, px + padX + 3, ly + 3, ck)
         g.setColor(1, 1, 1, 1)
         C.text(line, px + padX, ly, ck)
       else
@@ -367,34 +438,28 @@ local function drawMsgFace(slot, B, msgLines, uFrac, showCaret)
       end
       ly = ly + lineH
     end
-    -- the gold underline accent, growing from centre on a new message
+    -- the advance arrow, the Game Boy's own: while the typewriter runs
+    -- it rides the end of the line (the caret's old post) and blinks;
+    -- settled, it waits at the bottom-right corner, where every Gen 1
+    -- box put it. `uFrac` (the old underline's clock) times the settle.
     if n > 0 then
-      local uw = pw * 0.44 * math.max(0, math.min(1, uFrac or 1))
-      local ux = px + (pw - uw) * 0.5
-      local uy = ly + 2
-      if uw > 1 then
-        g.setColor(GOLD[1], GOLD[2], GOLD[3], 0.30)
-        g.setLineWidth(9)
-        g.line(ux, uy, ux + uw, uy)
-        g.setColor(GOLD[1], GOLD[2], GOLD[3], 0.95)
-        g.setLineWidth(3.5)
-        g.line(ux, uy, ux + uw, uy)
-        g.setLineWidth(1)
-      end
-    end
-    -- gold caret at the typewriter's own end (read charIndex, never write it)
-    if showCaret and n > 0 then
-      local last = msgLines[n]
-      local tw
-      if C then
-        tw = C.textWidth(last) * ck
+      local s = math.max(10, lineH * 0.34)
+      if showCaret then
+        local last = msgLines[n]
+        local tw
+        if C then
+          tw = C.textWidth(last) * ck
+        else
+          tw = BattleHudXY.textWidth(last) * (th / 84)
+        end
+        advanceArrow(g, px + padX + tw + 10 + s * 0.6,
+                     ly - lineH + lineH * 0.42, s, { 1, 1, 1, 1 })
       else
-        tw = BattleHudXY.textWidth(last) * (th / 84)
+        local settle = math.max(0, math.min(1, uFrac or 1))
+        advanceArrow(g, px + pw - padX * 0.55 - s * 0.6,
+                     py + ph - padY * 0.9 - s + (1 - settle) * 6, s,
+                     { 1, 1, 1, 0.55 + 0.45 * settle })
       end
-      local cx = px + padX + tw + 8
-      local cy = ly - lineH + 4
-      g.setColor(GOLD[1], GOLD[2], GOLD[3], 0.95)
-      g.rectangle("fill", cx, cy, 6, math.max(8, lineH * 0.62))
     end
   end)
   if prevCanvas then g.setCanvas(prevCanvas) else g.setCanvas() end
@@ -423,16 +488,24 @@ local function hangPanel(slot, shot, R, offR, offU, w, faceW, faceH, yaw,
   -- when a landed hit's wave reaches this panel -- applied in world
   -- units, BEFORE the size pull, so every panel rocks at its own depth
   local FX = fxId and glassFX()
+  local jT = 0
   if FX then
-    local okJ, jR, jU = pcall(FX.jolt, fxId, c, R)
+    local okJ, jR, jU, tilt = pcall(FX.jolt, fxId, c, R)
     if okJ and jR then
       c = Fan.vadd(Fan.vadd(c, R.right, jR), R.up, jU)
+      jT = tilt or 0
     end
   end
-  c = Fan.vadd(shot.eye, Fan.vadd(c, shot.eye, -1), close)
   local ww = w * (mul or 1)
-  local cr = Fan.vrot(R.right, R.up, yaw)
   local hh = ww * faceH / faceW
+  -- the pane turns with the shove (BattleGlassFX.jolt's third answer)
+  local cr = Fan.vrot(R.right, R.up, yaw + jT)
+  -- where it floats, for the contact shadow on the floor (drawn by the
+  -- arena pass next frame): the world position BEFORE the size pull
+  if FX and FX.footprint then
+    pcall(FX.footprint, fxId, c, cr, R.up, ww, hh, shot.groundY)
+  end
+  c = Fan.vadd(shot.eye, Fan.vadd(c, shot.eye, -1), close)
   if frost then
     pcall(Fan.frost, slot, shot, c, cr, R.up,
           ww, hh, faceW, faceH,
@@ -469,10 +542,17 @@ local function hangPanel(slot, shot, R, offR, offU, w, faceW, faceH, yaw,
   end
   -- the weather lands on the dialog box: the playing move's element, and
   -- status bursts (paralysis arcing across the glass and kin)
-  if FX and fxId == "msg" and slot.panePx then
+  if FX and slot.panePx then
     local map, ss = Fan.paneMapper(shot, c, cr, R.up, ww, hh,
                                    faceW, faceH, slot.panePx)
-    pcall(FX.overlayMsg, map, ss, slot.panePx[3], slot.panePx[4])
+    if fxId == "msg" then
+      pcall(FX.overlayMsg, map, ss, slot.panePx[3], slot.panePx[4])
+    end
+    -- and the mark the hit's wave leaves on THIS pane, box or chip
+    if FX.overlayPane then
+      pcall(FX.overlayPane, fxId, map, ss, slot.panePx[3], slot.panePx[4],
+            R.project)
+    end
   end
   local px, py = R.project(c)
   return px, py, c
