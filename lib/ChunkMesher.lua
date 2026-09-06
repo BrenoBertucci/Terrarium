@@ -859,6 +859,13 @@ local function runGeometry(map, bodyOnly, masks, sink, waterSink)
           topQuad(x0, z0, h, topTile, VOLUME_TOP_SHADE)
         else
           local topTile = tile
+          -- A VOID cell draws as the dark itself. The class is "nothing
+          -- stands here", and it is pinned onto tiles that are not black
+          -- (the tower of graves' grey stock, $11 of CEMETERY) precisely
+          -- so they stop standing -- but a flat quad wearing that grey
+          -- is a lit floor beyond the walls, not the dark. So it wears
+          -- the tileset's own all-black tile where there is one.
+          if s.class == "void" and S.voidTile then topTile = S.voidTile end
           if s.art == "upright" and s.authored then
             -- Top art for a pinned box.  A furniture drawing is top-view
             -- rows over floor(h/8) face-on rows the fold stands upright;

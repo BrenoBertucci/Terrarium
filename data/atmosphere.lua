@@ -16,8 +16,20 @@
 --   span      how many pixels until it reaches full strength
 --   strength  the cap -- 1 would dissolve the horizon entirely
 --
--- OUTDOOR ONLY, by construction: MarioCam attaches an entry only when the
--- map is outdoors, so an interior never inherits the town's weather.
+-- OUTDOOR by default: MarioCam attaches an entry to an interior only when
+-- the entry says `indoor = true` -- that interior's own air, never the
+-- town's weather leaking in.
+local TOWER_CALM = {
+  -- the tower's lower floors: a dark haze, so the far wall of the crypt
+  -- sinks back and the room has depth (lib/Crypt.lua)
+  color = { 0.10, 0.09, 0.13 }, near = 190, span = 300, strength = 0.42,
+  indoor = true,
+}
+local TOWER_HAUNTED = {
+  -- the haunted floors: the town's violet, inside, heavier
+  color = { 0.34, 0.28, 0.46 }, near = 170, span = 280, strength = 0.55,
+  indoor = true,
+}
 return {
   LAVENDER_TOWN = {
     -- the town of graves: violet air, close and heavy for a town, so the
@@ -26,5 +38,15 @@ return {
     near = 70,
     span = 210,
     strength = 0.62,
+  },
+  POKEMON_TOWER_1F = TOWER_CALM,
+  POKEMON_TOWER_2F = TOWER_CALM,
+  POKEMON_TOWER_3F = TOWER_HAUNTED,
+  POKEMON_TOWER_4F = TOWER_HAUNTED,
+  POKEMON_TOWER_5F = TOWER_HAUNTED,
+  POKEMON_TOWER_6F = TOWER_HAUNTED,
+  POKEMON_TOWER_7F = {
+    color = { 0.22, 0.17, 0.26 }, near = 180, span = 300, strength = 0.46,
+    indoor = true,
   },
 }

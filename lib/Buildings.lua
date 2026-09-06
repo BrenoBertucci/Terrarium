@@ -1210,6 +1210,16 @@ local function towerOn()
   return okE and on ~= false
 end
 
+-- The CRYPT row (lib/CryptKit.lua): whether a `crypt` template stands as
+-- the hand-modelled interior of the tower of graves or is left to the
+-- profile's pins. Same contract as towerOn.
+local function cryptOn()
+  local ok, CryptKit = pcall(V.require, "CryptKit")
+  if not (ok and CryptKit and CryptKit.enabled) then return false end
+  local okE, on = pcall(CryptKit.enabled)
+  return okE and on ~= false
+end
+
 -- The LEDGES row (lib/LedgeKit.lua): whether a `bank` template stands as
 -- a bank or is left to the profile's ledge class. Same contract as towerOn.
 local function ledgeOn()
@@ -1376,6 +1386,47 @@ function Buildings.build(S, map, data, perRow)
                     end
                     Buildings.ledgeLog.seconds = Buildings.ledgeLog.seconds
                                                  + (os.clock() - t0)
+                  end
+                  built = models[key]
+                end
+              end
+            elseif t.crypt then
+              -- The tower of graves, inside (lib/CryptKit.lua): which
+              -- model a cell gets is a fact about the PLACEMENT -- which
+              -- sides of a wall face the room, how tall its row stands
+              -- under the fixed camera, whether a lantern hangs on it --
+              -- so, like the ledge banks, one model per (template,
+              -- signature) rather than per template. Off with the CRYPT
+              -- row on CLASSIC: an empty model stamps nothing and claims
+              -- nothing, and the profile's pins stand the tiles as before.
+              built = {}
+              if cryptOn() then
+                local okC, CryptKit = pcall(V.require, "CryptKit")
+                local sig = nil
+                if okC and CryptKit and CryptKit.signature then
+                  local okS, got = pcall(CryptKit.signature, t,
+                    function(cx, cy) return S.tileAt[keyOf(cx, cy)] end,
+                    tx, ty, map)
+                  if okS then sig = got
+                  else Buildings.lastError = "crypt " .. tostring(t.id)
+                                             .. ": " .. tostring(got) end
+                end
+                if sig then
+                  local key = tileset.id .. ":" .. index .. "@" .. sig
+                  if not models[key] then
+                    local sp = read(t, data, perRow)
+                    local okM, m, why = pcall(CryptKit.model, sp, t, sig)
+                    if okM and m then
+                      local q = emit(m, sp, atlasW, atlasH)
+                      q.claimMask = m.claimMask
+                      q.standH = m.standH
+                      models[key] = q
+                    else
+                      Buildings.lastError = "crypt " .. tostring(t.id) .. "@"
+                                            .. sig .. ": "
+                                            .. tostring(okM and why or m)
+                      models[key] = {}
+                    end
                   end
                   built = models[key]
                 end
@@ -1601,11 +1652,16 @@ function Buildings.stamp(S, map, quads, tx, ty, bw, bh)
     if not list then list = {} S.haunts = list end
     local wisps = {}
     for i, w in ipairs(h.wisps or {}) do
-      wisps[i] = { x = mx + w[1], y = w[2], z = mz + w[3], kind = w[4] }
+      -- `scale`: how big this haunt's wisps are, next to the tower's
+      wisps[i] = { x = mx + w[1], y = w[2], z = mz + w[3], kind = w[4],
+                   scale = h.scale }
     end
     list[#list + 1] = { x0 = mx + h.box[1], z0 = mz + h.box[2],
                         x1 = mx + h.box[3] + 1, z1 = mz + h.box[4] + 1,
                         top = h.top, color = h.color, wisps = wisps,
+                        -- `slow`: a multiplier on the breath's period, so a
+                        -- grave sighs where a tower's lantern storey pours
+                        slow = h.slow,
                         tx = tx, ty = ty }
   end
   if quads.tex then

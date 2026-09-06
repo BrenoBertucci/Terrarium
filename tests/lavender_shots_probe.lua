@@ -93,6 +93,19 @@ return function(game)
     return px >= 0 and px <= w and py >= 0 and py <= h
   end
 
+  -- The 3D pass comes up on its own clock (the scene shader compiles and
+  -- the town's meshes build on the first frames), and a shot taken before
+  -- it is up is a shot of the flat 2D renderer: project() answers nil and
+  -- every check below fails for a reason that is nobody's. Poll it up the
+  -- way the tower probe does -- Lavender has street lamps, so lampLights
+  -- is set the first frame the pass runs.
+  game.overworld:setMap("LAVENDER_TOWN", 7, 6, "down")
+  for _ = 1, 1200 do
+    if Voxel3D.lampLights ~= nil then break end
+    hold(1)
+  end
+  log("3D pass up: " .. tostring(Voxel3D.lampLights ~= nil))
+
   -- ------- 1. SHOTS: every authored box, acquired and honest
   local SHOTS = {
     { "shot_west",  "LAVENDER_TOWN",    1,  7, "fixed", nil },
@@ -210,7 +223,14 @@ return function(game)
   shoot("shot_lavender_air")
   game.overworld:setMap("POKEMON_TOWER_1F", 10, 8, "down")
   hold(120)
-  check(Voxel3D.lastFog == nil, "the tower interior inherits no weather")
+  -- the tower's floors carry their OWN air now (data/atmosphere.lua,
+  -- `indoor`): the crypt's dark haze, never the town's violet
+  fog = Voxel3D.lastFog
+  col = Voxel3D.lastFogColor
+  check(fog ~= nil and math.abs((fog and fog[3] or 0) - 0.42) < 0.01,
+        "the tower interior carries its own authored air (strength 0.42)")
+  check(col ~= nil and col[3] ~= nil and math.abs(col[3] - 0.13) < 0.01,
+        "and it is the crypt's dark, not the town's violet")
   game.overworld:setMap("PALLET_TOWN", 10, 9, "down")
   hold(150)
   check(Voxel3D.lastFog == nil,

@@ -38,6 +38,17 @@ Upstream Dramatic Shape still uses `3` / `5` / `6` / `7` / `8` / `9`.
 - Wild Pokemon visible in the grass; ecology / shelter / city life systems
 - Tuned defaults for lower-end / mobile hardware
 
+## New in 1.30.0
+
+The tower of graves has an inside.
+
+- **CRYPT (NEW / CLASSIC).** The Pokemon Tower's seven floors and Agatha's
+  room stand as a crypt: ashlar climbing out of the light, headstones on
+  plinths, candle lanterns, violet air, wisps from the graves, dark
+  flagstones. CLASSIC is the old pins.
+- **CRYPT-FX.** Real face lighting, wet sheen, ground mist, CC0 stone
+  from Poly Haven, bloom and candle shafts. ~4.5 ms on 4F with it on.
+
 ## New in 1.29.0
 
 First tag without `-mobile`. The arena answers the blow. Houses breathe.

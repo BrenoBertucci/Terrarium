@@ -152,6 +152,9 @@ tests/run_err_classic.cmd
 tests/run_ledges.cmd
 tests/run_ledges_err.cmd
 tests/run_tower.cmd
+tests/tower_interior_probe.lua
+tests/run_tower_interior.cmd
+tests/run_lavender_shots.cmd
 tools/install_mon_anim.py
 tools/install_mon_pack.py
 PARTICLES-PLAN.md

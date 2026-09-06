@@ -1203,6 +1203,57 @@ local SHADER = [[
   uniform float lampHeight;   // world y of the flame (from the post's bake)
   uniform float lampFlicker;  // the gas clock; 0 holds every lamp perfectly still
   uniform vec3 lampCore;      // the hot near-white at the centre of a pool
+  // ------- THE CRYPT'S LIGHT (lib/Crypt.lua, the CRYPT-FX row)
+  //
+  // Three things the flat-lit interior never needed and a room lit by
+  // candles cannot do without. All zero by default and sent every scene,
+  // so a street keeps the pools it always had.
+  //
+  //   lampNormals  1 = light a flank by its REAL face normal (screen-space
+  //                derivatives of vWorld -- exact on voxel geometry, where
+  //                every face is a plane) instead of the horizontal share
+  //                every flank got regardless of which way it turned. A
+  //                wall facing away from a lantern goes dark, which is most
+  //                of what makes a point light read as a point light.
+  //   lampSpec     a wet sheen: Blinn-Phong off the same normal, in the
+  //                lamp's core colour, added AFTER the material so the
+  //                highlight is the flame's colour and not the stone's.
+  //   mist         ground mist: x amount (0 = off), y the height it has
+  //                thinned to nothing at, z 1/scale of its drift, w time.
+  //                Two octaves of value noise on the world's XZ, drifting,
+  //                denser at the floor, lit a little by the pools it lies
+  //                under -- painted on the surfaces it lies on, which at a
+  //                fixed high camera is the same picture a volume gives.
+  uniform float lampNormals;
+  uniform float lampSpec;
+  uniform vec3 eyePos;        // the camera, always sent (fogEye is not)
+  uniform vec4 mist;
+  uniform vec3 mistColor;
+  // ------- THE CRYPT'S MATERIALS (the same row)
+  //
+  // The kit's walls wear the drawing's WHITE and its headstones the
+  // drawing's GREYS (lib/CryptKit.lua), so what a fragment is made of is
+  // readable off the texel it wears: white is ashlar, grey is the stone of
+  // a grave, and the floor is the paving art's own business. Two surfaces
+  // (assets/stone/), mapped in world space by the face's own axis -- exact
+  // on voxel geometry, where every face is a plane -- so they hold still
+  // under the camera, their detail folded into the normal the lamps light
+  // by: a bump, so a flame rakes across grain instead of across paint.
+  // The tone stays the geometry's (vShade carries the kit's courses and
+  // joints); the art is the DETAIL, normalised by its own mean.
+  uniform Image stoneArt;
+  uniform Image graniteArt;
+  // and their RELIEF: tangent-space normal maps baked from the same height
+  // fields (tools: make_stone2.py), x along the art's u, y along its v --
+  // which the material block turns into world space through the face's
+  // own two axes. The paving carries one too (FloorArt.normal).
+  uniform Image stoneNorm;
+  uniform Image graniteNorm;
+  uniform Image floorNorm;
+  uniform float stoneOn;
+  uniform float stoneScale;   // world px per cycle of the art
+  uniform float stoneMix;     // how far toward the art
+  uniform float stoneBump;    // the relief's strength
   // SNOW ON THE GEOMETRY ITSELF. 0..1, and it lands on the faces that point
   // at the sky -- vUp, which is a real face normal rather than a guess read
   // off how bright the face draws (see the `lie` line below for what that
@@ -1220,8 +1271,49 @@ local SHADER = [[
   // flame this fragment is in .y, which the caller uses to run the pool from
   // amber at the rim to near-white at the core -- a real flame is not one
   // colour, and a pool that IS one colour reads as a painted circle.
-  vec2 localLamp(vec4 lamp) {
-    if (lamp.w <= 0.0 || lamp.z <= 0.0) return vec2(0.0);
+  // The face this fragment lies on, from the derivatives of its world
+  // position: exact for voxel geometry (every face is a plane), and turned
+  // toward the eye, since a face is only ever seen from its front. Built
+  // only where the driver admits to derivatives (the same gate the
+  // wireframe rides on); the plain build reports straight up and
+  // `lampNormals` is held at zero for it.
+  vec3 faceNormal() {
+#ifdef LAMP_NORMALS
+    vec3 n = cross(dFdx(vWorld), dFdy(vWorld));
+    float l = length(n);
+    if (l < 1e-8) return vec3(0.0, 1.0, 0.0);
+    n /= l;
+    if (dot(n, eyePos - vWorld) < 0.0) n = -n;
+    return n;
+#else
+    return vec3(0.0, 1.0, 0.0);
+#endif
+  }
+
+  float lum3(vec3 c) { return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
+
+  // Value noise for the mist: a hash on the lattice, smoothed between.
+  float mistHash(vec2 p) {
+    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+  }
+  float mistNoise(vec2 p) {
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    float a = mistHash(i);
+    float b = mistHash(i + vec2(1.0, 0.0));
+    float c = mistHash(i + vec2(0.0, 1.0));
+    float d = mistHash(i + vec2(1.0, 1.0));
+    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+  }
+
+  // One lamp's contribution: .x the energy, .y how near the flame this
+  // fragment is (the caller runs the pool from amber at the rim to
+  // near-white at the core), .z the sheen (lampSpec), already attenuated.
+  // `gloss` is the sheen's exponent (rough stone low, polished granite
+  // high) and `specK` its strength, both the material block's to say.
+  vec3 localLamp(vec4 lamp, vec3 N, float gloss, float specK) {
+    if (lamp.w <= 0.0 || lamp.z <= 0.0) return vec3(0.0);
     // How far the pool REACHES is a ground measurement, and how bright it is
     // at a point is a 3D one. Keeping them apart matters: run the cutoff off
     // the 3D distance instead and the lantern's own height eats most of the
@@ -1233,7 +1325,7 @@ local SHADER = [[
     vec2 ground = vWorld.xz - lamp.xy;
     float rad2 = dot(ground, ground);
     float r2 = lamp.z * lamp.z;
-    if (rad2 >= r2) return vec2(0.0);         // early out: most fragments
+    if (rad2 >= r2) return vec3(0.0);         // early out: most fragments
 
     vec3 d = vec3(lamp.x, lampHeight, lamp.y) - vWorld;
     float dist2 = dot(d, d);
@@ -1259,6 +1351,19 @@ local SHADER = [[
     float invd = inversesqrt(max(dist2, 1.0));
     vec3 L = d * invd;
     float ndl = mix(length(L.xz), max(0.0, L.y), vUp);
+    // ...unless the crypt asked for the real thing (see lampNormals)
+    ndl = mix(ndl, max(0.0, dot(N, L)), lampNormals);
+    // the sheen: a narrow lobe off the same normal, toward the eye
+    float sheen = 0.0;
+    if (specK > 0.0) {
+      vec3 Vv = normalize(eyePos - vWorld);
+      vec3 Hv = normalize(L + Vv);
+      // Blinn-Phong, with a Fresnel lift: a wet floor seen at a grazing
+      // angle is nearly a mirror, and that is most of what "wet" looks
+      // like from a camera this low
+      float fres = 0.30 + 0.70 * pow(1.0 - max(0.0, dot(N, Vv)), 3.0);
+      sheen = pow(max(0.0, dot(N, Hv)), gloss) * atten * lamp.w * specK * fres;
+    }
     // Bounce: a street is not a vacuum, and a face the flame cannot see is
     // dim rather than black.
     ndl = 0.20 + 0.80 * ndl;
@@ -1270,7 +1375,7 @@ local SHADER = [[
     float flick = 1.0 + 0.06 * sin(lampFlicker + ph)
                             * (0.6 + 0.4 * sin(lampFlicker * 2.7 + ph * 3.1));
 
-    return vec2(atten * ndl * lamp.w * flick, atten);
+    return vec3(atten * ndl * lamp.w * flick, atten, sheen * flick);
   }
 
   vec4 effect(vec4 color, Image tex, vec2 tc, vec2 sc) {
@@ -1294,10 +1399,106 @@ local SHADER = [[
     // on every frame of a snowfall.
     float lit = sunlight(vSun);
     vec3 light = skyTint + sunTint * lit;
-    vec2 lamps = localLamp(lamp0) + localLamp(lamp1)
-               + localLamp(lamp2) + localLamp(lamp3)
-               + localLamp(lamp4) + localLamp(lamp5)
-               + localLamp(lamp6) + localLamp(lamp7);
+    // the face's own normal, once, for every lamp (a constant when the
+    // build carries no derivatives, and free either way where no lamp
+    // reaches -- the early-outs above never touch it)
+    vec3 N = (lampNormals > 0.5 || lampSpec > 0.0) ? faceNormal()
+                                                    : vec3(0.0, 1.0, 0.0);
+    // ------- the crypt's materials (see the uniforms): albedo AND bump,
+    // BEFORE the lamps, so the grain is what the flame rakes across.
+    // The paving art is decided here too -- its relief goes into the same
+    // normal -- and applied further down where it always was.
+    vec3 albedo = p.rgb;
+    float floorHit = 0.0;
+    vec3 fart = vec3(0.0);
+    // the sheen every surface gets by default (the streets' lamps): a
+    // broad lobe at the row's strength; the materials below retune it
+    float gloss = 30.0;
+    float specK = lampSpec;
+    if (floorArtOn > 0.5 && vUp > 0.5 && vWorld.y < floorYMax
+        && (inBox(p.rgb, floorKeyLo, floorKeyHi)
+         || inBox(p.rgb, floorKey2Lo, floorKey2Hi))) {
+      floorHit = 1.0;
+      // No fract(): the sampler's own wrap (mirrored for the passage's
+      // art, which does not tile; plain for the crypt's, which does)
+      // handles the cycle, and folding the coordinate here would throw
+      // away a mirror and hand back the seam it exists to hide.
+      vec2 fuv = vWorld.xz / floorArtScale;
+      fart = Texel(floorArt, fuv).rgb;
+      if (stoneOn > 0.5) {
+        // the flagstones' own relief -- bevels, joints, the slabs' tilt --
+        // into the normal the lanterns light by, and a wet, glossy floor
+        vec3 nm = Texel(floorNorm, fuv).rgb * 2.0 - 1.0;
+        N = normalize(vec3(nm.x * stoneBump, nm.z, nm.y * stoneBump));
+        gloss = 26.0;
+        specK = lampSpec * 1.1;
+      }
+    } else if (stoneOn > 0.5 && glassOn > 0.5) {
+      float plum = lum3(p.rgb);
+      // the face's own axis picks the projection; T and B are the two
+      // world axes the art's u and v run along, which is also the tangent
+      // frame the normal maps are read in
+      vec3 an = abs(N);
+      vec2 uv;
+      vec3 T;
+      vec3 B;
+      if (an.y >= an.x && an.y >= an.z) {
+        uv = vWorld.xz; T = vec3(1.0, 0.0, 0.0); B = vec3(0.0, 0.0, 1.0);
+      } else if (an.x >= an.z) {
+        uv = vWorld.zy; T = vec3(0.0, 0.0, 1.0); B = vec3(0.0, 1.0, 0.0);
+      } else {
+        uv = vWorld.xy; T = vec3(1.0, 0.0, 0.0); B = vec3(0.0, 1.0, 0.0);
+      }
+      uv /= stoneScale;
+      if (plum > 0.86) {
+        // the kit's white: weathered ashlar, replacing the white outright,
+        // its pits and cracks in the light
+        vec3 s = Texel(stoneArt, uv).rgb * 1.94;
+        vec3 nm = Texel(stoneNorm, uv).rgb * 2.0 - 1.0;
+        N = normalize(T * (nm.x * stoneBump) + B * (nm.y * stoneBump) + N * nm.z);
+        albedo = mix(albedo, s, stoneMix);
+        // rough stone: a low, broad sheen
+        gloss = 9.0;
+        specK = lampSpec * 0.35;
+        // the damp foot: darker and mossy where wall meets floor, mottled
+        // on two scales so it is a stain and not a band
+        float dn = mistNoise(vWorld.xz * 0.11 + vWorld.y * 0.05) * 0.6
+                 + mistNoise(vWorld.xz * 0.37 + vWorld.y * 0.21) * 0.4;
+        float damp = smoothstep(0.5, 11.0, vWorld.y + 6.0 * dn);
+        albedo *= mix(vec3(0.48, 0.58, 0.42), vec3(1.0), damp);
+        // soot: every lantern blackens the wall above its flame -- a
+        // plume that narrows at the flame and spreads and thins going up
+        float soot = 0.0;
+        vec4 lampsAt[8];
+        lampsAt[0] = lamp0; lampsAt[1] = lamp1; lampsAt[2] = lamp2; lampsAt[3] = lamp3;
+        lampsAt[4] = lamp4; lampsAt[5] = lamp5; lampsAt[6] = lamp6; lampsAt[7] = lamp7;
+        for (int i = 0; i < 8; i++) {
+          vec4 lp = lampsAt[i];
+          if (lp.w <= 0.0) continue;
+          float dy = vWorld.y - lampHeight;
+          if (dy <= 0.0) continue;
+          vec2 dh = vWorld.xz - lp.xy;
+          float sig = 3.5 + dy * 0.45;
+          soot += exp(-dot(dh, dh) / (2.0 * sig * sig)) * exp(-dy / 26.0);
+        }
+        albedo *= 1.0 - 0.62 * clamp(soot, 0.0, 1.0);
+      } else if (plum > 0.30) {
+        // the drawing's greys: a headstone's granite, over the drawing's
+        // own tone so the stone keeps its design -- polished, so a tight
+        // hot highlight
+        vec2 guv = uv * 4.0;
+        vec3 s = Texel(graniteArt, guv).rgb * 2.2;
+        vec3 nm = Texel(graniteNorm, guv).rgb * 2.0 - 1.0;
+        N = normalize(T * (nm.x * stoneBump * 0.6) + B * (nm.y * stoneBump * 0.6) + N * nm.z);
+        albedo = mix(albedo, albedo * s, stoneMix * 0.9);
+        gloss = 48.0;
+        specK = lampSpec * 1.3;
+      }
+    }
+    vec3 lamps = localLamp(lamp0, N, gloss, specK) + localLamp(lamp1, N, gloss, specK)
+               + localLamp(lamp2, N, gloss, specK) + localLamp(lamp3, N, gloss, specK)
+               + localLamp(lamp4, N, gloss, specK) + localLamp(lamp5, N, gloss, specK)
+               + localLamp(lamp6, N, gloss, specK) + localLamp(lamp7, N, gloss, specK);
     // The lamp adds light BEFORE the material is shaded, so paving, walls and
     // foliage keep their own colour under the warm spill instead of becoming
     // a flat yellow overlay.
@@ -1375,7 +1576,7 @@ local SHADER = [[
       light *= clamp(q / lum, 0.0, 1.0 + 1.0 / steps);
     }
 #endif
-    vec3 rgb = p.rgb * vShade * light;
+    vec3 rgb = albedo * vShade * light;
     // Optional water surface art: replace the tileset water tile's albedo
     // on every recessed water face (lakes / rivers). Cel paint below still
     // multiplies on top when swell / freeze is active. Scrolls gently with
@@ -1406,15 +1607,14 @@ local SHADER = [[
     // Optional paving art. Tested against `p.rgb` -- the atlas texel BEFORE
     // shade and before the hour's light -- so the class does not change
     // colour at dusk and stop being recognised half way through an evening.
-    if (floorArtOn > 0.5 && vUp > 0.5 && vWorld.y < floorYMax
-        && (inBox(p.rgb, floorKeyLo, floorKeyHi)
-         || inBox(p.rgb, floorKey2Lo, floorKey2Hi))) {
-      // No fract(): the sampler wraps MIRRORED (the art does not tile -- see
-      // FloorArt.loadArt), and folding the coordinate here would throw away
-      // the mirror and hand back the seam it exists to hide.
-      vec3 fart = Texel(floorArt, vWorld.xz / floorArtScale).rgb;
+    // (decided above, beside the materials, so its relief could go into
+    // the normal the lamps lit by)
+    if (floorHit > 0.5) {
       rgb = mix(rgb, fart * vShade * light, floorArtMix);
     }
+    // The sheen, after the material: a highlight is the flame's colour
+    // sitting ON the stone, not the stone lit brighter.
+    rgb += lampCore * lamps.z;
     float outA = 1.0;
     // ------- THE BASIN: what the terrain pass draws BELOW the ground plane
     //
@@ -1903,6 +2103,27 @@ local SHADER = [[
       ft = floor(ft * fog.w + 0.5) / fog.w;
       rgb = mix(rgb, fogColor, ft * fog.z);
     }
+    // ------- GROUND MIST (the crypt's; see the uniform)
+    //
+    // Denser at the floor (squared, so it hugs the ground and a headstone's
+    // top stands clear of it), drifting on two octaves of noise so it is
+    // never a flat wash, and lit by the pools it lies under: mist under a
+    // lantern is what the lantern's light is IN.
+    if (mist.x > 0.0) {
+      float hgt = clamp(1.0 - vWorld.y / max(mist.y, 1.0), 0.0, 1.0);
+      vec2 q = vWorld.xz * mist.z;
+      float n = mistNoise(q + vec2(mist.w * 0.05, mist.w * 0.03)) * 0.65
+              + mistNoise(q * 2.3 - vec2(mist.w * 0.04, -mist.w * 0.06)) * 0.35;
+      // Not over the dark. The slabs and the void beyond the walls wear
+      // the sheet's black, and mist lying on them would paint a violet
+      // floor where the room is supposed to end -- so the mist keys on
+      // the texel under it, and black is where it stops.
+      float alb = dot(p.rgb, vec3(0.2126, 0.7152, 0.0722));
+      float gate = smoothstep(0.24, 0.42, alb);
+      float m = mist.x * hgt * hgt * smoothstep(0.12, 1.0, n) * gate;
+      vec3 mc = mistColor * (0.7 + 1.4 * energy);
+      rgb = mix(rgb, mc, clamp(m, 0.0, 0.85));
+    }
     // The hidden player is a SHAPE, not a dimmed picture of itself. Tinting
     // through `color` could only multiply the sprite's own pixels, which
     // darkens each one by its own amount and keeps the character's internal
@@ -2200,10 +2421,16 @@ function Voxel3D.shader(grid)
     if grid and not derivativesOK() then
       shaders[key] = false
     else
+      -- the face normal the crypt's lamps light by (see faceNormal) rides
+      -- the same derivative gate the wireframe does; a device fact, so it
+      -- is not part of the key
+      local normals = derivativesOK()
+      Voxel3D.normalsOK = normals
       local src = (grid and "#define VOXEL_GRID 1\n" or "")
                   .. (oneTap and "#define SUN_ONE_TAP 1\n" or "")
                   .. ((soft and not oneTap) and "#define SUN_SOFT 1\n" or "")
                   .. (cel and "#define ANIME_CEL 1\n" or "")
+                  .. (normals and "#define LAMP_NORMALS 1\n" or "")
                   .. SHADER
       local ok, sh = pcall(love.graphics.newShader, src)
       shaders[key] = ok and sh or false
@@ -2429,6 +2656,18 @@ Voxel3D.LAMP_GLOW = 0.85
 -- the flicker term is constant and folds out of the shader entirely.
 Voxel3D.lampFlicker = 0
 
+-- The crypt's light (see the uniforms of the same names): set per frame by
+-- VoxelScene inside the tower of graves, zero everywhere else. normalsOK
+-- is whether the build carries the derivatives the face normal needs.
+Voxel3D.lampNormals = 0
+Voxel3D.lampSpec = 0
+Voxel3D.mist = nil
+Voxel3D.mistColor = nil
+Voxel3D.stone = nil          -- { art, granite, norm, graniteNorm, scale, mix, bump }
+Voxel3D.aoPower = nil        -- RayFX's ambient occlusion, harder for a room
+Voxel3D.aoRange = nil
+Voxel3D.normalsOK = false
+
 -- the glint, fed by the camera's TRAVEL rather than by a clock (see
 -- VoxelScene.glintStep): the phase is radians already wrapped to 2pi, and
 -- the strength is 0 whenever the view has been still for a beat
@@ -2635,6 +2874,42 @@ function Voxel3D.beginScene(w, h, cx, cy, vw, vh, sky, slot)
   -- constant and the sin() folds away instead of costing a frame's worth of
   -- wobble nobody asked for.
   pcall(sh.send, sh, "lampFlicker", Voxel3D.lampFlicker or 0)
+  -- The crypt's light (see the uniforms): zero unless the scene set them
+  -- this frame, and the normals only on a build that carries derivatives.
+  pcall(sh.send, sh, "lampNormals",
+        (Voxel3D.normalsOK and Voxel3D.lampNormals) or 0)
+  pcall(sh.send, sh, "lampSpec",
+        (Voxel3D.normalsOK and Voxel3D.lampSpec) or 0)
+  pcall(sh.send, sh, "mist", Voxel3D.mist or { 0, 1, 1, 0 })
+  pcall(sh.send, sh, "mistColor", Voxel3D.mistColor or { 0.5, 0.5, 0.6 })
+  -- and its materials: the two surfaces, always bound (an unbound sampler
+  -- is a driver-dependent crash, the rule every sampler here follows), the
+  -- switch off unless the scene handed a set over this frame
+  do
+    local st = Voxel3D.stone
+    local blank = nil
+    local okB, b = pcall(FloorArt.blank)
+    if okB then blank = b end
+    local art = (st and st.art) or blank
+    local granite = (st and st.granite) or art
+    if art then pcall(sh.send, sh, "stoneArt", art) end
+    if granite then pcall(sh.send, sh, "graniteArt", granite) end
+    -- the relief: a flat normal stands in wherever a map is missing
+    local flat = nil
+    local okF, f = pcall(FloorArt.flatNormal)
+    if okF then flat = f end
+    local sn = (st and st.norm) or flat
+    local gn = (st and st.graniteNorm) or sn
+    local okN, fn = pcall(FloorArt.normal)
+    fn = (okN and fn) or flat
+    if sn then pcall(sh.send, sh, "stoneNorm", sn) end
+    if gn then pcall(sh.send, sh, "graniteNorm", gn) end
+    if fn then pcall(sh.send, sh, "floorNorm", fn) end
+    pcall(sh.send, sh, "stoneOn", (st and st.art) and 1 or 0)
+    pcall(sh.send, sh, "stoneScale", (st and st.scale) or 128)
+    pcall(sh.send, sh, "stoneMix", (st and st.mix) or 0)
+    pcall(sh.send, sh, "stoneBump", (st and st.bump) or 0)
+  end
   -- and the water: the swell, its two wave trains, and the slope window a
   -- crest has to reach to catch the sun. The window is measured FROM the
   -- flat surface's own alignment with the light (-sunRay.y is what a level
@@ -2754,11 +3029,14 @@ function Voxel3D.beginScene(w, h, cx, cy, vw, vh, sky, slot)
     pcall(sh.send, sh, "floorArtOn", art and on or 0)
     pcall(sh.send, sh, "floorArtScale", FloorArt.scale())
     pcall(sh.send, sh, "floorArtMix", FloorArt.mix())
-    pcall(sh.send, sh, "floorYMax", tonumber(FloorArt.Y_MAX) or 4.0)
-    pcall(sh.send, sh, "floorKeyLo", FloorArt.KEY_LO)
-    pcall(sh.send, sh, "floorKeyHi", FloorArt.KEY_HI)
-    pcall(sh.send, sh, "floorKey2Lo", FloorArt.KEY2_LO)
-    pcall(sh.send, sh, "floorKey2Hi", FloorArt.KEY2_HI)
+    -- the height cap and the colour boxes belong to whichever profile the
+    -- frame's map wears (the passage's pinks, the crypt's open boxes)
+    pcall(sh.send, sh, "floorYMax", FloorArt.yMax())
+    local lo1, hi1, lo2, hi2 = FloorArt.keys()
+    pcall(sh.send, sh, "floorKeyLo", lo1)
+    pcall(sh.send, sh, "floorKeyHi", hi1)
+    pcall(sh.send, sh, "floorKey2Lo", lo2)
+    pcall(sh.send, sh, "floorKey2Hi", hi2)
   end
   -- the deck over the water: a colour and a coverage, never a shape
   do
@@ -2872,6 +3150,9 @@ function Voxel3D.beginScene(w, h, cx, cy, vw, vh, sky, slot)
   -- atmosphere, data/atmosphere.lua): an entry there rides in on
   -- placed.atmo with its own colour, range and cap, through these same
   -- uniforms. Lavender Town's violet is the first tenant.
+  -- the eye itself, every scene: the sheen's half vector and the face
+  -- normal's orientation read it, fog or no fog
+  pcall(sh.send, sh, "eyePos", Voxel3D.eye or { 0, 0, 0 })
   local placedAtmo = placed and placed.atmo or nil
   local haze = (placedAtmo and placedAtmo.color)
                or ((not placed) and Aerial.color(Voxel3D.skyFill))
@@ -3638,6 +3919,10 @@ function Voxel3D.endScene()
       -- off before it asks what class a surface is -- see RayFX.WATER_Y.
       curve = { Voxel3D.curveX or 0, Voxel3D.curveZ or 0,
                 Voxel3D.curveK or 0 },
+      -- the scene may ask for a harder, closer ambient occlusion than the
+      -- streets' (the crypt does; see lib/Crypt.lua)
+      aoPower = Voxel3D.aoPower,
+      aoRange = Voxel3D.aoRange,
     })
     if lit then small = lit end
   end

@@ -42,6 +42,20 @@
 -- tests/floor_art_probe.lua; the reading that fixed it is
 -- tests/gate_floor_probe.lua.
 --
+-- ------- more than one floor
+--
+-- The tower of graves is the second tenant (lib/CryptKit.lua stands its
+-- floors as a crypt): its floor is the CEMETERY sheet's white lattice,
+-- which under a crypt's candlelight should be flagstone. So the facts above
+-- are a PROFILE -- a sheet, a file, a scale, a mix, a height cap and the
+-- colour boxes -- and there is a list of them. One map is drawn per frame
+-- indoors, and every profile here is an interior, so setMap picks the one
+-- profile the frame needs and the shader's single set of uniforms carries
+-- it. The passage's numbers are the first profile, unchanged; the crypt's
+-- boxes are wide open (everything flat and low on that sheet IS the floor)
+-- and its mix is high, because a lattice that stays white under a candle
+-- is the whole thing this is here to fix.
+--
 -- The tileset list and the boxes are data rather than shader source because
 -- they are facts about somebody's map set and somebody's palette rather than
 -- about the renderer. A total conversion retunes a name and a few vectors.
@@ -57,6 +71,7 @@ FloorArt.ASSET_FILE = "floor.png"
 -- Tileset image paths this applies to, matched as a lowercase SUBSTRING of
 -- the map's own `tileset.image`. A list rather than a single name so a mod
 -- that splits the passages across sheets, or renames one, keeps working.
+-- (The passage profile's list; see PROFILES for the rest.)
 FloorArt.TILESETS = { "underground" }
 
 -- World pixels one full cycle of the art covers. 256 = sixteen map cells,
@@ -88,57 +103,106 @@ FloorArt.KEY_HI = { 1.00, 0.70, 0.86 }
 FloorArt.KEY2_LO = { 0.88, 0.24, 0.10 }  -- the lattice
 FloorArt.KEY2_HI = { 1.00, 0.42, 0.30 }
 
+-- ------- the profiles
+--
+-- The passage reads its numbers LIVE off the fields above (the suite
+-- retunes ART_MIX and reads it back); the crypt carries its own. `keys`
+-- is { { lo, hi }, { lo, hi } } -- the two boxes.
+FloorArt.PROFILES = {
+  { name = "passage", tilesets = FloorArt.TILESETS, file = "floor.png" },
+  { name = "crypt", tilesets = { "cemetery" }, file = "crypt.jpg",
+    -- Poly Haven's monastery_stone_floor (CC0; see assets/stone/README.md)
+    -- with its relief (a DirectX tangent-space normal map), and a plain
+    -- repeat: this art tiles, and a mirror would flip the relief's x at
+    -- every fold
+    normal = "crypt_n.jpg", wrap = "repeat",
+    scale = 256, mix = 0.86, yMax = 1.5,
+    -- wide open but for black: on this sheet everything flat and this low
+    -- is the floor -- except the dark beyond the walls, which the void
+    -- cells wear as the sheet's own black and which must stay dark. The
+    -- SGB's black is 49/255 (0.19), so the box starts well above it; the
+    -- floor's own darkest texel is the lattice's grey, up past 0.7.
+    keys = { { { 0.30, 0.30, 0.30 }, { 1, 1, 1 } },
+             { { 0.30, 0.30, 0.30 }, { 1, 1, 1 } } },
+    -- the crypt's flagstones belong to the CRYPT row (lib/Crypt.lua): on
+    -- CLASSIC the floor is the tileset's own lattice, as it was
+    when = function()
+      local ok, Crypt = pcall(V.require, "Crypt")
+      return ok and Crypt and Crypt.enabled() or false
+    end },
+}
+
 -- ------- which map is being drawn
 --
 -- Pushed in from VoxelScene rather than pulled: this file has no business
 -- knowing about the overworld, and the frame already knows what it is
--- drawing. Passages are interiors and draw no neighbours, so one answer per
--- frame is the whole truth here -- which would NOT hold outdoors, where a
--- frame carries a map and up to four of its neighbours on different sheets.
-local active = false
+-- drawing. Passages and crypts are interiors and draw no neighbours, so one
+-- answer per frame is the whole truth here -- which would NOT hold outdoors,
+-- where a frame carries a map and up to four of its neighbours on different
+-- sheets.
+local active = false          -- the profile the frame wears, or false
+
+local function profileFor(map)
+  local img = map and map.tileset and map.tileset.image
+  if type(img) ~= "string" then return nil end
+  img = img:lower()
+  for _, p in ipairs(FloorArt.PROFILES) do
+    for _, name in ipairs(p.tilesets or {}) do
+      if img:find(name, 1, true) then
+        -- a profile may answer to a row of its own (`when`)
+        if p.when then
+          local ok, on = pcall(p.when)
+          if not (ok and on) then return nil end
+        end
+        return p
+      end
+    end
+  end
+  return nil
+end
 
 local function matches(map)
-  local img = map and map.tileset and map.tileset.image
-  if type(img) ~= "string" then return false end
-  img = img:lower()
-  for _, name in ipairs(FloorArt.TILESETS) do
-    if img:find(name, 1, true) then return true end
-  end
-  return false
+  return profileFor(map) ~= nil
 end
 
 function FloorArt.setMap(map)
-  active = matches(map)
-  return active
+  active = profileFor(map) or false
+  return active and true or false
 end
 
 function FloorArt.active()
-  return active
+  return active and true or false
+end
+
+function FloorArt.profile()
+  return active or nil
 end
 
 FloorArt._matches = matches   -- named for the suite
 
 -- ------- the file
 
-local artImage = nil    -- Image | false ("there is none") | nil (not tried)
+local images = {}       -- file -> Image | false ("there is none")
 local artBlank = nil
 
-local function loadArt()
-  if artImage ~= nil then return artImage or nil end
+local function loadArt(file, wrap)
+  file = file or FloorArt.ASSET_FILE
+  local have = images[file]
+  if have ~= nil then return have or nil end
   local okA, Assets = pcall(require, "src.render.Assets")
   if not okA or not Assets then
-    artImage = false
+    images[file] = false
     return nil
   end
-  local path = V.path .. "/" .. FloorArt.ASSET_DIR .. FloorArt.ASSET_FILE
+  local path = V.path .. "/" .. FloorArt.ASSET_DIR .. file
   local okE, exists = pcall(Assets.exists, path)
   if not (okE and exists) then
-    artImage = false
+    images[file] = false
     return nil
   end
   local ok, img = pcall(Assets.image, path)
   if not (ok and img) then
-    artImage = false
+    images[file] = false
     return nil
   end
   pcall(img.setFilter, img, "linear", "linear")
@@ -150,30 +214,74 @@ local function loadArt()
   -- sixteen cells, down a corridor whose whole job is to be long. Mirroring
   -- costs the pattern its handedness and costs the seam its existence; on a
   -- lattice that trade is free.
-  pcall(img.setWrap, img, "mirroredrepeat", "mirroredrepeat")
-  artImage = img
+  -- (a profile whose art tiles asks for the plain repeat instead)
+  local w = wrap or "mirroredrepeat"
+  pcall(img.setWrap, img, w, w)
+  images[file] = img
   return img
 end
 
+-- The art the frame wears: the active profile's file, or the passage's
+-- when nothing is active (the suite reads it without a map).
 function FloorArt.art()
-  return loadArt()
+  local p = active or FloorArt.PROFILES[1]
+  return loadArt(p and p.file or FloorArt.ASSET_FILE, p and p.wrap)
 end
 
--- 1 only when there is art AND the map being drawn wears the right sheet.
+-- The active profile's relief (a tangent-space normal map), or nil.
+function FloorArt.normal()
+  local p = active
+  if not (p and p.normal) then return nil end
+  return loadArt(p.normal, p.wrap)
+end
+
+-- A flat normal, always bound where a relief map is missing: the scene
+-- shader decodes it to straight up. (Kept here rather than in the crypt's
+-- module because Voxel3D loads this file and not that one.)
+local flatNormal = nil
+function FloorArt.flatNormal()
+  if flatNormal == nil then
+    local ok, img = pcall(function()
+      local d = love.image.newImageData(1, 1)
+      d:setPixel(0, 0, 0.5, 0.5, 1, 1)
+      local i = love.graphics.newImage(d)
+      pcall(i.setFilter, i, "nearest", "nearest")
+      pcall(i.setWrap, i, "clamp", "clamp")
+      return i
+    end)
+    flatNormal = (ok and img) or false
+  end
+  return flatNormal or nil
+end
+
+-- 1 only when there is art AND the map being drawn wears a profile's sheet.
 function FloorArt.on()
-  return (active and loadArt()) and 1 or 0
+  return (active and FloorArt.art()) and 1 or 0
 end
 
 function FloorArt.scale()
-  local n = tonumber(FloorArt.ART_SCALE) or 256
+  local n = tonumber(active and active.scale) or tonumber(FloorArt.ART_SCALE)
+            or 256
   if n < 8 then n = 8 end
   return n
 end
 
 function FloorArt.mix()
-  local n = tonumber(FloorArt.ART_MIX) or 0.55
+  local n = tonumber(active and active.mix) or tonumber(FloorArt.ART_MIX)
+            or 0.55
   if n < 0 then n = 0 elseif n > 1 then n = 1 end
   return n
+end
+
+function FloorArt.yMax()
+  return tonumber(active and active.yMax) or tonumber(FloorArt.Y_MAX) or 4.0
+end
+
+-- The two colour boxes of the active profile: lo1, hi1, lo2, hi2.
+function FloorArt.keys()
+  local k = active and active.keys
+  if k then return k[1][1], k[1][2], k[2][1], k[2][2] end
+  return FloorArt.KEY_LO, FloorArt.KEY_HI, FloorArt.KEY2_LO, FloorArt.KEY2_HI
 end
 
 -- Always-bound stand-in for the scene shader's floorArt sampler: an unbound
@@ -195,16 +303,20 @@ function FloorArt.blank()
 end
 
 -- Hot reload / window resize: drop GPU objects so the next frame reloads
--- assets/floor/floor.png if it appeared or changed on disk.
+-- the files if they appeared or changed on disk.
 function FloorArt.dropGPU()
-  if artImage and artImage ~= false and artImage.release then
-    pcall(artImage.release, artImage)
+  for file, img in pairs(images) do
+    if img and img ~= false and img.release then pcall(img.release, img) end
+    images[file] = nil
   end
-  artImage = nil
   if artBlank and artBlank ~= false and artBlank.release then
     pcall(artBlank.release, artBlank)
   end
   artBlank = nil
+  if flatNormal and flatNormal ~= false and flatNormal.release then
+    pcall(flatNormal.release, flatNormal)
+  end
+  flatNormal = nil
 end
 
 return FloorArt

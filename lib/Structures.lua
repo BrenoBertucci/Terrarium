@@ -229,7 +229,16 @@ function Structures.forMap(map)
   -- AFTER the characters -- see VoxelScene -- so the southern tuft row
   -- still overdraws a walker's feet even though characters stamp over
   -- terrain.)
+  -- the tileset's own all-black tile, the one a pinned `void` cell wears
+  -- (see the mesher's flat branch); nil on a sheet with none
+  local voidTile = nil
+  if void then
+    for t in pairs(void) do
+      if voidTile == nil or t < voidTile then voidTile = t end
+    end
+  end
   S = { shapeAt = shapeAt, tileAt = tileAt, outdoor = Map.isOutdoor(def),
+        voidTile = voidTile,
         hideBareRing = hullRingOnly or nil,
         runs = {}, skip = {}, ground = {}, doorFold = {}, objectQuads = {},
         grassQuads = {}, grassInstances = {}, flowerQuads = {}, spriteQuads = {},
