@@ -14,10 +14,10 @@
 --           longhand here rather than against the function itself, so the
 --           check cannot agree with a bug by sharing it.
 --
---   SWING   the radial mode's whole claim is that the camera orbits the
---           MAP rather than the player. So: stand west of the map centre,
---           stand east of it, and the view yaw has to have swung. If it
---           has not, the mode is an expensive way to draw the old camera.
+--   HOLD    the orbit's whole claim is that the bearing is the PLAYER'S
+--           and nobody else's. So: stand west of the map centre, stand
+--           east of it, and the view yaw must not have moved. (This was
+--           SWING, the opposite claim, when the mode orbited the map.)
 --
 --   HOLE    THE RISK THIS FILE EXISTS FOR. The culling box was built
 --           around a camera that always looked north; a yawed camera that
@@ -370,51 +370,56 @@ return function(game)
   MarioCam.setting:setIndex(2, game); hold(240)
   shotOn = holeTest("cam_on")
 
-  -- ------- 2. SWING: the radial orbits the map, not the player
+  -- ------- 2. HOLD: the orbit keeps its bearing wherever the player stands
+  --
+  -- The radial orbit this replaced swung the yaw with the player's
+  -- position about the map's centre; the player-centred orbit must not
+  -- move a degree between the west edge and the east edge of the biggest
+  -- town in Kanto with no camera key pressed.
   MarioCam.setting:setIndex(2, game)          -- ON
   local map = game.overworld.map
   local wCells = map and map.widthCells or 20
   local hCells = map and map.heightCells or 18
-  log("map", MAP, "cells", wCells, "x", hCells)
+  log(("map %s cells %d x %d"):format(MAP, wCells, hCells))
 
   local westX = math.max(1, math.floor(wCells * 0.15))
   local eastX = math.min(wCells - 2, math.floor(wCells * 0.85))
   local midY = math.floor(hCells / 2)
+  local centreX = wCells * 8
 
   -- WHERE THE PLAYER ACTUALLY IS, not where they were put. setMap drops
   -- them on a cell and the game may then walk them off it -- a warp tile, a
-  -- script, a ledge -- and a run where that happened reported a swing of
-  -- 3 degrees between "west" and "east" because both readings were taken
-  -- from the same side of the map. The yaw is a function of the position,
-  -- so the position is what has to be reported beside it.
+  -- script, a ledge -- so the position is reported beside every reading.
   local function spot(cx, cy, tag)
     goTo(cx, cy, "up")
+    MarioCam.recenter()
     hold(240)
     local p = game.overworld.player
     local px = (p.px or 0) + 8
     log(("  %s: asked for cell (%d,%d), player is at (%.0f,%.0f) = cell "
-         .. "(%d,%d), area centre x is %.0f")
+         .. "(%d,%d), map centre x is %.0f")
         :format(tag, cx, cy, px, (p.py or 0) + 8,
                 math.floor(px / 16), math.floor(((p.py or 0) + 8) / 16),
-                MarioCam.cam.areaCenX))
+                centreX))
     return px
   end
 
   local pxW = spot(westX, midY, "west")
   local yawW = math.deg(MarioCam.viewYaw())
-  shotW = holeTest("cam_radial_west")
+  shotW = holeTest("cam_orbit_west")
   local pxE = spot(eastX, midY, "east")
   local yawE = math.deg(MarioCam.viewYaw())
-  shotE = holeTest("cam_radial_east")
-  check(pxW < MarioCam.cam.areaCenX and pxE > MarioCam.cam.areaCenX,
-        ("the two spots really are on opposite sides of the area centre "
+  shotE = holeTest("cam_orbit_east")
+  check(pxW < centreX and pxE > centreX,
+        ("the two spots really are on opposite sides of the map's centre "
          .. "(%.0f and %.0f, centre %.0f)")
-        :format(pxW, pxE, MarioCam.cam.areaCenX))
-  log(("SWING west=%.1fdeg east=%.1fdeg delta=%.1f"):format(yawW, yawE,
-                                                            math.abs(yawW - yawE)))
-  check(math.abs(yawW - yawE) > 20,
-        "the radial yaw swings across the map (got "
-        .. ("%.1f"):format(math.abs(yawW - yawE)) .. " deg)")
+        :format(pxW, pxE, centreX))
+  log(("HOLD west=%.1fdeg east=%.1fdeg delta=%.1f"):format(yawW, yawE,
+                                                           math.abs(yawW - yawE)))
+  check(math.abs(yawW) < 2 and math.abs(yawE) < 2,
+        "the orbit holds its bearing across the map (west "
+        .. ("%.1f"):format(yawW) .. ", east " .. ("%.1f"):format(yawE)
+        .. " deg)")
 
   -- ------- 3. HOLE: no culling hole at any yaw the player can reach
   --
@@ -490,13 +495,10 @@ return function(game)
       local eNew = facingError(m, p.px, p.py)
       local eOld = facingError(old, p.px, p.py)
       if eNew and eOld then
-        -- the card no longer faces the eye DEAD-ON between cardinals: it
-        -- under-rotates by the presentation yaw (MarioCam.presentYaw, the
-        -- best-side turn). So the honest expectation is THAT angle, and
-        -- the measurement is the deviation from it -- which also keeps
-        -- this check able to fail: a card that ignored presentYaw would
-        -- deviate by up to 18 degrees at the diagonals.
-        local expected = math.abs(math.deg(MarioCam.presentYaw()))
+        -- the card faces the eye DEAD-ON at every yaw: the "best side"
+        -- under-rotation that once lived here (presentYaw) went with the
+        -- diagonal rests it was made for
+        local expected = 0
         local dev = math.abs(eNew - expected)
         if dev > worstNew then worstNew, worstNewYaw = dev, yaw end
         if eOld > worstOld then worstOld = eOld end
@@ -505,7 +507,7 @@ return function(game)
       end
     end
     check(worstNew < 8,
-          ("the card sits on its presentation angle at every yaw (worst "
+          ("the card faces the eye at every yaw (worst "
            .. "%.1f deg off at %.1f)"):format(worstNew, worstNewYaw))
     -- and the check can fail: the matrix this replaced does not
     check(worstOld > 45,
@@ -589,13 +591,11 @@ return function(game)
         a = a % 65536; if a >= 32768 then a = a - 65536 end
         return a * 360 / 65536
       end
-      log(("  state: mode=%s offY=%.1f goalY=%.1f avoid=%.1f auto=%s alt=%s")
+      log(("  state: mode=%s offY=%.1f goalY=%.1f lift=%.1f pull=%.2f")
           :format(MarioCam.cam.mode, sdeg(MarioCam.ctl.offsetYaw),
                   sdeg(MarioCam.ctl.goalOffsetYaw),
-                  sdeg(MarioCam.avoidState and MarioCam.avoidState.offset or 0),
-                  MarioCam.cam.autoYaw and ("%.1f"):format(sdeg(MarioCam.cam.autoYaw))
-                    or "nil",
-                  tostring(MarioCam.ctl.alt)))
+                  MarioCam.pullState and MarioCam.pullState.lift or 0,
+                  MarioCam.pullState and MarioCam.pullState.t or 1))
       -- the direction the camera looks, which is the direction "away from
       -- the player, up the screen" -- see MarioCam.viewYaw
       local fx, fz = math.sin(yaw), -math.cos(yaw)
@@ -914,9 +914,12 @@ return function(game)
     game.overworld:setMap("ROUTE_17", 9, 60, "up")
     hold(300)
     MarioCam.recenter()
-    -- 60 degrees per press, three presses to a half turn -- and a few more
-    -- to be sure the ease has landed
-    for _ = 1, 4 do game:keypressed("e") hold(90) end
+    -- a quarter turn per press, two presses to a half turn -- and a hold
+    -- after, to be sure the ease has landed. (Four presses was right at
+    -- sixty degrees a press; at ninety it is a full circle back to north,
+    -- where the canary measures nothing.)
+    for _ = 1, 2 do game:keypressed("e") hold(90) end
+    hold(150)
     local yaw = math.deg(MarioCam.viewYaw())
 
     local terrain = select(1, VoxelScene.prefetch(game.overworld))
@@ -925,8 +928,15 @@ return function(game)
     local function countAgainst(b)
       local seen, holes = 0, 0
       if not (terrain and terrain.chunks) then return 0, 0 end
+      -- THE REAL VIEWPORT, not a giant virtual one. A 4096-pixel frame
+      -- counted a chunk a hair BEHIND the eye whose corners projected
+      -- to (3644,3442) -- inside 4096, on no screen -- as a hole, and
+      -- reported one every run. The invariant is about what the player
+      -- can see; the old box still loses real on-screen chunks turned
+      -- south, so the canary keeps its teeth.
+      local W, H = love.graphics.getDimensions()
       for _, ch in ipairs(terrain.chunks) do
-        if onScreen(ch, 4096, 4096)
+        if onScreen(ch, W, H)
            and nearestTo(ch, lv[1], lv[2]) <= reach then
           seen = seen + 1
           if not (ch.x1 >= b[1] and ch.x0 <= b[3]

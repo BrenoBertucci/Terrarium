@@ -33,6 +33,36 @@
 -- Everything else -- the modes, the wall avoidance, the shake, the FOV
 -- functions -- is detail hung off those two.
 --
+-- ------- where this port DIVERGES, and why
+--
+-- Three of SM64's answers were ported faithfully, played, and taken out
+-- again, because each answered a question this world does not ask -- and
+-- each was reported by the player in the same words: "the camera changes
+-- all the time", "the sprite sits on a diagonal".
+--
+--   THE RADIAL ORBIT.  SM64 orbits a fixed point of the AREA -- a mountain
+--   you cannot stand on. A Gen 1 town's centre is its square, the one
+--   place everybody walks, and the orbit's yaw swings hardest exactly
+--   there: twenty degrees across Celadon's plaza with no key touched,
+--   measured. The outdoor camera is now an orbit round the PLAYER whose
+--   bearing only the player changes (modes.orbit) -- the source
+--   document's own advice for a world of streets.
+--
+--   ROTATING ROUND WALLS.  Every fence, tree line and house corner on a
+--   grid town is an occluder, and each swung the view up to eighty
+--   degrees and back. The rig no longer turns on its own for ANY reason;
+--   a block that stands is answered by looking OVER it -- the lens lifts
+--   -- and only then by pulling in, gently (see collision and occlusion).
+--
+--   CONTINUOUS YAW.  The sprites have four drawings and no diagonal, so a
+--   camera resting between two cardinals shows a character walking
+--   diagonally across the screen in art made for straight on. Every yaw
+--   the camera RESTS at is now a quarter turn: the C keys step ninety
+--   degrees, the stick snaps to a quarter when let go, the follow re-aims
+--   to a cardinal, and the card no longer under-rotates toward its
+--   drawing. The view still ARCS between bearings; it never stops in
+--   between.
+--
 -- ------- the scale
 --
 -- SM64's constants are in SM64 units, where Mario is about 160 tall. This
@@ -192,8 +222,8 @@ end
 -- its own previous answer, the two layers have collapsed into one and the
 -- feedback loops are back.
 local cam = {
-  mode = "RADIAL",
-  defMode = "RADIAL",
+  mode = "orbit",
+  defMode = "orbit",
   -- The decomp's warning, which is worth repeating because it bites: this
   -- is the angle from the FOCUS TO THE POSITION, not the direction the
   -- camera looks. It is the opposite of the real yaw. The decomp calls it
@@ -202,12 +232,12 @@ local cam = {
   yaw = 0,
   focus = { 0, 0, 0 },
   pos = { 0, 0, 0 },
-  -- the eye of the radial orbit: the point the camera goes AROUND, which
-  -- is not the player (see the radial mode)
-  areaCenX = 0,
-  areaCenZ = 0,
   dist = 175,
   pitch = degrees(30),
+  -- bookkeeping for the map-change cut (see courseProcessing): the map
+  -- the camera last stood on, and whether that map was a room
+  lastMap = nil,
+  lastIndoors = nil,
 }
 
 -- ------- LAYER 2: struct LakituState, the REAL
@@ -443,7 +473,11 @@ end
 -- recomputed from the facing every frame, because facing flips instantly
 -- on this world -- turn round on the spot and a directly-computed pan
 -- would snap the focus across the player in one frame.
-MarioCam.PAN_MAX = 220 / U        -- SM64 units of lead, at a walk
+-- SM64 leads by 220 units. About half that here: a grid walk starts and
+-- stops every few cells, and every start slides the frame by the whole
+-- lead and every stop slides it back -- at 220 that was one more thing
+-- moving whenever the player did. 120 still shows where they are going.
+MarioCam.PAN_MAX = 120 / U        -- SM64 units of lead, at a walk
 MarioCam.PAN_IN = 0.09            -- gained per moving frame, at 30fps
 MarioCam.PAN_OUT = 0.06           -- and lost per resting frame
 
@@ -532,18 +566,29 @@ end
 MarioCam.ZOOMS = { 800 / U, 1400 / U, 2000 / U }   -- close, default, far
 MarioCam.ZOOM_DEFAULT = 2
 
--- SM64's first C press swings 60 degrees; a second press in the same
--- direction runs on to the area's limit. Kept, with the limit being the
--- yaw clamp of the current rung rather than an area's authored bound.
-MarioCam.C_STEP = degrees(60)
-MarioCam.EIGHT_STEP = degrees(45)
+-- ------- A QUARTER TURN PER PRESS, and every resting yaw a quarter turn
+--
+-- SM64 swings 60 degrees per C press because Mario is a model and looks
+-- right from anywhere. These characters are four drawings -- front, back,
+-- one profile and its mirror -- and NO drawing for in between. Park the
+-- camera at 60 degrees and the player walks diagonally across the screen
+-- in art made for straight on: the sprite "sits on a diagonal". So the
+-- step is ninety, the stick snaps to the nearest ninety when let go, and
+-- the follow re-aims to a cardinal -- every angle the camera RESTS at is
+-- one the sheet has a drawing for. The turn between them still arcs.
+MarioCam.C_STEP = degrees(90)
+
+-- the nearest resting yaw to `a`
+local function detentYaw(a)
+  local step = MarioCam.C_STEP
+  return s16(math.floor(signed(a) / step + 0.5) * step)
+end
 
 local ctl = {
   zoom = MarioCam.ZOOM_DEFAULT,
-  offsetYaw = 0,          -- sModeOffsetYaw: the player's deflection
+  offsetYaw = 0,          -- sModeOffsetYaw: the player's own bearing
   goalOffsetYaw = 0,
-  lastCDir = 0,           -- which way the last C press went, for the run-on
-  alt = false,            -- the R button: alternate mode engaged
+  stickHeld = false,      -- the stick was off centre last frame
   buzz = false,           -- a refused input this frame, for the feedback
 }
 
@@ -570,6 +615,9 @@ local function rightStick()
   return x, y
 end
 
+-- probe seam: the unit probe has no pad, so it hands in a stick of its own
+MarioCam.readStick = rightStick
+
 -- ------------------------------------------------------------ the rungs --
 --
 -- ON or OFF, and nothing in between.
@@ -585,10 +633,11 @@ end
 -- disagreement left to ration, and a ladder that rations nothing is three
 -- extra things to explain. What is left is the camera: on, or not.
 --
--- ON is the whole of it -- the orbit around the area centre, unclamped,
--- the two-layer chase, the floor-derived height, the pan, the dead zone,
--- the wall avoidance, the shake, camera-relative movement, and the sprite
--- chosen by the angle the camera sees. OFF is the free-roam orbit exactly
+-- ON is the whole of it -- the orbit around the PLAYER at a bearing only
+-- the player changes, the two-layer chase, the floor-derived height, the
+-- pan, the dead zone, the pull-in for a wall that stands between, the
+-- shake, camera-relative movement, and the sprite chosen by the angle
+-- the camera sees. OFF is the free-roam orbit exactly
 -- as it was before any of this existed.
 --
 -- SHOULDER is the third answer, and it is a STYLE rather than a ration:
@@ -618,25 +667,6 @@ end
 
 function MarioCam.sync(value)
   MarioCam.setting:sync(value)
-end
-
--- ------- HOW FAR THE CAMERA MAY TURN: all the way.
---
--- These two used to answer a rung -- a quarter turn on RADIAL, pinned on
--- SOFT -- and now they answer "no limit", because the clamp only ever
--- protected the player from a D-pad that no longer needs protecting. They
--- are kept as functions rather than deleted because they are the seam
--- where a limit would go back if one were ever wanted (an authored shot
--- that must not be spun out of frame, say), and because every caller reads
--- better asking a question than testing a constant.
---
--- nil means no clamp.
-local function yawLimit()
-  return nil
-end
-
-local function avoidLimit()
-  return nil
 end
 
 -- ------------------------------------------------------------ the modes --
@@ -701,69 +731,37 @@ local function ladderPitch()
                     degrees(87), degrees(4))
 end
 
--- ------- CAMERA_MODE_RADIAL, and the thing everyone gets wrong
+-- ------- CAMERA_MODE_RADIAL, and why it is not here
 --
--- THE RADIAL CAMERA DOES NOT ORBIT THE PLAYER. It orbits a fixed point of
--- the AREA. That one sentence is the whole mode, and it is why Bob-omb
--- Battlefield feels the way it does: run round the mountain and the camera
--- slides along the mountain's edge keeping the mountain between you and
--- it, because the level was built around an axis and the camera respects
--- the axis rather than your back.
+-- SM64's defining mode orbits a fixed point of the AREA, not Mario --
 --
 --     yaw = atan2s(playerZ - areaCenZ, playerX - areaCenX) + offsetYaw
 --
--- The area centre here is THE MAP'S OWN CENTRE. That is not a stand-in: a
--- Gen 1 map is a hand-drawn rectangle with its business in the middle --
--- a town's buildings ring its square, a route runs up its spine, a gym is
--- one room about its own axis -- and orbiting that centre gives exactly
--- the behaviour the mode is for. Walk the west edge of Pallet and the
--- camera looks east across the town; walk the east edge and it looks west.
+-- -- and the port ran that way first, with the map's own centre for the
+-- area centre. It was faithful and it was wrong for this world. SM64's
+-- centres are mountains and towers you cannot stand on, so the yaw's
+-- worst neighbourhood -- atan2 spins fastest at small radius -- is never
+-- visited. A Gen 1 town's centre is its square, the one place everybody
+-- walks through, and every crossing of it swung the view on its own:
+-- twenty degrees across Celadon's plaza with no key pressed, measured.
+-- A deadzone and a slew softened it; nothing removed it, because the
+-- mode IS the swing. The source document's own note under "where to
+-- diverge" is the answer: a world of streets wants an orbit centred on
+-- the player.
 --
--- offsetYaw is the player's deflection ADDED ON TOP, which is why the C
--- buttons do not "take control" of the radial camera and break it: you are
--- sliding the orbit round, not seizing it.
-function modes.radial(dt, vh)
-  local dx = geo.px - cam.areaCenX
-  local dz = geo.pz - cam.areaCenZ
-  -- Dead centre has no direction, and the atan2 there is not merely
-  -- undefined, it SPINS: a player crossing the exact middle of a map would
-  -- whip the camera through half a turn in one frame. Inside the deadzone
-  -- the last good yaw is held, which is what standing on the axis should
-  -- look like.
-  --
-  -- AND THE APPROACH TO THE CENTRE IS SLEWED, because the deadzone alone
-  -- only fixes the point and not the neighbourhood: atan2's derivative
-  -- grows without bound as the radius shrinks, so a walk PAST the middle
-  -- at thirty pixels' clearance still spun the camera through most of a
-  -- half turn in under a second -- SM64 never meets this because its area
-  -- centres are mountains you cannot stand on, and a Gen 1 town square is
-  -- exactly the middle of the map. Inside six cells the yaw eases toward
-  -- the true bearing at a rate that falls with the radius; past that the
-  -- bearing is taken as read, which is the behaviour this mode always had.
-  local auto = cam.autoYaw or 0
-  local d2 = dx * dx + dz * dz
-  if d2 > (24 * 24) then
-    local target = atan2s(dx, dz)
-    local d = math.sqrt(d2)
-    if d >= 96 or cam.autoYaw == nil then
-      auto = target
-    else
-      auto = approachS16(auto, target, rateDiv(4 + (96 - d) * 0.5, dt))
-    end
-    cam.autoYaw = auto
-  end
-
-  -- the automatic orbit plus the player's own deflection, which is why the
-  -- C buttons do not "take control" of the radial camera and break it: you
-  -- are sliding the orbit round, not seizing it
-  local limit = yawLimit()
-  local yaw = s16(auto + ctl.offsetYaw)
-  if limit then
-    local d = signed(yaw)
-    if d > limit then yaw = s16(limit) end
-    if d < -limit then yaw = s16(-limit) end
-  end
-  cam.yaw = yaw
+-- ------- the ORBIT: player-centred, bearing held
+--
+-- The camera stands at (dist, pitch) from the player along a bearing that
+-- ONLY THE PLAYER CHANGES -- the C keys, the stick, or R to put it at
+-- their back. It never turns on its own, for any reason: not for where
+-- they are on the map, not for which way they walk, not for a wall.
+-- Every automatic turn this port has ever had was a thing the player
+-- reported as "the camera changing out of nowhere", and a grid game with
+-- four-facing sprites gives a turning camera nothing back for the cost.
+-- What is left of SM64 is everything ELSE: the chase, the floor height,
+-- the lead, the dead zone, the spherical arc between bearings.
+function modes.orbit(dt, vh)
+  cam.yaw = ctl.offsetYaw
   cam.pitch = shotPitch(ladderPitch())
   cam.dist = shotDist(vh, MarioCam.ZOOMS[ctl.zoom] * (vh / 144))
 
@@ -775,9 +773,16 @@ function modes.radial(dt, vh)
   focusOnPlayer(cam.focus, cam.pos, 0, 0, cam.dist, cam.pitch, cam.yaw)
 end
 
+-- A shot in data/camera_shots.lua written for the old names keeps
+-- working: "radial" was the outdoor orbit and gets the outdoor orbit;
+-- "eight" was the yaw-locked corridor camera, and a yaw that only the
+-- player moves IS locked, so it is this too.
+modes.radial = modes.orbit
+modes.eight = modes.orbit
+
 -- ------- CAMERA_MODE_CLOSE
 --
--- The radial geometry at a shorter distance, which is what SM64 uses
+-- The orbit at a shorter distance, which is what SM64 uses
 -- indoors (the castle's rooms, Big Boo's Haunt). It shares
 -- update_mario_camera with WATER_SURFACE there for the same reason it
 -- shares code with the radial here: the behaviour differs by a PARAMETER,
@@ -793,39 +798,8 @@ function modes.close(dt, vh)
   -- a room is small and the steps within it are the whole picture, so the
   -- zone that suppresses them has to shrink with the shot
   MarioCam.DEAD_ZONE = savedDead * 0.5
-  modes.radial(dt, vh)
+  modes.orbit(dt, vh)
   ctl.zoom, MarioCam.DEAD_ZONE = savedZoom, savedDead
-end
-
--- ------- CAMERA_MODE_8_DIRECTIONS
---
--- Yaw locked to 45-degree detents, and it does NOT track anything: the
--- camera holds its bearing until the player changes it. SM64 uses it in
--- the Bowser stages and Rainbow Ride, both places where an orbiting
--- camera would make a jump between two platforms unreadable.
---
--- The Pokemon case for it is the same case: a corridor, a bridge, a cave
--- passage -- anywhere the automatic yaw would swing while the player is
--- trying to judge a line. Reached with R (see the alternate mode).
-function modes.eight(dt, vh)
-  local step = MarioCam.EIGHT_STEP
-  local detent = s16(math.floor((signed(ctl.offsetYaw) / step) + 0.5) * step)
-  local limit = yawLimit()
-  if limit then
-    local d = signed(detent)
-    if d > limit then detent = s16(math.floor(limit / step) * step) end
-    if d < -limit then detent = s16(-math.floor(limit / step) * step) end
-  end
-  cam.yaw = detent
-  cam.pitch = shotPitch(ladderPitch())
-  cam.dist = shotDist(vh, MarioCam.ZOOMS[ctl.zoom] * (vh / 144))
-
-  local px, pz = deadZoned(geo.px, geo.pz, dt)
-  local ax, az = panAheadOfPlayer(dt)
-  cam.focus[1] = px + ax
-  cam.focus[2] = floorY()
-  cam.focus[3] = pz + az
-  focusOnPlayer(cam.focus, cam.pos, 0, 0, cam.dist, cam.pitch, cam.yaw)
 end
 
 -- ------- CAMERA_MODE_BEHIND_MARIO
@@ -859,16 +833,24 @@ MarioCam.SHOULDER_DROP = 18           -- degrees below the VOXEL ladder
 -- to mean it. Turning in place moves nothing. A one-cell side-step moves
 -- nothing. A held walk swings the world once, to the new back, and
 -- holds again.
-MarioCam.FOLLOW_COMMIT = 0.6          -- seconds of sustained walk to re-aim
+-- 1.2 seconds is four or five cells: a street, not a doorstep. The first
+-- value here was 0.6 -- two cells -- and a town is nothing but two-cell
+-- runs between corners, so the world re-aimed every few seconds of
+-- ordinary walking; that is the "dizzy" the player reported, in seconds.
+MarioCam.FOLLOW_COMMIT = 1.2          -- seconds of sustained walk to re-aim
 
 local follow = { heading = nil, facing = nil, commit = 0, lull = 0 }
 
+-- the yaw that puts the camera at a character's BACK: cam.yaw is
+-- focus-to-pos, so it is the facing negated
+local function faceYaw(facing)
+  local v = FACE_VEC[facing] or FACE_VEC.down
+  return atan2s(-v[1], -v[2])
+end
+
 function modes.behind(dt, vh)
   local shoulder = MarioCam.rung() == "shoulder"
-  local v = FACE_VEC[geo.facing] or FACE_VEC.down
-  -- the camera stands OPPOSITE the facing, and cam.yaw is focus-to-pos, so
-  -- it is the facing negated
-  local faceGoal = atan2s(-v[1], -v[2])
+  local faceGoal = faceYaw(geo.facing)
 
   -- the commitment clock: same facing, actually walking, long enough.
   -- geo.moving flickers between grid steps (a lesson the walk-clock bug
@@ -948,7 +930,7 @@ function modes.fixed(dt, vh)
   -- every time, which is a fixed camera that is not fixed to anything.
   -- An entry that forgets them falls back to the orbit rather than to a
   -- camera at the world origin.
-  if not (shot and shot.camX) then return modes.radial(dt, vh) end
+  if not (shot and shot.camX) then return modes.orbit(dt, vh) end
   cam.pos[1] = shot.camX
   cam.pos[2] = shot.camY or 64
   cam.pos[3] = shot.camZ
@@ -976,23 +958,31 @@ MarioCam.modes = modes
 --   collide_with_walls            the camera is inside geometry. Push out.
 --   resolve_geometry_collisions   the camera is under the floor. Lift.
 --
--- The first is the important one and the one everybody reimplements
--- wrongly. The naive fix for "a wall is in the way" is to pull the camera
--- toward the player until it clears -- which produces a camera that zooms
--- in and out every time you walk past a doorway, and that is nauseating.
--- SM64 instead computes a direction PARALLEL TO THE WALL and eases the yaw
--- toward it, so the camera slides round the corner. The distance never
--- changes, so nothing pumps.
-
--- The arc, in yaw steps, that is swept looking for a blocker, and how
--- coarse the sweep is. Coarse on purpose: the answer only has to be good
--- enough to pick a side, and the easing does the rest.
-MarioCam.WALL_ARC = degrees(80)
-MarioCam.WALL_STEPS = 8
--- how much of the way to the parallel direction is closed per frame at
--- 30fps -- the decomp's divisor form, deliberately unhurried so the slide
--- reads as the operator stepping sideways rather than as a snap
-MarioCam.WALL_DIV = 12
+-- SM64's answer to the first is the famous one: compute a direction
+-- PARALLEL to the wall and ease the yaw toward it, so the camera slides
+-- round the corner and the distance never changes. This port had it,
+-- with the sweep, the accumulating deflection and the relax, and it is
+-- gone, on purpose. SM64's levels are wide and open and a wall is an
+-- event; a Gen 1 town is fences, tree lines and house corners, and every
+-- one of them is an occluder for a camera standing a hundred pixels back.
+-- The steering answered each with a swing of up to eighty degrees, and
+-- another back when the way cleared, and the D-pad quadrant swung with
+-- it. From the player's chair that is the camera changing out of
+-- nowhere, several times a street -- and the sprites, which have no
+-- drawing for a diagonal, sat wrong for the whole of every swing.
+--
+-- So nothing here TURNS the camera. A block that STANDS is answered by
+-- LOOKING OVER IT -- the lens lifts to a steeper pitch at the same
+-- bearing and distance, which is the top-down view the flat game always
+-- had -- and only when no lift clears it, the third way: pulling the eye
+-- in along its own ray. The source document is right that a pull done
+-- carelessly pumps at every doorway, and three things stop that here:
+-- the block has to stand for half a second before anything answers it
+-- (a corner passed at a walk never does); lift and pull ease in over a
+-- quarter second and back OUT over most of a second, so a brief block
+-- that does engage costs a small rise rather than a lurch; and the
+-- silhouette pass (VoxelScene) keeps the character readable through the
+-- wall meanwhile, so nothing has to be answered in a hurry.
 
 -- Is the straight line from the eye to the focus blocked, and if so which
 -- way round is shorter? Samples the walkability grid along the ray: an
@@ -1047,17 +1037,22 @@ local function rayBlocked(map, ex, ey, ez, fx, fy, fz)
   return hit >= 2
 end
 
--- Can an eye at (dist, pitch, yaw) from this focus see the player? The one
--- question both the steering and its release ask, in one place so the two
--- cannot drift apart. The ray aims at the player's MIDDLE, not their feet:
--- what has to stay visible is the character, and the ground under them is
--- below every fence on the map.
-local function eyeClear(map, focus, dist, pitch, yaw)
-  local flat = dist * coss(pitch)
+-- Can an eye at (dist * t, pitch, yaw) from this focus see the player? The
+-- one question the lift, the pull and their release all ask, in one place
+-- so they cannot drift apart. The ray aims at the player's MIDDLE, not
+-- their feet: what has to stay visible is the character, and the ground
+-- under them is below every fence on the map.
+local function clearAt(map, focus, dist, pitch, yaw, t)
+  local d = dist * (t or 1)
+  local flat = d * coss(pitch)
   local ex = focus[1] + flat * sins(yaw)
-  local ey = focus[2] + dist * sins(pitch)
+  local ey = focus[2] + d * sins(pitch)
   local ez = focus[3] + flat * coss(yaw)
   return not rayBlocked(map, ex, ey, ez, focus[1], focus[2] + 8, focus[3])
+end
+
+local function eyeClear(map, focus, dist, pitch, yaw)
+  return clearAt(map, focus, dist, pitch, yaw, 1)
 end
 
 -- probe seams: the unit probe drives these directly, with a stub map, to
@@ -1065,105 +1060,96 @@ end
 MarioCam.rayBlocked = function(...) return rayBlocked(...) end
 MarioCam.eyeClear = function(...) return eyeClear(...) end
 
--- rotate_camera_around_walls: returns the yaw to ease toward, or nil when
--- nothing is in the way. Sweeps both directions from the current yaw and
--- takes the nearer clear one, which is the cheap stand-in for the decomp's
--- is_range_behind_surface -- and it has the property that matters, that
--- the answer is always PARALLEL to the obstruction rather than through it.
+-- ------- LOOK OVER IT FIRST, pull in last
 --
--- `tryYaw` is where the camera is actually standing (mode plus its current
--- deflection); `centerYaw` is where the MODE alone wants it. The block
--- test runs on the first and the sweep runs around the SECOND, and that
--- split is load-bearing: a sweep centred on the deflected yaw measures
--- "clear" relative to wherever the deflection has got to, so the goal
--- moves every time the offset does and the camera ratchets round chasing
--- its own tail -- the unit probe caught it pinned at the cap, a hundred
--- and ten degrees round, still blocked. Centred on the mode's yaw the
--- answer is absolute, the goal cannot exceed the arc, and a deflection
--- that cannot fit inside the arc is honestly reported as boxed in.
---
--- `bias` is which way the camera is ALREADY deflected. A sweep that always
--- tried clockwise first would, on a wall with clear air both sides, flip a
--- half-deflected camera across to the other side the moment the distances
--- tied. Trying the current side first makes the choice sticky, and a
--- sticky choice is what a person stepping sideways round a corner does:
--- they keep going the way they started.
-local function avoidYaw(map, focus, dist, pitch, tryYaw, centerYaw, bias)
-  if eyeClear(map, focus, dist, pitch, tryYaw) then return nil end
-  local step = MarioCam.WALL_ARC / MarioCam.WALL_STEPS
-  local first = (bias and bias < 0) and -1 or 1
-  -- i = 0 is the mode's own yaw: a deflection whose reason has gone home
-  -- should be told "home is clear" rather than handed a fresh detour
-  for i = 0, MarioCam.WALL_STEPS do
-    local d = step * i
-    if eyeClear(map, focus, dist, pitch, s16(centerYaw + first * d)) then
-      return s16(centerYaw + first * d)
-    end
-    if i > 0 and eyeClear(map, focus, dist, pitch, s16(centerYaw - first * d)) then
-      return s16(centerYaw - first * d)
-    end
-  end
-  -- boxed in on every side: a cupboard, a one-cell alcove, the inside of a
-  -- cave mouth. Nothing to rotate toward, so say so and let the caller
-  -- fall back on the one thing that always works (see resolveGeometry).
-  return false
+-- A standing block gets two answers, tried in this order. The LIFT: the
+-- same bearing and the same distance, a steeper pitch -- the lens rises
+-- until it sees over the fence or the roof, which is the view the flat
+-- game always had and the one a player expects when something is in the
+-- way. Tried in steps of ten degrees; a tree line needs one, a house
+-- two or three. The PULL: only when no lift clears it (a wall at the
+-- player's heels, a cave mouth), the eye walks in along its own ray at
+-- the fullest lift until the line is clear. `t` is where it stands, as a
+-- fraction of the distance the mode asked for; the tightest rung is the
+-- fallback when nothing is clear -- visible and tight beats composed and
+-- blind (the player's own law: nothing stands between the eye and the
+-- character).
+MarioCam.LIFT_STEPS = { 10, 20, 30, 40 }         -- degrees, tried in order
+MarioCam.PULL_RUNGS = { 0.75, 0.55, 0.4, 0.28, 0.18, 0.12 }
+-- how long a block must STAND before anything answers it at all: a
+-- passing occlusion -- a corner, a post, a tree in the line for a cell or
+-- two -- resolves itself by walking and the camera must not have moved
+MarioCam.WALL_DELAY = 0.5
+-- the divisors, in the decomp's per-frame-at-30fps form: quick in, so a
+-- block that engages is answered before it reads as a fault; slow out,
+-- so the way back is a relax rather than a lurch, and a wall walked past
+-- costs one small rise rather than a bounce
+MarioCam.PULL_IN_DIV = 8
+MarioCam.PULL_OUT_DIV = 24
+
+local pull = { t = 1, lift = 0, blocked = 0 }
+MarioCam.pullState = pull            -- probe seam
+
+local function liftedPitch(pitch, lift)
+  return clampPitch(pitch + degrees(lift), degrees(87), degrees(4))
 end
 
--- ------- THE DEFLECTION IS A THING THAT PERSISTS, and this is the bug it
--- fixes: the mode recomputes its yaw FROM SCRATCH every frame -- layer 1
--- holds no history, by design -- so an avoidance that eased "the current
--- yaw" toward the clear one was easing from the same starting point every
--- frame and applying a constant few percent of the swing, forever. The
--- camera never actually went round anything; it leant four degrees toward
--- the corner and stayed buried.
---
--- So the deflection lives HERE, as its own accumulated offset ON TOP of
--- whatever the mode says, growing toward the clear direction while the
--- view is blocked and easing home once the mode's own yaw is clear again.
--- The mode stays stateless; the steering owns its state; the two-layer
--- rule holds.
-local avoid = { offset = 0 }
-MarioCam.avoidState = avoid
-
--- how much of the way home is closed per frame at 30fps once nothing is in
--- the way -- slower than WALL_DIV, because leaving a corner is a relax and
--- arriving at one is a dodge
-MarioCam.WALL_RELAX = 20
--- how long a block must STAND before the steering answers it at all: a
--- passing occlusion resolves itself and the camera must not have moved
-MarioCam.WALL_DELAY = 0.25
-
--- resolve_geometry_collisions: the last line, and the only one allowed to
--- move the camera IN. Two jobs -- keep the eye above the ground it is
--- standing over, and pull it in when there is genuinely nowhere to stand.
--- The pull is the ugly answer and that is why it is here rather than in
--- the mode: it fires when rotating has already failed.
-MarioCam.EYE_CLEARANCE = 90 / U     -- SM64 units above the floor it crosses
-
-local function resolveGeometry(map, focus, pos, boxedIn)
-  if boxedIn then
-    -- walk in along the eye ray until the line is clear, and no further.
-    -- Distinct from a zoom: this is a recovery, it lasts as long as the
-    -- obstruction does, and the chase at 0.3 hides its edges.
-    local dx, dz = pos[1] - focus[1], pos[3] - focus[3]
-    local dy = pos[2] - focus[2]
-    -- the deep rungs are the player hugging a tall wall with the orbit
-    -- pinned behind it: an over-the-shoulder frame from twenty pixels out
-    -- is tight, but visible-and-tight beats composed-and-blind, and the
-    -- probe found real cells that needed them
-    for _, t in ipairs({ 0.75, 0.55, 0.4, 0.28, 0.18, 0.12 }) do
-      local ex, ez = focus[1] + dx * t, focus[3] + dz * t
-      local ey = focus[2] + dy * t
-      if not rayBlocked(map, ex, ey, ez, focus[1], focus[2] + 8, focus[3]) then
-        pos[1], pos[3] = ex, ez
-        pos[2] = ey
-        break
-      end
+-- what the standing block wants: the smallest lift that clears, else the
+-- fullest lift and the nearest rung that clears from there
+local function occlusionAnswer(map, focus, dist, pitch, yaw)
+  local steps = MarioCam.LIFT_STEPS
+  for i = 1, #steps do
+    if clearAt(map, focus, dist, liftedPitch(pitch, steps[i]), yaw, 1) then
+      return steps[i], 1
     end
   end
-  -- and never below the terrain -- or inside the ROOF -- it is passing
-  -- over: the stamped models count, or an eye at chest height over a
-  -- building cell would sit inside five storeys of attic
+  local top = liftedPitch(pitch, steps[#steps])
+  local rungs = MarioCam.PULL_RUNGS
+  for i = 1, #rungs do
+    if clearAt(map, focus, dist, top, yaw, rungs[i]) then
+      return steps[#steps], rungs[i]
+    end
+  end
+  return steps[#steps], rungs[#rungs]
+end
+
+-- resolve_geometry_collisions, first half: the only thing allowed to
+-- move the camera IN, and the only thing allowed to tilt it. Rewrites
+-- cam.pos from the mode's own answer by however much lift and pull are
+-- currently engaged; cam.pitch stays the mode's, so the transition and
+-- the editor dump keep reading the pose the mode meant.
+local function occlude(map, dt)
+  if clearAt(map, cam.focus, cam.dist, cam.pitch, cam.yaw, 1) then
+    pull.blocked = 0
+  else
+    pull.blocked = pull.blocked + dt
+  end
+  local wantLift, wantT = 0, 1
+  if pull.blocked >= MarioCam.WALL_DELAY then
+    wantLift, wantT = occlusionAnswer(map, cam.focus, cam.dist,
+                                      cam.pitch, cam.yaw)
+  end
+  local divL = (wantLift > pull.lift) and MarioCam.PULL_IN_DIV
+                                        or MarioCam.PULL_OUT_DIV
+  pull.lift = approachF32(pull.lift, wantLift, rate(1 / divL, dt))
+  if pull.lift < 0.05 then pull.lift = 0 end
+  local divT = (wantT < pull.t) and MarioCam.PULL_IN_DIV
+                                  or MarioCam.PULL_OUT_DIV
+  pull.t = approachF32(pull.t, wantT, rate(1 / divT, dt))
+  if pull.t > 0.998 then pull.t = 1 end
+  if pull.lift > 0 or pull.t < 1 then
+    focusOnPlayer(cam.focus, cam.pos, 0, 0, cam.dist * pull.t,
+                  liftedPitch(cam.pitch, pull.lift), cam.yaw)
+  end
+end
+
+-- resolve_geometry_collisions, second half: never below the terrain --
+-- or inside the ROOF -- the eye is passing over. The stamped models
+-- count, or an eye at chest height over a building cell would sit inside
+-- five storeys of attic.
+MarioCam.EYE_CLEARANCE = 90 / U     -- SM64 units above the floor it crosses
+
+local function resolveGeometry(map, focus, pos)
   local cx = math.floor(pos[1] / 16)
   local cz = math.floor(pos[3] / 16)
   local floor = occluderHeight(map, cx, cz)
@@ -1237,7 +1223,7 @@ local function defaultModeFor()
   if MarioCam.rung() == "shoulder" then return "behind" end
   if geo.onWater then return "behind" end
   if geo.indoors then return "close" end
-  return "radial"
+  return "orbit"
 end
 
 -- Authored shots, keyed by map id. Optional: a mod without the data file
@@ -1287,7 +1273,7 @@ function MarioCam.editorDump(vh)
     .. "{ x = %d, z = %d, bx = 32, bz = 32, mode = \"fixed\",\n"
     .. "  camX = %d, camY = %d, camZ = %d, focY = %d },\n"
     .. "-- ...or the same spot as a pinned orbit:\n"
-    .. "{ x = %d, z = %d, bx = 32, bz = 32, mode = \"radial\","
+    .. "{ x = %d, z = %d, bx = 32, bz = 32, mode = \"orbit\","
     .. " zoom = %d, pitch = %d },",
     id, cx, cy, math.deg(MarioCam.viewYaw()), cam.mode,
     math.floor(geo.px + 0.5), math.floor(geo.pz + 0.5),
@@ -1296,7 +1282,6 @@ function MarioCam.editorDump(vh)
     math.floor(geo.px + 0.5), math.floor(geo.pz + 0.5),
     math.floor(zoom + 0.5), math.floor(pitchDeg + 0.5))
 end
-
 
 -- struct CameraTrigger: a box in world pixels that names a mode while the
 -- player is inside it. boundsYaw is deliberately kept from the decomp --
@@ -1327,26 +1312,31 @@ local function courseProcessing()
   -- the scenery.
   local map = geo.map
   if map ~= cam.lastMap then
+    local wasIndoors = cam.lastIndoors
     cam.lastMap = map
+    cam.lastIndoors = geo.indoors
     lakitu.smooth = false
     anchor.x, anchor.z = nil, nil
     pan.x, pan.z = 0, 0
-    cam.autoYaw = nil
-    avoid.offset = 0
-    avoid.blocked = 0
+    pull.t, pull.lift, pull.blocked = 1, 0, 0
     follow.heading, follow.facing = nil, nil
     follow.commit, follow.lull = 0, 0
+    cam.reversing = nil
     cam.shot = nil
     -- a map change is a cut, and the lens cuts with it: easing a leftover
     -- shot's 30-degree lens back to 45 across a door would be the one
     -- gradual thing in a frame where everything else snapped
     MarioCam.setFov("SET", MarioCam.FOV_DEFAULT)
-    ctl.offsetYaw, ctl.goalOffsetYaw = 0, 0
-    ctl.alt = false
-    -- the area centre, which is the whole of the radial mode's behaviour
-    local w = (map and map.widthCells or 20) * 16
-    local h = (map and map.heightCells or 18) * 16
-    cam.areaCenX, cam.areaCenZ = w / 2, h / 2
+    -- THE BEARING SURVIVES A ROUTE CONNECTION. Walking off the edge of one
+    -- outdoor map onto the next is not a door: the world is continuous
+    -- and the player is mid-stride. Resetting the yaw there spun the view
+    -- home and remapped the D-pad under a held button, at the one moment
+    -- no key had been pressed to explain it. A door -- into a room, or
+    -- out of one -- is a cut in every sense and starts from the default.
+    if wasIndoors == nil or wasIndoors or geo.indoors then
+      ctl.offsetYaw, ctl.goalOffsetYaw = 0, 0
+    end
+    ctl.stickHeld = false
     cam.defMode = defaultModeFor()
     cam.mode = cam.defMode
     trans.frame, trans.max = 0, 0
@@ -1360,11 +1350,6 @@ local function courseProcessing()
   if shot then
     want = shot.mode or "fixed"
   end
-  -- R: the alternate mode, exactly SM64's R button. The alternate is the
-  -- eight-direction camera, because that is the one that answers the
-  -- complaint the automatic camera generates -- "it keeps turning while I
-  -- am trying to line something up".
-  if ctl.alt and not shot then want = "eight" end
   cam.defMode = want
 
   -- ------- the lens rides the shot, gradually both ways
@@ -1558,6 +1543,31 @@ end
 -- registered. Cheap to add and expensive to notice missing -- so the
 -- refusal is recorded here and surfaced as a flag the caller can act on
 -- (see MarioCam.consumeBuzz), rather than silently dropped.
+
+-- ------- WHICH YAW THE PLAYER IS TURNING
+--
+-- In the orbit it is the offset, and the mode reads it straight. In the
+-- follow (water, and the SHOULDER rung) it is the follow's own heading:
+-- a turn there is "look this way until I walk somewhere", so the next
+-- committed walk puts the camera back at the player's back and the turn
+-- is honestly gone. An offset that survived the re-aim would leave the
+-- camera parked ninety degrees off the back for the rest of the walk.
+local function turnTarget()
+  if cam.mode == "behind" then
+    return follow.heading or faceYaw(geo.facing)
+  end
+  return ctl.goalOffsetYaw
+end
+
+local function setTurnTarget(yaw)
+  if cam.mode == "behind" then
+    follow.heading = yaw
+    follow.commit = 0
+  else
+    ctl.goalOffsetYaw = yaw
+  end
+end
+
 local function rotate(dir)
   -- an authored shot that has taken the framing refuses the wheel, out
   -- loud -- the buzz the caller surfaces as the Denied voice
@@ -1565,21 +1575,9 @@ local function rotate(dir)
     ctl.buzz = true
     return false
   end
-  local limit = yawLimit()
-  -- SM64's first C press swings 60 degrees; a second in the same direction
-  -- runs on to the area's limit rather than adding another 60.
-  local step = MarioCam.C_STEP
-  if ctl.lastCDir == dir and limit then
-    ctl.goalOffsetYaw = dir * limit
-  else
-    ctl.goalOffsetYaw = s16(ctl.goalOffsetYaw + dir * step)
-  end
-  ctl.lastCDir = dir
-  if limit then
-    local d = signed(ctl.goalOffsetYaw)
-    if d > limit then ctl.goalOffsetYaw = s16(limit) end
-    if d < -limit then ctl.goalOffsetYaw = s16(-limit) end
-  end
+  -- from the nearest resting yaw, so a press mid-arc lands on the next
+  -- quarter rather than on a quarter-and-a-bit
+  setTurnTarget(detentYaw(turnTarget() + dir * MarioCam.C_STEP))
   return true
 end
 
@@ -1596,46 +1594,59 @@ function MarioCam.cycleZoom()
   return MarioCam.ZOOMS[ctl.zoom]
 end
 
--- The R button.
-function MarioCam.toggleAlt()
-  ctl.alt = not ctl.alt
-  if not ctl.alt then ctl.lastCDir = 0 end
-  return ctl.alt
+-- The R button: put the camera at my back.
+--
+-- SM64's R swaps to the alternate mode -- the 45-degree-locked camera --
+-- because the automatic camera there generates the complaint "it keeps
+-- turning while I am trying to line something up". This camera never
+-- turns on its own, so that complaint has nothing to attach to, and the
+-- one framing key every modern follow camera has is the one that was
+-- missing: R arcs the camera round to whichever way the player faces.
+-- One deliberate turn, on request, to a cardinal.
+function MarioCam.snapBehind()
+  if shotRefusesFraming() then
+    ctl.buzz = true
+    return false
+  end
+  setTurnTarget(faceYaw(geo.facing))
+  return true
 end
 
 function MarioCam.recenter()
-  ctl.goalOffsetYaw, ctl.lastCDir = 0, 0
+  ctl.goalOffsetYaw = 0
+  ctl.stickHeld = false
 end
 
--- Kept, and currently never raised: with the ladder down to ON/OFF there
--- is no rung that refuses a turn. The mechanism stays because the sound
--- feedback it drives is the cheap half of the source document's point
--- about never leaving a press unanswered, and an authored shot that
--- declines to be spun is the obvious next thing to raise it.
+-- The refusal, for the caller to voice: an authored shot that has pinned
+-- the framing declines the wheel and the zoom (see shotRefusesFraming),
+-- and a key that goes quiet reads as a broken key -- the source document's
+-- point about never leaving a press unanswered.
 function MarioCam.consumeBuzz()
   local b = ctl.buzz
   ctl.buzz = false
   return b
 end
 
--- The right stick, folded into the same offset the keys move, so the two
--- ways of asking for a yaw cannot disagree about what the answer is.
+-- The right stick, folded into the same yaw the keys turn, so the two
+-- ways of asking for a bearing cannot disagree about what the answer is.
+-- Continuous while held -- 120 degrees a second at full deflection, fast
+-- enough to be useful and slow enough that a flick does not lose the
+-- player -- and SNAPPED to the nearest quarter turn when let go, so the
+-- camera rests where the sprites have a drawing for it.
 local function stickYaw(dt)
-  local x = rightStick()
-  if x == 0 then return end
-  -- the stick has no buzz to give, so inside a framing shot it is simply
-  -- inert -- same refusal as the keys, minus the voice it cannot carry
-  if shotRefusesFraming() then return end
-  local limit = yawLimit()
-  -- 120 degrees a second at full deflection: fast enough to be useful,
-  -- slow enough that a flick does not lose the player
-  ctl.goalOffsetYaw = s16(ctl.goalOffsetYaw + x * degrees(120) * dt)
-  if limit then
-    local d = signed(ctl.goalOffsetYaw)
-    if d > limit then ctl.goalOffsetYaw = s16(limit) end
-    if d < -limit then ctl.goalOffsetYaw = s16(-limit) end
+  local x = MarioCam.readStick()
+  if x ~= 0 then
+    -- the stick has no buzz to give, so inside a framing shot it is simply
+    -- inert -- same refusal as the keys, minus the voice it cannot carry
+    if shotRefusesFraming() then return end
+    setTurnTarget(s16(turnTarget() + x * degrees(120) * dt))
+    ctl.stickHeld = true
+  elseif ctl.stickHeld then
+    ctl.stickHeld = false
+    if not shotRefusesFraming() then
+      setTurnTarget(detentYaw(turnTarget()))
+    end
   end
-  ctl.lastCDir = 0
 end
 
 -- ---------------------------------------------------------- update_camera --
@@ -1664,72 +1675,19 @@ function MarioCam.update(dt, vh)
   stickYaw(dt)
   ctl.offsetYaw = approachS16(ctl.offsetYaw, ctl.goalOffsetYaw, rateDiv(6, dt))
   -- 4. the mode: writes cam.pos and cam.focus, and nothing else does
-  local fn = modes[cam.mode] or modes.radial
+  local fn = modes[cam.mode] or modes.orbit
   fn(dt, vh)
-  -- 5. occlusion, by ROTATING rather than by pulling in -- and the
-  -- rotation ACCUMULATES (see the avoid table): the mode's yaw is fresh
-  -- every frame, so the deflection has to carry its own history or it
-  -- never gets anywhere.
-  -- ...except in FIXED: an authored shot was placed by someone who could
-  -- see the map, and a steering that swung it would be the algorithm
-  -- overruling the author -- backwards from the whole point of section 10.
-  local modeYaw = cam.yaw
-  local boxedIn = false
+  -- 5. occlusion: a block that stands lifts the lens over it, or failing
+  -- that pulls the eye in along its own ray. NOTHING HERE TURNS THE
+  -- CAMERA (the collision section says why).
+  -- ...except in FIXED, where nothing moves it at all: an authored shot
+  -- was placed by someone who could see the map, and a rig that moved it
+  -- would be the algorithm overruling the author -- backwards from the
+  -- whole point of section 10.
   if cam.mode ~= "fixed" then
-    local tryYaw = s16(modeYaw + avoid.offset)
-    local av = avoidYaw(geo.map, cam.focus, cam.dist, cam.pitch,
-                        tryYaw, modeYaw, signed(avoid.offset))
-    -- ------- THE ENGAGE DELAY: passing occlusions move nothing
-    --
-    -- Walking past a house corner hides the player for a couple of cells,
-    -- and a steering that answered the FIRST blocked frame swung the
-    -- camera for every one of them -- and swung it back after -- which
-    -- from the player's chair is the camera "changing out of nowhere".
-    -- So the block has to STAND for a quarter second before any steering
-    -- or pull-in answers it; a block that resolves itself by walking was
-    -- never the camera's problem.
-    if av ~= nil then
-      avoid.blocked = (avoid.blocked or 0) + dt
-    else
-      avoid.blocked = 0
-    end
-    local engaged = (avoid.blocked or 0) >= MarioCam.WALL_DELAY
-    if av == false and engaged then
-      -- boxed in: hold the deflection where it is and let resolveGeometry
-      -- pull the eye in, which is the one thing that always works
-      boxedIn = true
-    elseif av and engaged then
-      -- a clear bearing exists: grow the deflection toward it. The goal is
-      -- measured from where the MODE wanted to stand rather than from due
-      -- south: on RADIAL the orbit has already used up its own allowance
-      -- and the steering is a further nudge on top of it, so clamping both
-      -- against the same origin would silently forbid the steering
-      -- wherever the orbit happened to be at its limit. It is within the
-      -- sweep's own arc by construction; the limit seam still gets a say.
-      local goal = signed(av - modeYaw)
-      local cap = avoidLimit()
-      if cap then
-        if goal > cap then goal = cap end
-        if goal < -cap then goal = -cap end
-      end
-      avoid.offset = signed(approachS16(s16(avoid.offset), s16(goal),
-                                        rateDiv(MarioCam.WALL_DIV, dt)))
-    elseif av == nil and avoid.offset ~= 0 then
-      -- the deflected view is clear. Ease home -- but only if home is
-      -- clear too, because relaxing back INTO the wall that caused the
-      -- deflection is a camera that saws against a corner forever.
-      if eyeClear(geo.map, cam.focus, cam.dist, cam.pitch, modeYaw) then
-        avoid.offset = signed(approachS16(s16(avoid.offset), 0,
-                                          rateDiv(MarioCam.WALL_RELAX, dt)))
-        if math.abs(avoid.offset) < degrees(1) then avoid.offset = 0 end
-      end
-    end
-    if avoid.offset ~= 0 then
-      cam.yaw = s16(modeYaw + avoid.offset)
-      focusOnPlayer(cam.focus, cam.pos, 0, 0, cam.dist, cam.pitch, cam.yaw)
-    end
+    occlude(geo.map, dt)
   end
-  resolveGeometry(geo.map, cam.focus, cam.pos, boxedIn)
+  resolveGeometry(geo.map, cam.focus, cam.pos)
   -- 6. the mode transition, if one is running
   transitionNextState(dt)
   -- 7. the chase
@@ -1826,10 +1784,10 @@ end
 function MarioCam.cut()
   lakitu.smooth = false
   anchor.x, anchor.z = nil, nil
-  avoid.offset = 0
-  avoid.blocked = 0
+  pull.t, pull.lift, pull.blocked = 1, 0, 0
   follow.heading, follow.facing = nil, nil
   follow.commit, follow.lull = 0, 0
+  cam.reversing = nil
 end
 
 -- The yaw the world is being seen from, in radians, for anything that has
@@ -1918,12 +1876,12 @@ local quad = 0
 -- ------- THE MAPPING NEVER CHANGES UNDER THE PLAYER'S THUMB.
 --
 -- The hysteresis stops the boundary flickering; it does not stop the
--- boundary being CROSSED, and the radial orbit crosses it on its own --
--- walk east along a route and the automatic yaw swings until, mid-stride,
--- the held button silently becomes a different world direction. "I was
--- going right and right turned into up" is that exact frame, and no width
--- of hysteresis fixes it, because the problem is not noise at the
--- boundary, it is a remap while the button is DOWN.
+-- boundary being CROSSED, and every quarter turn crosses one -- press E
+-- while walking east and the view swings until, mid-stride, the held
+-- button silently becomes a different world direction. "I was going right
+-- and right turned into up" is that exact frame, and no width of
+-- hysteresis fixes it, because the problem is not noise at the boundary,
+-- it is a remap while the button is DOWN.
 --
 -- SM64 does not have the problem to solve: the stick is an angle, so a
 -- turning camera bends the walk gradually. A D-pad is four discrete
@@ -2004,37 +1962,6 @@ function MarioCam.relativeFacing(worldFacing)
   local k = MarioCam.quadrant()
   if k == 0 then return worldFacing end
   return DIRS[(w - k) % 4 + 1]
-end
-
--- ------- THE PRESENTATION YAW: the card shows its best side
---
--- A drawing has one angle it was made for -- the cardinal the latched
--- quadrant picked it by. When the camera sits between two cardinals, the
--- billboard used to face it dead-on anyway, flashing art made for 0
--- degrees at a 45-degree eye. The fighting-game trick (the user named
--- Sparking Zero and FighterZ) is that the character never quite faces the
--- lens: it UNDER-ROTATES toward the angle its look was built for, so the
--- lens always catches it slightly turned -- the flattering three-quarter.
---
--- Here that is one number: pull the card back toward the shown drawing's
--- cardinal by 40% of the camera's divergence from it, capped at 18
--- degrees. Continuous, so there is no octant boundary to pop at; zero at
--- every cardinal, so the mode everyone plays is untouched; and read
--- THROUGH MarioCam.quadrant() -- the same latch-gated accessor the frame
--- chooser uses -- so the turn always agrees with the drawing on screen.
--- (A first cut read the raw latched variable and disagreed with the art
--- by a whole stale quadrant; the unit probe caught it at the cap.)
-MarioCam.PRESENT_FRACTION = 0.4
-MarioCam.PRESENT_CAP = 18                -- degrees
-
-function MarioCam.presentYaw()
-  if not MarioCam.enabled() then return 0 end
-  local deg = math.deg(MarioCam.viewYaw())
-  local off = ((deg - MarioCam.quadrant() * 90 + 180) % 360) - 180
-  local a = -off * MarioCam.PRESENT_FRACTION
-  local cap = MarioCam.PRESENT_CAP
-  if a > cap then a = cap elseif a < -cap then a = -cap end
-  return math.rad(a)
 end
 
 -- Camera-relative movement is a REAL GAMEPLAY CHANGE and the only thing in

@@ -2,10 +2,10 @@
 
 ## Versioning
 
-Releases use **semver** plus an optional channel:
+Releases use **semver**:
 
 ```
-MAJOR.MINOR.PATCH[-CHANNEL]
+MAJOR.MINOR.PATCH
 ```
 
 | Part | Meaning |
@@ -13,17 +13,414 @@ MAJOR.MINOR.PATCH[-CHANNEL]
 | `MAJOR` | Breaking / large rework of the diorama contract |
 | `MINOR` | New features (still installable over the prior minor) |
 | `PATCH` | Fixes and small polish only |
-| `CHANNEL` | Build flavour only — today `mobile` (cheap RES/SHADOWS defaults). **Not** a feature name. |
+
+The old `-mobile` channel is retired. Historical tags keep it (`v1.28.0-mobile` and earlier). New tags do not.
 
 **Do not** encode features in the version string (no `.water`, `.rain`, `.grass`, …). Feature names live in this changelog and in release notes.
 
 Tags and packages:
 
-- Git tag: `v1.28.0-mobile`
-- Zip asset: `TERRARIUM-1.28.0-mobile.zip`
-- `manifest.json` / catalog `version` field: `1.28.0-mobile`
+- Git tag: `v1.29.0`
+- Zip asset: `TERRARIUM-1.29.0.zip`
+- `manifest.json` / catalog `version` field: `1.29.0`
 
 ## Unreleased
+
+## 1.29.0
+
+The arena answers the blow, and the glass takes it. And the houses breathe. And the water has a bed. And the tower of graves is a tower. And a ledge is a bank.
+
+This is the first tag without `-mobile`.
+
+### Ledges are banks -- the LEDGES row (`lib/LedgeKit.lua`, `lib/Buildings.lua`, `data/voxel_heights.lua`)
+
+- Every hop-down ledge tile in Kanto stood as the profile's six-pixel
+  `ledge` box wearing the bump drawing on its top. `LedgeKit` stands the
+  seventeen cell compositions a census of the shipping maps finds (east-west
+  runs and their rounded ends, north-south runs hopped west and east, the
+  corners and junctions) as BANKS: one or two strokes per cell -- a ridge
+  along an axis, steep on the high side (the engine's own ledge table says
+  which: `field.ledges`), gentle toward the landing, rounded ends -- the
+  height field their maximum. Eight voxels for a sixteen-deep run, six for
+  eight.
+- The bank's top wears the HIGH side's ground tile, picked per placement
+  and composited above the drawing as a palette row (one model per
+  template and ground); the steep risers and the foot wear the drawing's
+  earth and outline. `Buildings.build` builds `ledge` templates per
+  placement for that; `Buildings.stamp` honours a model's `claimMask`, so
+  the grass or path sharing a cell with a ledge is never claimed and keeps
+  its own art. The plot's ground vote moved into `groundVote`, shared.
+- LEDGES options row (BANK / CLASSIC, `full`), remeshing on its step like
+  TREES; the manager page reaches it through `mod.options_changed`.
+- Probe `tests/ledges_probe.lua` (Cerulean, Fuchsia, Route 24, Pewter,
+  Lavender's west line, Route 4 for cost), runner `tests/run_ledges.cmd`.
+
+### The tower of graves stands as a tower -- the HAUNT row (`lib/TowerKit.lua`, `lib/GhostFX.lua`, `lib/Buildings.lua`, `lib/Voxel3D.lua`, `lib/VoxelScene.lua`, `lib/ShadowMap.lua`, `data/voxel_heights.lua`)
+
+- Lavender's Pokemon Tower (B30) was the one drawing the band pipeline
+  folded wrong: its seven latticed roof rows laid flat, twelve rows of
+  facade extruded -- a 96x100 brick box with a striped lid. `TowerKit`
+  models it by hand on the same read/emit pipeline (template field
+  `tower = {}` in `data/voxel_heights.lua`; the band fold stays as the
+  fallback): plinth, ashlar lower body with a pointed portal, niches and
+  slits, cornice, three courses of pointed windows under sills and quoins,
+  cornice, lantern storey of tall glass, the drawing's own lattice as a
+  three-tier pagoda, spire -- 233 voxels tall, ~890k voxels, ~24.5k quads,
+  every voxel a texel of the drawing.
+- `Buildings.emit` honours a model's `tint(y, texel)`: a light factor per
+  row and per texel class, composed before the corner AO. The tower's
+  stone is the drawing's WHITE (the ridge tile's row, which every recolour
+  keeps white) at 0.44 -- grey -- its joints, damp foot and streaks the
+  same white at 0.30, light quoins at 0.62, the lattice roof its violet at
+  0.78, the fascia pale at 0.92, and the foot darker than the top. Nothing
+  is repainted; the palette is the town's.
+- TOWER options row (NEW / CLASSIC, `full`): `TowerKit.setting` picks
+  whether a `tower` template gets the kit's model or the plain fold, read
+  by `Buildings.build`; the row's step (and `mod.options_changed` from the
+  manager page) remeshes through `ChunkMesher.invalidate` exactly as TREES
+  does. `Buildings.invalidate` now also clears the per-cell heights
+  (`clearTall`), so the camera's occluder height follows the model that
+  actually stands.
+- HAUNTED GLASS in the scene shader: panes inside `hauntBox` (recorded by
+  `Buildings.stamp` on the structure cache as `S.haunts`, read per scene by
+  `VoxelScene` into `Voxel3D.haunt`) burn a cold `hauntColor`, six in ten
+  dark, breathing on the lamps' clock, and read as dark glass by day. Zero
+  outside the box, where every line folds back to what it was.
+- `GhostFX` (HAUNT row, ON/OFF, `full`): wisps out of the lantern storey,
+  the portal and the spire after dark, on the shared particle solver, two
+  cards each (teardrop + halo) drawn through `Voxel3D.flatten` so the
+  night's tint cannot put them out. Its own small field, like the hearths.
+- Lavender's terrace: the hop-down ledge tiles round the tower's yard
+  stand as a low ashlar wall under a pale coping with piers at corners,
+  end and gate -- `TowerKit.precinct`,
+  one template per cell shape in `data/voxel_heights.lua`, in the ledge's
+  own white texels held down to grey. Templates gained `maps` (a set of
+  map ids), `where` (a tile rectangle) and `claimRows` (match more rows
+  than you stand on) so the pieces stay on the terrace: the town's west
+  ledge line and its north-west ground are Route 8's carrying on across
+  the seam and keep the profile's look. The yard's speckled ground ($11,
+  boxed to the terrace's quarter of the town) is paved one voxel deep in
+  grey flagstones the same way. CLASSIC leaves every ledge and the ground
+  to the profile.
+- `ShadowMap.HEIGHT` 160 -> 240 so the tower's upper storeys stay inside
+  the sun pass. `MarioCam`'s occluder height over the tower's cells is the
+  model's real top (234) through `Buildings.tallAt`, as before.
+- Probe: `tests/lavender_tower_probe.lua` (build without fallback, haunt
+  box, shader status, wisps live, frame time, screenshots at dawn / day /
+  night from a hero frame injected for the run, the authored door and west
+  shots and the F0 orbit frame), runner `tests/run_tower.cmd`. Hero frame
+  mean 5.6 ms by day and 4.6 ms at night with 18 wisps live (vsync off,
+  i3-1115G4) -- no regression against the F0 baseline.
+
+### The water has a bed -- the WATER row (`lib/ChunkMesher.lua`, `lib/Voxel3D.lua`, `lib/Water.lua`, `lib/VoxelScene.lua`)
+
+- A water tile was one opaque quad two pixels down wearing the tileset's
+  tile: a blue floor. Now the mesher cuts a BED under every water tile in
+  whole voxel terraces by shore distance (a BFS over the map's tiles,
+  `Water.BED`), drops the banks to it, and emits the SURFACE into a group
+  of its own hung off the terrain group (`terrain.water`), which
+  `Voxel3D.drawWater` blends over the solid world at the end of the scene
+  pass -- depth-tested and depth-writing, so the RT pass's water test reads
+  the depth it always did and spray still lands on a surface.
+- The shader gained the basin: below the ground plane in the terrain pass
+  it paints sand absorbed per channel by the column of water over it
+  (Beer-Lambert), cel caustics from the trains' interference, a lapping
+  waterline on the walls and a damp band above it. The sheet is a Fresnel
+  mix of the tile's flat blue (its drawn wave marks ride at a third) and
+  the sky the scene was cleared to, covered by shore distance, with the
+  swell's bands, glint rings, chop foam, ice and snow veil as before, plus
+  a foam ring at the bank. `vWaterSurf` / `vWater` now mean "the water
+  pass", not "below -1"; `eye` and `iceLift` moved to the shared uniform
+  block; `swellEval` / `surfaceY` / `tileFlat` are the one evaluation every
+  stage shares.
+- Each corner's distance to the bank rides the surface quad's shade
+  attribute (1 + tiles / 8), which the sheet had no other use for.
+- The shore BFS treats a ring tile under a connected neighbour's body as
+  UNKNOWN, the cell loop's own rule: seeded as land, Pallet's border trees
+  shoaled the pond against Route 21 and ran a foam line along the seam.
+- `tests/water_look_probe.lua`: pure screenshots of the water on six maps
+  across RES, WATER, RTX and the hour, standing on the bank with the most
+  water in frame (the camera shows the ground SOUTH of the player), with
+  the neighbourhood dumped as the map sees it. `tests/water_fps_probe.lua`:
+  the cost, as an A/B of the committed lib against the working tree on
+  the lake and the sea at FULL + RTX MAX -- about 10-15% on those frames,
+  run-to-run noise (warm-up, thermal) being about as large.
+
+### Chimneys that smoke -- the HEARTH row (`lib/HearthFX.lua`)
+
+- The house family (`gabled_house`, `gabled_cottage`, `gabled_house_wide`,
+  `daycare` and the doorless blocks that share their drawings) now stands a
+  chimney at the back of its roof through the kit's own `chimney` box,
+  which only the Center's rooftop ball had ever used. `Buildings`
+  remembers each mouth -- model space in `model`/`modelParts`, on the
+  quads out of `emit`, world space on the map's structure cache in
+  `stamp` (`S.chimneys`) -- and `Structures.peek` reads that cache
+  without building it, so an emitter can ask from the update hook.
+- `lib/HearthFX.lua` puts smoke on the mouths: its own field of the
+  shared solver (a chimney smokes hardest in a dead calm, which is exactly
+  when WindFX clears its own), puffs that climb on a lift dying with age
+  squared, take the wind and its eddies, spread and thin over ~5 s; rain
+  shortens and weighs the plume, a gale flattens it. Who smokes is a
+  per-house hash held against `HearthFX.hearth()` -- the meals (dusk,
+  dawn, the night) and the cold (winter, snow, a wet evening) -- so the
+  town lights up house by house in the same order every evening. Drawn as
+  cards in the scene pass, last and with depth writes off; the cloud is a
+  16 px three-tone cel drawing generated at load, not an asset. New
+  OPTIONS row **HEARTH** (ON/OFF), on the FULL preset; PFX scales the
+  rate.
+- `tests/hearth_probe.lua` (ALL RULES PASS): the mouths, the gate, the
+  dusk figure, the rate against the module's own clock (the hook's dt is
+  the engine's step, not the wall -- a wall-clock rate reads 2.3x low on
+  a machine that cannot hold 60), the climb, drift with WIND OFF and AUTO,
+  the batches, and ON/OFF captures above each stack.
+
+### BACK SPRITES stands the back view IN the arena (`OverworldBattle.textures`, `BattleScene.monMatrix`)
+
+- The player's mon under BACK SPRITES was the one thing in the fight that
+  was not geometry: the GB's own flat pic, pinned over the finished frame
+  on the UI canvas -- which composites ABOVE the world canvas the move
+  fan, the panels and the capsules are drawn into. So the mon sat on top
+  of its own move cards, and a tuck (shrink to half, slide up) had been
+  bolted on to get it out of their way, which made it small. Both gone:
+  the back pic now takes the road the front pic already took -- a card
+  standing on the player's cell in the 3D pass, depth-tested,
+  shadow-mapped, tinted by the hour, with the cards floating in front of
+  it -- grown about its feet by `OverworldBattle.BACK_HERO` so it reads
+  as the foreground hero the classic 2x slot made it. The texture route
+  lands a two-bit back pic at the GB's 2x (`resolveBattleScale`) and the
+  pack's back art at its 2/3, the same 64 GB px, so the grow means the
+  same thing on either; the card is not mirrored (`tex.back`), the back
+  view already looks up the field. The pinned pic stays as the fallback
+  for a frame whose texture did not render (`shot.playerStaged`).
+  `tests/backhero_probe.lua` measures it.
+
+### Walkers bob (`VoxelScene.drawEntity`)
+
+- The player, the Pikachu follower and every NPC rise a hair
+  (`WALK_BOB`, 1.4 world px) through each step and land on the tile --
+  one smooth hump per tile read off the sub-tile offset, so it needs no
+  clock and stops dead on a cell. Gen 1's two walk poses at a pixel a
+  frame read as a slide; the same two poses with the body lifting between
+  them read as walking. Shadows stay on the ground.
+
+### The mon pack -- newer sprites on the field (`lib/MonPack.lua`)
+
+- `assets/mons/front|back/<species>.png`: the Gen 5 (Black/White) battle
+  sprites for the 151, cropped to their bounding box
+  (`tools/install_mon_pack.py`, source PokeAPI/sprites; see the folder's
+  LICENSE). Served through OverworldBattle's `picImage` seam in place of
+  the engine's two-bit pic whenever a battle is staged on the map,
+  matched by the battler's own sprite image so trainer pics keep the
+  engine's road. The intro slide and a blackout get the pack's own black
+  silhouette.
+- **ADVANCED and every other COLORS mode leave them alone**: a
+  full-colour pic has no DMG shades to remap (the engine's own
+  `trueColor` rule), so the mon keeps its real colours instead of a
+  four-shade palette guess, and takes the hour's tint in the 3D pass like
+  everything else on the field. No paper fill either -- the art has its
+  own alpha.
+- The side textures are now rendered at 3x the Game Boy frame
+  (`MonPack.DENSITY`): a Gen 1 pic lands at 3x (as crisp as the quad used
+  to blow it up to), a pack sprite at its own even 2x (`SCALE` 2/3 x 3),
+  so a full sprite stands 64 GB px to the pic's 56. Anchors stay in GB
+  units. On the menu under BACK SPRITES the pack's back sprite draws at
+  half the GB's 2x, which keeps 96 px inside the frame.
+- **And they MOVE**: the pack carries the Black/White ANIMATED sprites
+  as well (`assets/mons/anim/front|back/<name>.png`, one grid per
+  species with every frame, and `data/mons_anim.lua` with each frame's
+  hold; `tools/install_mon_anim.py` unrolls the GIFs by hand, disposal
+  and all, merges identical frames and crops to the union box). The
+  engine draws a battler as one image, so an animated mon is a canvas
+  the size of a frame that `MonPack.tick` repaints from the grid when
+  the frame's hold runs out -- once per update, before the side
+  textures are rendered -- and `picImage`, the ribbon's coins and the
+  party rows all read that canvas, so the same frame shows everywhere.
+  The coin's face re-renders on the frame it shows. The stills stay as
+  the fallback for a species with no strip.
+- **The icons too**: the turn ribbon's medallions (`BattleRibbon`) and the
+  party screen's rows (`BattleScreenXY.drawParty`) draw the pack's front
+  sprite fitted to the icon's box (`MonPack.drawIcon`, smooth when shrunk,
+  a chosen row's mon bobbing in place) in place of the engine's 16 px
+  two-bit party icon, which stays as the fallback.
+- **The turn ribbon re-cut** (`BattleRibbon`): the medallions are coins
+  of smoked glass now -- a soft drop shadow, a cap of light, the mon's
+  own TYPE colour as a thick rim so the two are told apart across the
+  arena, the pack's sprite as a portrait filling the disc, an order
+  badge ("1" gold on the crest owner, "2" grey on the other), a gold
+  crown with jewels over the coin whose move is really playing and a pale
+  chevron over a forecast, a gold halo behind the crest, the crest coin
+  breathing. The arc is a beam with light flowing along it toward the
+  crest owner, and a coin on the move leaves a trail of golden ghosts
+  along the arc. Coins a third larger.
+- `tests/monpack_probe.lua`: both battlers in the pack, sprites served,
+  texture at DENSITY, and the foe's texture holding more than four
+  opaque colours (the proof no palette touched it).
+
+### The SM64 camera holds still (SM64CAM)
+
+The player's report: the camera changes all the time, and the protagonist's
+sprite sits on a diagonal. Both traced to the same place -- yaws the camera
+picked on its own -- and both are gone.
+
+- **No automatic turn, of any kind.** The RADIAL mode orbited the map's own
+  centre, faithful to SM64 and wrong for a world whose centre is the town
+  square: measured, twenty degrees across Celadon's plaza with no key
+  pressed. The wall steering swung up to eighty degrees round every fence
+  and house corner, and back. Both are removed. Outdoors is now a
+  player-centred orbit (`modes.orbit`) at a bearing only the player changes;
+  the SHOULDER follow re-aims only after 1.2 s of committed walking (was
+  0.6 -- two cells, and a town is nothing but two-cell runs).
+- **Every resting yaw is a quarter turn.** `q`/`e` step 90 degrees (was 60),
+  the stick snaps to the nearest quarter on release, the follow re-aims to a
+  cardinal, and the card's "best side" under-rotation (`presentYaw`) is
+  gone with the diagonals it was made for. Four-facing sprites have no
+  drawing for anything else.
+- **`r` puts the camera at your back** (was: the 45-degree alternate mode,
+  which existed to stop an automatic camera turning -- nothing left to stop).
+- **A wall that stands between is looked over, not steered round**: after
+  half a second (was a quarter) the lens lifts in 10-degree steps until it
+  sees over the fence or the roof, at the same bearing and distance; only
+  when no lift clears it does the eye pull in along its ray. Both ease in
+  over a quarter second and back out over most of a second, so a corner
+  passed at a walk moves nothing and one that engages costs a rise, not a
+  lurch.
+- **The bearing survives a route connection.** Walking off one outdoor map
+  onto the next reset the yaw and remapped the D-pad mid-stride; only a
+  door (into or out of a room) resets it now.
+- Shorter lead (`PAN_MAX` 120 SM64 units, was 220): every start and stop
+  slid the frame by the whole lead.
+- Old shot data keeps working: `mode = "radial"` and `"eight"` in
+  `data/camera_shots.lua` both resolve to the orbit.
+- Measured on one scripted ten-second town walk in Celadon (`tests/calm_probe.lua`,
+  rung ON, no camera key pressed): yaw travel 59 -> 18 degrees (what is
+  left is the focus leading the eye, SM64's own asymmetry), time spent
+  more than 15 degrees off a cardinal 18% -> 0%, three automatic turns -> none.
+- Probes: `tools/mariocam_unit_probe.py` rewritten to the new contract
+  (bearing holds, quarter-turn detents, stick snap, lift-then-pull behind
+  the engage delay, R, route connection); `tests/calm_probe.lua` measures
+  yaw travel, turns, time off-cardinal and D-pad remaps over one scripted
+  town walk per rung, with screenshots, so a before/after is two lines.
+
+### COMBAT row -- the hit reaches the room (`lib/BattleHitFX.lua`)
+
+- **Spotlight**: while a move plays the frame darkens toward its corners
+  around the attacker.
+- **Flash**: the landed hit lights the defender's cell in the move's
+  colour, floor included, for a third of a second.
+- **Voxel debris**: a blow kicks a handful of floor cubes off the
+  defender's cell; they arc, bounce once and settle, tinted by the
+  element.
+- **Marks on the floor**: scorch (fire, electric), puddle (water,
+  poison), frost (ice, psychic), crater ring (rock, ground), dust (the
+  rest) -- drawn INSIDE the 3D pass between the terrain and the mons
+  (`BattleScene.render` calls `BattleHitFX.drawGround`), so they lie
+  under the defender's feet and take the hour's light. They outlast the
+  round and fade.
+- **Damage figures**: the bar's own loss floats up from the defender as a
+  gold figure on a sliver of glass, larger for a bigger share of the bar.
+  Read off `shownHP` last frame less `hp` now, once per pending drain; a
+  switch never shows a figure.
+- **When it lands, measured**: with animations on the engine writes the
+  new hp a full second BEFORE the anim (the "drain pending" edge). The
+  blow is now the anim's END with a drain pending, or `fx.flash` /
+  `fx.shake` on the anims-off path, or the bar starting to move as the
+  last resort -- one per pending episode. `BattleGlassFX` reads the same
+  tell, so the wave and the flash land on the same frame.
+
+### The glass takes it (`lib/BattleGlassFX.lua`)
+
+- **Tilt**: every pane yaws with the shove (third return of `jolt`),
+  leaning away from the blow and back on the spring -- box, chips, move
+  cards and HP plates alike.
+- **Marks on the glass** (`overlayPane`): the moment the wave front
+  reaches a pane it leaves a mark at the point nearest the blow: dark
+  cracks for a physical move, rings in the element's colour for the
+  rest, and a wash of the colour for a few frames. Drawn through the
+  pane mappers, so the mark tilts with the glass.
+- **Contact shadows**: every pane reports its world footprint
+  (`footprint`) and the arena pass lays a flat dark quad on the floor
+  under it, depth-tested like the mons' own shadows.
+- **The dialog box re-cut** (`BattlePanelsXY.drawMsgFace`, concept 13):
+  smoked glass in the capsules' own charcoal instead of the clear pane
+  -- white type over a blurred pale floor or a blue mon had been
+  dissolving. The Game Boy text box's DOUBLE border as two pale lines in
+  the glass, a Poke Ball emblem on the top-left corner, and the Game
+  Boy's own advance arrow: riding the end of the line while the
+  typewriter runs, waiting at the bottom-right once it settles. Type
+  with a shadow instead of an outline; the gold brackets and underline
+  are gone.
+- **The command chips re-cut** (`drawButtonFace`, concept 14): the same
+  smoked charcoal with the command's colour as a low tint and on the
+  rim, and a Poke Ball tinted in that colour at the left end carrying
+  the colour; gold rim and bloom on the chosen one. Drawn from
+  primitives (`pokeBall`), so any tint and size without a resample.
+  The bottom row's pills widened to share with the ball.
+- **The chosen move's element on its card** (`lib/BattleCardFX.lua`,
+  called by `BattleFanXY.draw` for the raised card): hand-drawn
+  pixel-art VFX from Pimen's spell packs (`assets/vfx/pimen_*.png`, see
+  the LICENSE) played on the card's glass through the pane mapper, so
+  they tilt and swing with it -- a thunderstrike coming down and sparks
+  at the foot (ELECTRIC), pixel flames licking in from the foot and up
+  both sides inside an orange glowing rim, the centre left clean --
+  not a sheet but a "Doom fire" heat buffer (28x40 fat pixels, sources
+  along the foot and the lower sides, decay and a little wind, a
+  five-tone palette), concept 15's MEDIUM (FIRE), the
+  card as a glass tank half full: a clear body to a rolling waterline
+  at mid-height, bubbles rising, caustics on the floor, a small splash
+  now and then -- concept 16's MEDIUM (WATER), crystals and shard hits (ICE),
+  dark tendrils (GHOST), tinted bubbles (POISON), a tinted light loop
+  (PSYCHIC, DRAGON), rocks, bumps and dust (ROCK, GROUND), hit sparks
+  (FIGHTING, NORMAL), the wind pack's leaves drifting (GRASS, BUG) and
+  swooshes (FLYING). Each sprite is drawn additive first, larger and
+  translucent, then plain -- a cheap bloom. Around them the glass keeps
+  its frame (`BattleGlassFX.overlayType` in "frame" mode): a breathing
+  three-layer halo, two runners chasing the perimeter, glints. The
+  primitive weather/crawl brushes stay in the module for a type with no
+  sheet. Fades in with the raise.
+- **The PP meter** (`BattleFanXY.drawFace`): the "PP 12/15" line is now
+  a track of pips at the foot of the card, filled in proportion (one
+  pip per PP for a move with few, eight otherwise), green, amber under
+  60%, red under 30%, an empty track with a red edge at zero, the count
+  small inside it. A move under the foe's Disable shows grey pips under
+  a hatch, a padlock on the corner and the whole face dimmed; a move
+  with no PP left is dimmed a little. `BattleFanXY.faceDebug()` reports
+  each card's state for the probe.
+- `BattleHitFX.demo(type, cell, groundY, dmg, quake)` fires the whole
+  answer at a cell for tuning by eye; `tests/battleimpact_probe.lua`
+  (13 claims) measures all of it and CLASSICA closing every gate.
+
+The Pokemon Center and the Poke Mart are rooms, not boxes.
+
+### Interior kit (`lib/RoomKit.lua`)
+
+Indoor furniture on the buildings pipeline: a template in
+`data/voxel_heights.lua` `buildings[<tileset>]` names its `room` kind and
+is matched by tile grid, read off the atlas, modelled in 3D and uploaded
+by `Buildings.emit`; every visible voxel still wears a texel of the
+room's own tileset.
+
+- **Pokemon Center** (`buildings.POKECENTER`): 32px walls with a rail and
+  a two-course cornice, high windows sunk in the wall, the counter board
+  standing proud; round pillars on plinths with capitals; the healing
+  machine as a console with its screen sunk and the pokeball tray sloping
+  up the wall; counters with a toe kick and an overhanging top; the PC as
+  a rack with sunk screens and a keyboard shelf; the lounge couch as an L
+  (the seated man keeps his seat via `standH`); potted plants as a round
+  tub under a leaf ball.
+- **Poke Mart** (`buildings.MART`): the back wall as display cases with
+  the SALE niche and the fridge glass sunk, a plain wall and cornice
+  behind; two free-standing racks with real shelves; the clerk's booth as
+  a panel with the bottle display on top and the counter corner; the
+  register cell matched with the register and painted as work surface.
+- `Buildings.read` takes `paint` (pixels from one grid, matching from
+  another) and `topRows` doubles as a palette row for the kit.
+
+### Fix
+
+- Custom-sprite buildings (the XY Center) uploaded through the grass mesh
+  path, which cannot take the kit's per-corner AO shades; the first such
+  quad threw inside a pcall and every Center stood as an empty claimed lot.
+  `ChunkMesher.buildSpriteMesh` now uses the terrain sink.
 
 ## 1.28.0-mobile
 

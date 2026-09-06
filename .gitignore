@@ -205,6 +205,13 @@ assets/menuxy/
 
 # ------------------------------------------------ OVERWORLD ROAMER SPRITES
 #
+# Gen 5 (Black/White) battle sprites from PokeAPI. Nintendo / Game Freak
+# art, same rule as the X/Y HUD and the roamer sheets: LICENSE.md and the
+# install scripts stay; the PNGs do not. tools/install_mon_pack.py and
+# tools/install_mon_anim.py put them in place. Without them MonPack falls
+# back to the engine's own pics.
+assets/mons/**/*.png
+
 # Gen-2-style 16x96 walker sheets for the WILD / TOWN rows. Same rule as the
 # X/Y GUI block above: crediting ShockSlayer / Crystal Clear / PokePC
 # Followers is not the same as holding a licence from them, and the

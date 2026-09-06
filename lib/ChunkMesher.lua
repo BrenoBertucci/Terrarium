@@ -55,6 +55,9 @@ local Structures = V.require("Structures")
 local TileShape = V.require("TileShape")
 local Voxel3D = V.require("Voxel3D")
 local Budget = V.require("BuildBudget")
+-- the water's rest height and its bed (Water.BASE, Water.BED). Safe: Water
+-- knows about weather and waves and nothing about meshes.
+local Water = V.require("Water")
 
 local ffi = nil
 do
@@ -360,6 +363,11 @@ function Group:release()
     if ch.mesh and ch.mesh.release then pcall(ch.mesh.release, ch.mesh) end
   end
   self.chunks = {}
+  -- and the water SURFACE group riding on it (see runGeometry): one
+  -- opaque thing to every caller, still
+  local w = self.water
+  self.water = nil
+  if w and w.release then pcall(w.release, w) end
 end
 
 local function newChunkedSink()
@@ -443,7 +451,8 @@ end
 -- Kept free of any GPU call so it can be exercised headless -- the
 -- geometry is the part with the interesting invariants, and a suite that
 -- needed a real GL context to check them would never run in CI.
-local function runGeometry(map, bodyOnly, masks, sink)
+local function runGeometry(map, bodyOnly, masks, sink, waterSink)
+  ChunkMesher.stage = { map = map.id, pass = "geometry" }
   local push = sink.push
   local tileset = map.tileset
   local S = Structures.forMap(map)
@@ -451,12 +460,60 @@ local function runGeometry(map, bodyOnly, masks, sink)
   local atlasW = tileset.imageWidth or (perRow * 8)
   local atlasH = tileset.imageHeight or 48
 
+  -- ------- THE BED under every water tile (see Water.BED)
+  --
+  -- A water tile used to be one quad at the class's recess (-2), and the
+  -- bank a two-pixel lip down to it. Now the tile carries a BED, stepped
+  -- down in whole voxel terraces by how far it is from the nearest bank,
+  -- the bank drops to the bed, and the SURFACE is a separate quad in its
+  -- own group (waterSink) that VoxelScene draws translucent over it.
+  --
+  -- `shore` is tiles to the nearest bank: 0 on land, 1 on the water tile
+  -- against it, -1 on water no bank reaches (filled by the BFS below, once
+  -- the meshed range is known). A tile past the meshed range is not a
+  -- bank: a sea running off the edge of the map keeps its depth rather
+  -- than shoaling against the border.
+  local BED = Water.BED or { -6, -10, -14 }
+  local BED_TILES = Water.BED_TILES or 2
+  local DEEP = #BED * BED_TILES
+  local shore = {}
+  local function shoreOf(tx, ty, own)
+    local d = shore[keyOf(tx, ty)]
+    if d == nil then return own end
+    if d < 0 then return DEEP end
+    return d
+  end
+  -- the least distance of the four tiles meeting at a corner (dx, dy =
+  -- +-1 name which corner of tile tx, ty), for the surface's vertex
+  local function cornerShore(tx, ty, dx, dy, own)
+    local m = own
+    local a = shoreOf(tx + dx, ty + dy, own)
+    if a < m then m = a end
+    a = shoreOf(tx + dx, ty, own)
+    if a < m then m = a end
+    a = shoreOf(tx, ty + dy, own)
+    if a < m then m = a end
+    return m
+  end
+  local function bedAt(tx, ty)
+    local d = shore[keyOf(tx, ty)]
+    if d == nil or d == 0 then return BED[1] end
+    if d < 0 then d = DEEP end
+    local step = math.ceil(d / BED_TILES)
+    if step < 1 then step = 1 elseif step > #BED then step = #BED end
+    return BED[step]
+  end
+
   local function heightAt(tx, ty)
     local k = keyOf(tx, ty)
     if S.skip[k] then return 0 end
     local run = S.runs[k]
     if run then return run.h end
     local s = S.shapeAt[k]
+    -- water stands at its BED here, not at the surface: the bank's side
+    -- bands and the corner AO both measure against the ground that is
+    -- actually there, and the surface is not ground
+    if s and s.class == "water" then return bedAt(tx, ty) end
     return s and s.h or 0
   end
 
@@ -619,6 +676,10 @@ local function runGeometry(map, bodyOnly, masks, sink)
   local tw, th = def.width * 4, def.height * 4         -- map size in tiles
   local r = bodyOnly and 0 or RING * 4
 
+  -- scratch row for the surface quad's four corner distances, reused
+  -- like aoTop: both sinks copy the values out at once
+  local waterShade = { 1, 1, 1, 1 }
+
   -- true when the (ring) position lies under a connected neighbour's body
   local function masked(px0, pz0, px1, pz1)
     if not masks then return false end
@@ -643,6 +704,51 @@ local function runGeometry(map, bodyOnly, masks, sink)
       end
     end
     return false
+  end
+
+  -- the shore distance, now that the range and the masks are known: a BFS
+  -- seeded on every drawn non-water tile at once (an object's synthesized
+  -- ground counts as land), 4-connected -- a diagonal gap in a tile map
+  -- is not a way round a bank. keyOf packs (ty + 64) * 4096 + (tx + 64),
+  -- so the four neighbours are +-1 and +-4096.
+  do
+    local queue, qh, qt = {}, 1, 0
+    for ty = -r, th + r - 1 do
+      Budget.tick()
+      for tx = -r, tw + r - 1 do
+        local k = keyOf(tx, ty)
+        local s = S.shapeAt[k]
+        -- a ring tile under a connected neighbour's body is UNKNOWN, the
+        -- same rule the cell loop applies: the neighbour draws that ground,
+        -- and the border trees this map keeps there are not a bank. Seeding
+        -- them shoaled Pallet's pond against Route 21 and ran a foam line
+        -- along the seam through open water.
+        local inBody = tx >= 0 and ty >= 0 and tx < tw and ty < th
+        if not inBody and masked(tx * 8, ty * 8, tx * 8 + 8, ty * 8 + 8) then
+          s = nil
+        elseif s and s.class == "water" and not S.skip[k] then
+          shore[k] = -1
+        elseif s or S.skip[k] then
+          shore[k] = 0
+          qt = qt + 1
+          queue[qt] = k
+        end
+      end
+    end
+    while qh <= qt do
+      local k = queue[qh]
+      qh = qh + 1
+      local d = shore[k] + 1
+      local m = k - 1
+      if shore[m] == -1 then shore[m] = d; qt = qt + 1; queue[qt] = m end
+      m = k + 1
+      if shore[m] == -1 then shore[m] = d; qt = qt + 1; queue[qt] = m end
+      m = k - 4096
+      if shore[m] == -1 then shore[m] = d; qt = qt + 1; queue[qt] = m end
+      m = k + 4096
+      if shore[m] == -1 then shore[m] = d; qt = qt + 1; queue[qt] = m end
+      if qh % 1024 == 0 then Budget.tick() end
+    end
   end
 
   for ty = -r, th + r - 1 do
@@ -702,7 +808,11 @@ local function runGeometry(map, bodyOnly, masks, sink)
         end
       elseif s then
         local run = S.runs[k]
-        local h = run and run.h or s.h
+        -- water is meshed at its BED (a terrace by shore distance, see
+        -- bedAt); its surface is emitted separately at the end of this
+        -- branch
+        local isWater = (not run) and s.class == "water"
+        local h = run and run.h or (isWater and bedAt(tx, ty)) or s.h
         local x0, z0 = tx * 8, ty * 8
 
         -- top face. A roofed volume gets a GABLE segment: the roof rises
@@ -855,6 +965,30 @@ local function runGeometry(map, bodyOnly, masks, sink)
             end
           end
         end
+
+        -- THE SURFACE, into the water group (see Water.BED and
+        -- Voxel3D.drawWater): one quad at the class's rest height wearing
+        -- the water tile, drawn translucent over the bed just meshed. The
+        -- shade is not a shade here -- the sheet is lit flat -- so it
+        -- carries each corner's distance to the nearest bank (1 + tiles /
+        -- 8), the least of the four tiles meeting at that corner, for the
+        -- foam ring and the depth tint; the vertex stage unpacks it as
+        -- vShore. Same keep rules as the bed: this branch already dropped
+        -- the tile if the ring rules said so.
+        if isWater then
+          local own = shoreOf(tx, ty, DEEP)
+          local u0, u1, v0, v1 = uvRect(tile, 0, 8)
+          local base = Water.BASE or -2
+          local ws = waterSink or sink
+          waterShade[1] = 1 + cornerShore(tx, ty, -1, -1, own) / 8
+          waterShade[2] = 1 + cornerShore(tx, ty, 1, -1, own) / 8
+          waterShade[3] = 1 + cornerShore(tx, ty, 1, 1, own) / 8
+          waterShade[4] = 1 + cornerShore(tx, ty, -1, 1, own) / 8
+          ws.push({ { x0, base, z0 }, { x0 + 8, base, z0 },
+                    { x0 + 8, base, z0 + 8 }, { x0, base, z0 + 8 } },
+                  { { u0, v0 }, { u1, v0 }, { u1, v1 }, { u0, v1 } },
+                  waterShade)
+        end
       end
     end
   end
@@ -922,6 +1056,7 @@ local function runGeometry(map, bodyOnly, masks, sink)
   -- bytes they cost. bodyOnly means "no border RING", not "less world".
   -- The tag stays on the quads for a future true distance LOD; it is
   -- not consulted here.
+  ChunkMesher.stage = { map = map.id, pass = "objects" }
   for _, q in ipairs(S.objectQuads) do
     Budget.tick()
     local x0 = math.min(q[1][1], q[2][1], q[3][1], q[4][1])
@@ -964,6 +1099,7 @@ local function runGeometry(map, bodyOnly, masks, sink)
   -- the ring and keep the interior, which is exactly the silhouette a
   -- neighbour must show so a seam crossing does not plant a forest.
   local sc = { { 0, 0, 0 }, { 0, 0, 0 }, { 0, 0, 0 }, { 0, 0, 0 } }
+  ChunkMesher.stage = { map = map.id, pass = "stamps" }
   for _, st in ipairs(S.roundStamps or {}) do
     local mx, mz = st.mx, st.mz
     local sr = st.r or 8
@@ -1019,9 +1155,16 @@ end
 -- Build the mesh for `map` synchronously. Returns nil when there is
 -- nothing to draw or meshes are unavailable (headless).
 function ChunkMesher.build(map, bodyOnly, masks)
-  local sink = newChunkedSink()
-  runGeometry(map, bodyOnly, masks, sink)
-  return sink.finish()
+  local sink, water = newChunkedSink(), newChunkedSink()
+  runGeometry(map, bodyOnly, masks, sink, water)
+  local mesh = sink.finish()
+  local wmesh = water.finish()
+  if mesh then
+    mesh.water = wmesh
+  elseif wmesh then
+    pcall(wmesh.release, wmesh)
+  end
+  return mesh
 end
 
 local function quadsMesh(quads)
@@ -1201,9 +1344,13 @@ local function runJob(job)
   local c = entry(job.id)
   if c.grass == nil or c.flowers == nil or c.figures == nil
      or c.sprites == nil or (c.stale and c.stale.aux) then
+    ChunkMesher.stage = { map = job.id, pass = "grass" }
     local okG, grass = pcall(buildGrassMesh, map)
+    ChunkMesher.stage = { map = job.id, pass = "flowers" }
     local okF, flowers = pcall(buildFlowerMesh, map)
+    ChunkMesher.stage = { map = job.id, pass = "figures" }
     local okX, figures = pcall(buildFigureMeshes, map)
+    ChunkMesher.stage = { map = job.id, pass = "sprites" }
     local okS, sprites, stex = pcall(buildSpriteMesh, map)
     if (gen[job.id] or 0) ~= job.gen then
       if okG and grass and grass.release then pcall(grass.release, grass) end
@@ -1224,9 +1371,18 @@ local function runJob(job)
     c.figures = (okX and figures) or false
     if c.stale then c.stale.aux = nil end
   end
-  local sink = newChunkedSink()
-  runGeometry(map, job.slot == "body", job.masks, sink)
+  local sink, water = newChunkedSink(), newChunkedSink()
+  runGeometry(map, job.slot == "body", job.masks, sink, water)
+  ChunkMesher.stage = { map = job.id, pass = "finish" }
   local mesh = sink.finish()
+  -- the surface group rides on the terrain group, so the cache's
+  -- swapSlot / releaseEntry free both without learning there are two
+  local wmesh = water.finish()
+  if mesh then
+    mesh.water = wmesh
+  elseif wmesh then
+    pcall(wmesh.release, wmesh)
+  end
   if (gen[job.id] or 0) ~= job.gen then
     if mesh and mesh.release then pcall(mesh.release, mesh) end
     return

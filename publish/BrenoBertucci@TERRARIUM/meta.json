@@ -3,7 +3,7 @@
   "title": "Terrarium",
   "author": "BrenoBertucci",
   "summary": "3D voxel diorama for Gen 1 (Red/Blue/Yellow). Gold is an early first pass — not recommended yet. Own id, folder, pipelines and letter hotkeys; installs beside DRAMATIC_SHAPE.",
-  "version": "1.28.0-mobile",
+  "version": "1.29.0",
   "categories": [
     "ART",
     "GAMEPLAY"
@@ -13,8 +13,7 @@
     "3d",
     "graphics",
     "diorama",
-    "fork",
-    "mobile"
+    "fork"
   ],
   "repo": "https://github.com/BrenoBertucci/Terrarium",
   "github": "BrenoBertucci/Terrarium",

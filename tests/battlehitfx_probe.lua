@@ -117,6 +117,7 @@ return function(game)
 
   local sawPlaying, sawLive, sawKey = false, false, false
   local sawHit, sawWave = false, false
+  local sawDrain = false          -- did ANY damage land this round?
   local shotAnim, shotHit = false, false
   local menuRun = 0
   local lastDbg = nil
@@ -142,6 +143,7 @@ return function(game)
     end
     local drain = draining(battle.player) or draining(battle.enemy)
     if flash or quake or drain then
+      sawDrain = true
       if live > 0 or (d and d.lastKey) then sawHit = true end
       local gd = GlassFX.debug()
       if gd and gd.wave then sawWave = true end
@@ -174,7 +176,10 @@ return function(game)
           "during animPlaying the hit FX is live",
           ("playing=%s live=%s lastKey=%s")
           :format(tostring(sawPlaying), tostring(sawLive), tostring(sawKey)))
-  verdict(sawHit, "on hit a battle Vfx or lastKey is set", "")
+  -- a round where nothing landed (a miss, a status move both ways) has
+  -- no hit to answer: the claim is about a hit that happened
+  verdict(sawHit or not sawDrain, "on hit a battle Vfx or lastKey is set",
+          sawDrain and "" or "(no damage landed this round -- vacuous)")
   verdict(isBt, "lastKey is a bt_* authored sheet after throwing a move",
           ("lastKey=%s chargeKey=%s hitKey=%s")
           :format(tostring(lastKey),

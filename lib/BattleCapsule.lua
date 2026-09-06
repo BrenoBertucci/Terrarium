@@ -367,7 +367,11 @@ end
 
 BattleCapsule.WORLD = true
 
-BattleCapsule.W_PLAYER = { up = 14.6, right = -0.5, w = 11.0,
+-- The player's plate hangs high and to the LEFT of its cell: under BACK
+-- SPRITES the mon is a hero (OverworldBattle.BACK_HERO) whose head rises
+-- on the right, up the field toward the foe, and a plate over the cell's
+-- centre sat on that head. Over the tail side there is only tail.
+BattleCapsule.W_PLAYER = { up = 16.6, right = -4.0, w = 11.0,
                            yaw = math.rad(-10), close = 0.78 }
 BattleCapsule.W_ENEMY = { up = 11.3, right = -8.5, w = 11.0,
                           yaw = math.rad(12), close = 0.62 }
@@ -458,15 +462,22 @@ function BattleCapsule.hang(shot, side, info, expFrac)
   -- a landed hit's wave reaches it -- it hangs nearest the mons, so it
   -- is the first glass the wave arrives at
   local FX = glassFX()
+  local jT = 0
   if FX then
-    local okJ, jR, jU = pcall(FX.jolt, "cap:" .. side, c, R)
+    local okJ, jR, jU, tilt = pcall(FX.jolt, "cap:" .. side, c, R)
     if okJ and jR then
       c = F.vadd(F.vadd(c, R.right, jR), R.up, jU)
+      jT = tilt or 0
     end
   end
-  c = F.vadd(shot.eye, F.vadd(c, shot.eye, -1), P.close)
-  local cr = F.vrot(R.right, R.up, P.yaw)
+  -- the plate turns with the shove, and prints its shadow on the floor
+  local cr = F.vrot(R.right, R.up, P.yaw + jT)
   local capH = P.w * H / BattleCapsule.FRAME_W
+  if FX and FX.footprint then
+    pcall(FX.footprint, "cap:" .. side, c, cr, R.up, P.w, capH,
+          shot.groundY)
+  end
+  c = F.vadd(shot.eye, F.vadd(c, shot.eye, -1), P.close)
   -- menu-adjacent HUD: the player's capsule breathes a 4% scale pulse
   local ww, hh = P.w, capH
   if isP then
@@ -478,13 +489,20 @@ function BattleCapsule.hang(shot, side, info, expFrac)
   if not mesh then return false end
   love.graphics.setColor(1, 1, 1, 1)
   love.graphics.draw(mesh)
-  -- and the quiet tick of a carried status, on the plate itself
-  if FX and type(info.status) == "string" and info.status ~= "" then
+  -- and the quiet tick of a carried status, on the plate itself -- and
+  -- the mark the hit's wave leaves on it as it passes
+  if FX then
     local map, ss = F.paneMapper(shot, c, cr, R.up, ww, hh,
                                  faceW, faceH,
                                  { 6, 6, faceW - 12, faceH - 12 })
-    pcall(FX.overlayStatus, "cap:" .. side, map, ss,
-          faceW - 12, faceH - 12, info.status)
+    if type(info.status) == "string" and info.status ~= "" then
+      pcall(FX.overlayStatus, "cap:" .. side, map, ss,
+            faceW - 12, faceH - 12, info.status)
+    end
+    if FX.overlayPane then
+      pcall(FX.overlayPane, "cap:" .. side, map, ss,
+            faceW - 12, faceH - 12, R.project)
+    end
   end
   local cx, cy = R.project(c)
   BattleCapsule._world = BattleCapsule._world or {}

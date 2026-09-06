@@ -38,6 +38,24 @@ Upstream Dramatic Shape still uses `3` / `5` / `6` / `7` / `8` / `9`.
 - Wild Pokemon visible in the grass; ecology / shelter / city life systems
 - Tuned defaults for lower-end / mobile hardware
 
+## New in 1.29.0
+
+First tag without `-mobile`. The arena answers the blow. Houses breathe.
+A ledge is a bank. The tower of graves is a tower.
+
+- **COMBAT.** The hit reaches the room: spotlight, typed flash, cubes off
+  the floor, a mark under the defender, gold damage, glass that leans and
+  cracks. Move cards wear their element. CLASSICA still holds still.
+- **LEDGES (BANK / CLASSIC).** Hop-down tiles stand as earth banks, grass
+  on top, steep on the high side.
+- **HAUNT.** Lavender's tower is a tower. Cold glass after dark, wisps
+  from the lantern.
+- **HEARTH.** Chimneys smoke.
+- **WATER.** The water has a bed.
+- **Centers and Marts are rooms** (counters, machine, shelves) — not boxes.
+- **Mon pack (optional).** Gen 5 battle sprites via
+  `python tools/install_mon_pack.py` — not in the zip, same rule as roamers.
+
 ## New in 1.28.0-mobile
 
 The fight is staged. The Pokemon Center is a drawing. The wind is a brush.
@@ -58,9 +76,10 @@ The air has physics. The rain stops falling through the world. The camera
 can be Mario 64's.
 
 - **SM64CAM (`m`).** Super Mario 64's camera on the overworld, off by
-  default. It orbits the map's centre, the D-pad turns with it, and
-  characters face the eye instead of lying flat or moonwalking. `q`/`e`/`r`/`f`
-  and the right stick.
+  default. It orbits you at a bearing only you change, a quarter turn at
+  a time -- it never turns on its own -- the D-pad turns with it, and
+  characters face the eye instead of lying flat or moonwalking. `q`/`e`
+  turn, `r` puts it at your back, `f` zooms, the right stick turns freely.
 - **PFX row.** Particle amount is its own axis (LOW / ON / HIGH / MAX),
   not a side-effect of RES.
 - **Rain occludes.** Shafts no longer draw through roofs, walls and the

@@ -69,7 +69,7 @@ local KEY_FX = "j"
 local KEY_SM64  = "m"   -- SM64CAM ON / OFF
 local KEY_CAML  = "q"   -- C-left
 local KEY_CAMR  = "e"   -- C-right
-local KEY_CAMR2 = "r"   -- R: the alternate (8-direction) camera
+local KEY_CAMR2 = "r"   -- R: put the camera at my back
 local KEY_CAMZ  = "f"   -- C-down: the zoom ladder
 V.KEYS = {
   voxel = KEY_VOXEL, grid = KEY_GRID, tilt = KEY_TILT,
@@ -155,6 +155,10 @@ local WindFX = V.require("WindFX")
 local StepFX = V.require("StepFX")
 local VegFX = V.require("VegFX")
 local SprayFX = V.require("SprayFX")
+local HearthFX = V.require("HearthFX")
+local GhostFX = V.require("GhostFX")
+local TowerKit = V.require("TowerKit")
+local LedgeKit = V.require("LedgeKit")
 local Weather = V.require("Weather")
 local Sky = V.require("Sky")
 local GroundFX = V.require("GroundFX")
@@ -343,6 +347,14 @@ mod.content.render_pipelines:register(PIPE_VOXEL, {
     -- water's own size (WaterBody.sizeAt) is the emission probability --
     -- a harbour whips spray, a fountain pond does not.
     SprayFX.update(dt, Voxel.active())
+    -- and what the houses are burning. Behind WindFX for the reason the
+    -- footstep dust is: the air its puffs climb through is this frame's.
+    -- Its own field, because a chimney smokes hardest in a dead calm,
+    -- which is exactly when WindFX clears its own.
+    HearthFX.update(dt, Voxel.active())
+    -- and what the tower of graves breathes out. Same field discipline as
+    -- the hearths: its own small pool, the shared solver's air.
+    GhostFX.update(dt, Voxel.active())
     -- and what it sounds like out there. Also ahead of the gate, and for a
     -- plainer reason than the weather's: a sound needs no camera, so the
     -- crickets come out at night on the flat 2D world too.
@@ -843,6 +855,62 @@ local SETTINGS = {
     .. "modes; the steam and the Zs are drawn into the diorama, so those two "
     .. "want the VOXEL camera on.",
     full = true },
+  -- `full = true` like INDOOR: a house with a fire going is what a town
+  -- looks like at dusk, not a knob on the camera.
+  { HearthFX.setting,
+    "Chimneys that smoke. The house family stands a chimney on its roof, "
+    .. "and a house with a fire going puts a chain of cel puffs off it: "
+    .. "each climbs, slows as it cools, takes the WIND row's own air and "
+    .. "its eddies, spreads and thins into nothing. Which houses have a "
+    .. "fire is the house's own name held against how many of the "
+    .. "town's hearths are lit right now -- most at dusk, some at dawn, "
+    .. "a few through the night, almost none at noon -- and the cold "
+    .. "lights the rest: winter on the SYNC calendar, snow falling or "
+    .. "lying, a wet evening. Rain weighs the plume down and a gale "
+    .. "tears it flat. Drawn into the diorama, so it wants the VOXEL "
+    .. "camera on.",
+    full = true },
+  -- `full = true` like HEARTH: which tower stands in Lavender is what the
+  -- town looks like, not a knob on the camera. The row remeshes on its own
+  -- step (TowerKit.setting:row), the way TREES does.
+  { TowerKit.setting,
+    "Which Pokemon Tower stands in Lavender. NEW is the tower modelled by "
+    .. "hand: a stone plinth, a blind lower body in weathered grey ashlar "
+    .. "with a pointed portal and slit windows, storeys of pointed windows "
+    .. "under pale cornices, a lantern storey of tall glass and the "
+    .. "drawing's own violet lattice roof as a three-tier pagoda under a "
+    .. "spire -- every voxel a texel of the drawing, the grey done with "
+    .. "light rather than paint. CLASSIC is the building kit's plain fold "
+    .. "of the same drawing, as it stood before. Flipping it rebuilds the "
+    .. "map's meshes. The HAUNT row's cold glass and wisps belong to the "
+    .. "NEW tower only.",
+    full = true },
+  -- `full = true` like TOWER: what a ledge is made of is the look of every
+  -- route, not a knob on the camera. Remeshes on its own step, like TREES.
+  { LedgeKit.setting,
+    "What a hop-down ledge is. BANK stands every ledge tile in Kanto as a "
+    .. "bank of earth: it rises steeply on the side you stand on, crests, "
+    .. "and falls away gently toward where you land, the ground's own grass "
+    .. "or path rolling over its top and the drawing's earth showing where "
+    .. "the fall is steep, a dark rim at its foot -- east-west runs, "
+    .. "north-south runs hopped either way, their rounded ends and corners. "
+    .. "CLASSIC is the profile's six-pixel box wearing the ledge drawing on "
+    .. "top, as before. Flipping it rebuilds the map's meshes.",
+    full = true },
+  -- `full = true` like HEARTH: the tower of graves is what Lavender IS,
+  -- not a knob on the camera. The tower itself stands in both modes.
+  { GhostFX.setting,
+    "The tower of graves is haunted. Lavender's Pokemon Tower stands as a "
+    .. "tower now -- a stone plinth, a blind lower body with a pointed portal "
+    .. "and slit windows, storeys of deep-set windows under cornices, a "
+    .. "lantern storey of tall glass and the drawing's own three-tier lattice "
+    .. "roof under a spire, every voxel wearing the drawing's own texels. "
+    .. "After dark its glass burns cold, sparse and breathing instead of "
+    .. "lamp-warm, and pale wisps drift out of the lantern storey and thin "
+    .. "into the violet air. This row is the wisps and the cold glass; the "
+    .. "tower stands either way. Drawn into the diorama, so it wants the "
+    .. "VOXEL camera on.",
+    full = true },
   -- `full = true` like WILD, and for the same reason: this is what the
   -- streets are made of, not a knob on the camera.
   { CityLife.setting,
@@ -966,13 +1034,13 @@ local SETTINGS = {
     "The Super Mario 64 camera. A camera operator rather than a fixed "
     .. "mount: it turns to look at you far faster than it flies to where "
     .. "it wants to stand, takes its height from the GROUND under you so "
-    .. "steps do not bob the frame, leads the way you are walking, and "
-    .. "slides around a wall that gets between you instead of zooming "
-    .. "through it. The camera ORBITS THE MAP -- it swings round the "
-    .. "town's own centre rather than trailing your back, the way it "
-    .. "orbits Bob-omb Battlefield's mountain. Q and E turn it, R locks "
-    .. "it to 45-degree steps, F walks the zoom, and the right stick "
-    .. "turns it freely. MOVEMENT TURNS WITH IT, as in Mario 64: the "
+    .. "steps do not bob the frame, and leads the way you are walking. "
+    .. "IT NEVER TURNS ON ITS OWN: the view holds its bearing until you "
+    .. "turn it, a quarter turn at a time, so the sprites always face the "
+    .. "lens square. Q and E turn it, R puts it at your back, F walks the "
+    .. "zoom, and the right stick turns it freely and settles on a "
+    .. "quarter. SHOULDER follows behind you and re-aims only after a "
+    .. "committed walk. MOVEMENT TURNS WITH IT, as in Mario 64: the "
     .. "D-pad walks you AWAY FROM THE CAMERA rather than due north, and "
     .. "characters are drawn from the side the camera is actually on. "
     .. "This is the one row in the mod that changes how the game "
@@ -995,9 +1063,11 @@ local SETTINGS = {
   -- off the engine draws the classic screen, which is this row's ON already,
   -- and a row that no longer decides anything is worse than no row.
   { OverworldBattle.backSetting,
-    "Keep your own Pokemon on the battle menu, seen from behind in its "
-    .. "original slot, instead of standing it on the map facing the foe. "
-    .. "The foe is still out there on its own tile.",
+    "Your own Pokemon seen from behind, the series' own shot: it stands on "
+    .. "its tile in the arena wearing its back art, big in the foreground "
+    .. "under the same light and shadow as the foe, with the move cards and "
+    .. "the panels floating in front of it. OFF stands it on the map facing "
+    .. "the foe, at the foe's own scale.",
     when = function() return stagedBattles() end, full = true },
   -- `full` for the reason the battle rows have it and more plainly: this is
   -- not a knob on the diorama at all, it is what the grass is made of. A
@@ -1332,7 +1402,7 @@ do
           local voice = "Tink"
           if what == "left" then MarioCam.rotateLeft()
           elseif what == "right" then MarioCam.rotateRight()
-          elseif what == "alt" then MarioCam.toggleAlt() voice = "Switch"
+          elseif what == "alt" then MarioCam.snapBehind() voice = "Switch"
           elseif what == "zoom" then MarioCam.cycleZoom() end
           if MarioCam.consumeBuzz() then voice = "Denied" end
           pcall(require("src.core.Sound").play, self.data, voice)
@@ -1532,6 +1602,14 @@ mod.events:on("mod.options_changed", function(payload)
   -- row remeshes inside Trees3D.setting:row already).
   if payload.key == "trees3d" then
     pcall(Trees3D.onOptionsChanged, payload.value)
+  end
+  -- TOWER flipped from the manager page: the same remesh (the OPTIONS row
+  -- remeshes inside TowerKit.setting:row already)
+  if payload.key == "tower" then
+    pcall(TowerKit.onOptionsChanged, payload.value)
+  end
+  if payload.key == "ledges" then
+    pcall(LedgeKit.onOptionsChanged, payload.value)
   end
   -- COMBAT flipped from the manager page: push the choice into every
   -- battle module's gate (the OPTIONS row applies inside its own step)
@@ -2014,7 +2092,7 @@ end)
 -- first so this cannot drift again: this literal sat five minors behind the
 -- manifest, and in a feature-encoded form the versioning rules in CHANGELOG.md
 -- forbid outright (`.snow.1` -- features live in the changelog, not here).
-mod.exports.version = mod.version or "1.28.0-mobile"
+mod.exports.version = mod.version or "1.29.0"
 -- exposed so a companion mod can pin its own tiles' shapes or read the
 -- camera without reaching into this mod's file layout
 mod.exports.lib = V

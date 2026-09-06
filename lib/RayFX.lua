@@ -1119,6 +1119,9 @@ local function getShader(level)
     -- returned on OFF. There is no rung where the block exists and the
     -- depth buffer does not.
     if Anime.screen() then src = src .. "#define RT_ANIME 1\n" end
+    -- Long compile used to stall the UI thread long enough that Windows
+    -- logged Application Hang 1002 and killed gen1recomp on boot.
+    if love and love.event and love.event.pump then pcall(love.event.pump) end
     local ok, sh = pcall(love.graphics.newShader, src .. SHADER)
     shaders[key] = (ok and sh) or false
     -- kept for the same reason Voxel3D keeps its own: a rung that will not

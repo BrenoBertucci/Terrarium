@@ -106,3 +106,18 @@ Every cell is solid - this building has no door of its own.
 | map | cell (x,y) | door | leads to |
 | --- | --- | --- | --- |
 | LAVENDER_TOWN | (12,0) | - | scenery, no entrance |
+
+## Model
+
+Since 2026-09-05 this drawing is modelled by `lib/TowerKit.lua` — the
+template's `tower` field in `data/voxel_heights.lua` — and not by the band
+fold. The band fold read the seven latticed roof rows that stand on ROUTE_10
+as a flat roof and extruded the twelve facade rows, so the tower came out as a
+96 x 100 brick box. TowerKit builds the tower the drawing implies (plinth,
+ashlar body with a pointed portal, three courses of pointed windows under
+cornices, a lantern storey, the lattice as a three-tier pagoda, a spire; 233
+voxels tall) out of the drawing's own texels, and reports a `haunt` that the
+scene shader and `lib/GhostFX.lua` read. The TOWER options row (NEW /
+CLASSIC) switches between that model and the fold. The `pokemon_tower_top`
+claimOnly twin on ROUTE_10 is unchanged. See FEATURES.md, "The tower of
+graves".

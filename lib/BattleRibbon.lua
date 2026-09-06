@@ -39,13 +39,13 @@ BattleRibbon.CREST_UP = 10.5     -- the control point's lift, above the mid
 BattleRibbon.SAMPLES = 24
 
 -- medallions
-BattleRibbon.SIZE = 2.9          -- world width at rest
-BattleRibbon.CREST_GROW = 0.9    -- extra width at the crest
+BattleRibbon.SIZE = 3.3          -- world width at rest
+BattleRibbon.CREST_GROW = 1.6    -- extra width at the crest
 BattleRibbon.REST_P = 0.13       -- arc param each medallion rests at
 BattleRibbon.REST_E = 0.87
 BattleRibbon.CREST = 0.5
 BattleRibbon.GLIDE_K = 8         -- per-second pursuit along the arc
-BattleRibbon.FACE = 132          -- face canvas, px
+BattleRibbon.FACE = 176          -- face canvas, px (room for crown + halo)
 
 BattleRibbon.GOLD = { 1.0, 0.84, 0.40 }
 BattleRibbon.PALE = { 0.92, 0.95, 1.0 }
@@ -123,13 +123,52 @@ end
 
 -- ------- the medallion's face: a glass disc wearing the party icon
 --
--- Drawn by the ENGINE's own PartyMenu.drawIcon under a scaled transform:
--- its icon resolution is a chain of registries, an OBP0 palette bake and
--- an OAM-mirroring quirk (its #276), and re-implementing any of that
--- here would be a second copy waiting to drift. A species it cannot draw
--- wears its initial in the Unova font instead.
+-- A coin of smoked glass, not a ring around an icon. The face carries:
+--   the DISC   -- charcoal glass with a cap of light and a gloss band,
+--                 over a soft drop shadow;
+--   the RIM    -- the mon's own TYPE colour as a thick ring, so the two
+--                 coins are told apart across the arena; gold and haloed
+--                 for the real turn, pale for a forecast;
+--   the SPRITE -- the mon pack's art (MonPack.drawIcon), larger than the
+--                 disc's middle so it reads as a portrait, the engine's
+--                 two-bit party icon only when the pack has none;
+--   the CROWN  -- a small gold crown over the crest owner's coin while
+--                 a move is really being thrown; a pale chevron while
+--                 the crest is only a forecast;
+--   the BADGE  -- the round's order, "1" on the crest owner and "2" on
+--                 the other, stamped bottom-right in the Unova font.
+local function typeColorOf(battle, mon)
+  local okB, B = pcall(V.require, "BattleBoxXY")
+  if not (okB and B and B.TYPE_COLOR) then return { 0.62, 0.67, 0.78 } end
+  local data = battle and battle.data
+  local def = data and data.pokemon and mon and data.pokemon[mon.species]
+  local t = def and def.types and def.types[1]
+  local tname = t and B.typeName and B.typeName(t) or t
+  return (tname and B.TYPE_COLOR[tname]) or B.TYPE_FALLBACK or { 0.62, 0.67, 0.78 }
+end
 
-local function drawFace(slot, battle, mon, golden, atCrest)
+local function crown(g, cx, top, w, color)
+  local h = w * 0.62
+  local x0, x1 = cx - w * 0.5, cx + w * 0.5
+  g.setColor(0.25, 0.15, 0.02, 0.9)
+  g.setLineWidth(3)
+  g.polygon("line", x0, top + h, x0, top + h * 0.25, cx - w * 0.25, top + h * 0.62,
+            cx, top, cx + w * 0.25, top + h * 0.62, x1, top + h * 0.25, x1, top + h)
+  g.setLineWidth(1)
+  g.setColor(color[1], color[2], color[3], 1)
+  g.polygon("fill", x0, top + h, x0, top + h * 0.25, cx - w * 0.25, top + h * 0.62,
+            cx, top, cx + w * 0.25, top + h * 0.62, x1, top + h * 0.25, x1, top + h)
+  -- three jewels
+  g.setColor(0.95, 0.25, 0.3, 1)
+  g.circle("fill", cx, top + h * 0.5, w * 0.07)
+  g.setColor(0.35, 0.6, 1.0, 1)
+  g.circle("fill", cx - w * 0.28, top + h * 0.7, w * 0.05)
+  g.circle("fill", cx + w * 0.28, top + h * 0.7, w * 0.05)
+  g.setColor(1, 1, 1, 0.9)
+  g.rectangle("fill", x0 + 2, top + h - 4, w - 4, 2)
+end
+
+local function drawFace(slot, battle, mon, golden, atCrest, order)
   local g = love.graphics
   local W = BattleRibbon.FACE
   if not slot.canvas then
@@ -144,39 +183,55 @@ local function drawFace(slot, battle, mon, golden, atCrest)
     g.clear(0, 0, 0, 0)
     g.setBlendMode("alpha")
     local cx = W / 2
-    local r = W / 2 - 10
-    -- the disc: dark base for contrast, pale glass over it
-    g.setColor(0.08, 0.09, 0.12, 0.72)
-    g.circle("fill", cx, cx, r)
-    g.setColor(0.80, 0.85, 0.94, 0.22)
-    g.circle("fill", cx, cx, r)
-    -- the ring: gold and haloed for the real turn, pale for a forecast,
-    -- thin for a medallion waiting at its own end of the arc
-    if atCrest and golden then
-      local GOLD = BattleRibbon.GOLD
-      g.setColor(GOLD[1], GOLD[2], GOLD[3], 0.30)
-      g.setLineWidth(12)
-      g.circle("line", cx, cx, r)
-      g.setColor(GOLD[1], GOLD[2], GOLD[3], 0.95)
-      g.setLineWidth(5)
-    elseif atCrest then
-      local P = BattleRibbon.PALE
-      g.setColor(P[1], P[2], P[3], 0.9)
-      g.setLineWidth(4)
-    else
-      g.setColor(0.62, 0.67, 0.78, 0.7)
-      g.setLineWidth(3)
-    end
-    g.circle("line", cx, cx, r)
-    g.setLineWidth(1)
+    local cy = W / 2 + 4                      -- room for the crown above
+    local r = W / 2 - 22
+    local tcol = typeColorOf(battle, mon)
+    local GOLD = BattleRibbon.GOLD
+    local PALE = BattleRibbon.PALE
 
+    -- the shadow: soft, offset down-right
+    for i = 4, 1, -1 do
+      g.setColor(0, 0, 0, 0.09)
+      g.circle("fill", cx + 3, cy + 5, r + i * 2)
+    end
+    -- the halo behind a crest coin
+    if atCrest then
+      local hc = golden and GOLD or PALE
+      for i = 5, 1, -1 do
+        g.setColor(hc[1], hc[2], hc[3], (golden and 0.10 or 0.06))
+        g.circle("fill", cx, cy, r + 4 + i * 3)
+      end
+    end
+    -- the disc: charcoal glass, a cap of light, a gloss band
+    g.setColor(0.08, 0.09, 0.12, 0.88)
+    g.circle("fill", cx, cy, r)
+    g.setColor(tcol[1], tcol[2], tcol[3], 0.16)
+    g.circle("fill", cx, cy, r)
+    -- (no stencil: a plain canvas carries none in this LOVE, and a
+    -- throw here would take the whole ribbon down -- the shapes are kept
+    -- inside the disc by size instead)
+    g.setColor(1, 1, 1, 0.13)
+    g.ellipse("fill", cx - r * 0.22, cy - r * 0.42, r * 0.62, r * 0.36)
+    g.setColor(0, 0, 0, 0.22)
+    g.ellipse("fill", cx, cy + r * 0.66, r * 0.72, r * 0.26)
+    -- the sprite: the pack's art, a portrait bigger than the middle
     local drew = false
+    do
+      local okMP, MonPack = pcall(V.require, "MonPack")
+      if okMP and MonPack and MonPack.drawIcon then
+        local box = r * 1.42
+        g.setColor(1, 1, 1, 1)
+        local okD, d = pcall(MonPack.drawIcon, mon and mon.species,
+                             cx - box * 0.5, cy - box * 0.5 - r * 0.02, box)
+        drew = okD and d or false
+      end
+    end
     local okPM, PartyMenu = pcall(require, "src.ui.PartyMenu")
-    if okPM and PartyMenu and PartyMenu.drawIcon and battle.game then
-      local s = (W - 44) / 16
+    if not drew and okPM and PartyMenu and PartyMenu.drawIcon and battle.game then
+      local s = (r * 1.5) / 16
       g.setColor(1, 1, 1, 1)
       g.push()
-      g.translate(cx - 8 * s, cx - 8 * s)
+      g.translate(cx - 8 * s, cy - 8 * s)
       g.scale(s, s)
       drew = pcall(PartyMenu.drawIcon, battle.game, mon, 0, 0, false, 0)
       g.pop()
@@ -188,7 +243,64 @@ local function drawFace(slot, battle, mon, golden, atCrest)
         local kk = 7
         local tw = C.textWidth(initial) * kk
         g.setColor(1, 1, 1, 1)
-        C.text(initial, cx - tw / 2, cx - 4.5 * kk, kk)
+        C.text(initial, cx - tw / 2, cy - 4.5 * kk, kk)
+      end
+    end
+    -- the rim: the type's colour, gold over it for the real turn
+    g.setColor(0, 0, 0, 0.55)
+    g.setLineWidth(9)
+    g.circle("line", cx, cy, r + 1)
+    if atCrest and golden then
+      g.setColor(GOLD[1], GOLD[2], GOLD[3], 0.35)
+      g.setLineWidth(16)
+      g.circle("line", cx, cy, r + 2)
+      g.setColor(GOLD[1], GOLD[2], GOLD[3], 1)
+      g.setLineWidth(6)
+      g.circle("line", cx, cy, r + 1)
+      g.setColor(1, 0.96, 0.8, 0.9)
+      g.setLineWidth(1.5)
+      g.circle("line", cx, cy, r - 3)
+    else
+      g.setColor(tcol[1], tcol[2], tcol[3], 1)
+      g.setLineWidth(atCrest and 6 or 5)
+      g.circle("line", cx, cy, r + 1)
+      local hi = atCrest and PALE or { 1, 1, 1 }
+      g.setColor(hi[1], hi[2], hi[3], atCrest and 0.9 or 0.35)
+      g.setLineWidth(1.5)
+      g.circle("line", cx, cy, r - 3)
+    end
+    g.setLineWidth(1)
+    -- the crown or the chevron
+    if atCrest then
+      if golden then
+        crown(g, cx, cy - r - 22, r * 0.9, GOLD)
+      else
+        g.setColor(PALE[1], PALE[2], PALE[3], 0.95)
+        g.setLineWidth(4)
+        g.line(cx - r * 0.3, cy - r - 8, cx, cy - r - 18, cx + r * 0.3, cy - r - 8)
+        g.setLineWidth(1)
+      end
+    end
+    -- the order badge
+    if order then
+      local bx, by, br = cx + r * 0.72, cy + r * 0.72, r * 0.3
+      local first = order == 1
+      g.setColor(0, 0, 0, 0.6)
+      g.circle("fill", bx + 1, by + 2, br + 1)
+      if first then g.setColor(GOLD[1], GOLD[2], GOLD[3], 1)
+      else g.setColor(0.35, 0.37, 0.42, 1) end
+      g.circle("fill", bx, by, br)
+      g.setColor(1, 1, 1, 0.8)
+      g.setLineWidth(1.5)
+      g.circle("line", bx, by, br)
+      g.setLineWidth(1)
+      local C = capsule()
+      local label = tostring(order)
+      if C then
+        local kk = (br * 1.25) / 9
+        local tw = C.textWidth(label) * kk
+        g.setColor(first and 0.25 or 0.05, first and 0.15 or 0.05, 0.02, 1)
+        C.text(label, bx - tw / 2, by - 4.5 * kk, kk)
       end
     end
   end)
@@ -208,6 +320,10 @@ local function bezier(P0, P1, P2, t, F)
            a * P0[3] + b * P1[3] + c * P2[3] }
 end
 
+local function now()
+  return (love.timer and love.timer.getTime and love.timer.getTime()) or 0
+end
+
 function BattleRibbon.draw(battle, shot)
   if not (BattleRibbon.ENABLED and battle and shot
           and shot.playerCell and shot.enemyCell) then
@@ -218,6 +334,7 @@ function BattleRibbon.draw(battle, shot)
   local R = F.rig(shot)
   if not R then return false end
   local g = love.graphics
+  local t = now()
 
   local gy = shot.groundY or 0
   local pB = { shot.playerCell[1], gy, shot.playerCell[2] }
@@ -227,22 +344,50 @@ function BattleRibbon.draw(battle, shot)
   local mid = { (pB[1] + eB[1]) / 2, gy, (pB[3] + eB[3]) / 2 }
   local P1 = F.vadd(mid, R.up, BattleRibbon.CREST_UP)
 
-  -- the ribbon itself: a luminous polyline, glow under core
-  local pts = {}
+  -- the ribbon: a beam -- wide glow, a core, and light FLOWING along it
+  -- toward the crest owner (short bright dashes marching on the arc)
+  local pts, cum = {}, { 0 }
   for i = 0, BattleRibbon.SAMPLES do
     local p = bezier(P0, P1, P2, i / BattleRibbon.SAMPLES, F)
     local sx, sy = R.project(p)
     if not sx then return false end
     pts[#pts + 1] = sx
     pts[#pts + 1] = sy
+    if i > 0 then
+      local dx, dy = sx - pts[#pts - 3], sy - pts[#pts - 2]
+      cum[i + 1] = cum[i] + math.sqrt(dx * dx + dy * dy)
+    end
   end
   local GOLD = BattleRibbon.GOLD
-  g.setColor(GOLD[1], GOLD[2], GOLD[3], 0.32)
-  g.setLineWidth(9)
+  local prevBlend, prevA = g.getBlendMode()
+  g.setColor(0, 0, 0, 0.25)
+  g.setLineWidth(7)
   g.line(pts)
-  g.setColor(1, 1, 1, 0.75)
+  g.setColor(GOLD[1], GOLD[2], GOLD[3], 0.30)
+  g.setLineWidth(11)
+  g.line(pts)
+  g.setColor(1, 0.97, 0.85, 0.85)
   g.setLineWidth(2.5)
   g.line(pts)
+  -- the flow: dashes every 46 px, 18 px long, drifting toward the crest
+  -- owner's end (the player sits at t=0, the enemy at t=1)
+  local total = cum[#cum]
+  local dir = (S.crest == "enemy") and 1 or -1
+  local phase = (t * 90 * dir) % 46
+  pcall(g.setBlendMode, "add", "alphamultiply")
+  g.setLineWidth(3.5)
+  for i = 1, #cum - 1 do
+    local s0, s1 = cum[i], cum[i + 1]
+    -- a dash covers [k*46+phase, +18) for integer k
+    local d0 = ((s0 - phase) % 46)
+    if d0 < 18 or (s1 - s0) > 46 - d0 then
+      local a = 0.55
+      g.setColor(GOLD[1], GOLD[2] + 0.1, GOLD[3] + 0.3, a)
+      g.line(pts[i * 2 - 1], pts[i * 2], pts[i * 2 + 1], pts[i * 2 + 2])
+    end
+  end
+  if prevA ~= nil then pcall(g.setBlendMode, prevBlend, prevA)
+  else pcall(g.setBlendMode, prevBlend or "alpha") end
   g.setLineWidth(1)
 
   -- the medallions: waiting one first, crest one on top
@@ -257,17 +402,51 @@ function BattleRibbon.draw(battle, shot)
     if mon then
       local slot = S.slots[side]
       local atCrest = math.abs(S.t[side] - BattleRibbon.CREST) < 0.12
+      local ord = (S.crest == side) and 1 or 2
+      -- the face follows the mon's animation frame (MonPack), so the
+      -- coin's portrait moves like the mon on the field
+      local frame = 0
+      do
+        local okMP, MonPack = pcall(V.require, "MonPack")
+        if okMP and MonPack and MonPack.frameOf then
+          frame = MonPack.frameOf(mon.species, false)
+        end
+      end
       local key = tostring(mon.species) .. ":"
-                  .. (atCrest and (S.golden and "G" or "C") or "-")
+                  .. (atCrest and (S.golden and "G" or "C") or "-") .. ord
+                  .. ":" .. frame
       if slot.key ~= key then
-        local okF = pcall(drawFace, slot, battle, mon, S.golden, atCrest)
+        local okF = pcall(drawFace, slot, battle, mon, S.golden, atCrest, ord)
         if not (okF and slot.canvas) then return false end
         slot.key = key
       end
       local crestness = math.max(0, 1 - math.abs(S.t[side]
                                  - BattleRibbon.CREST) / 0.37)
       local size = BattleRibbon.SIZE + BattleRibbon.CREST_GROW * crestness
+      -- the crest coin breathes
+      if atCrest then size = size * (1 + 0.03 * math.sin(t * 3.4)) end
       local c = bezier(P0, P1, P2, S.t[side], F)
+      -- a coin on the move leaves a trail of ghosts along the arc
+      local rest = (side == "player") and BattleRibbon.REST_P or BattleRibbon.REST_E
+      local target = (S.crest == side) and BattleRibbon.CREST or rest
+      local moving = math.abs(target - S.t[side]) > 0.015
+      if moving and slot.canvas then
+        local back = (target > S.t[side]) and -1 or 1
+        pcall(g.setBlendMode, "add", "alphamultiply")
+        for k = 1, 3 do
+          local tt = S.t[side] + back * k * 0.035
+          if tt > 0 and tt < 1 then
+            local gc = bezier(P0, P1, P2, tt, F)
+            local gm = F.hang(slot, shot, gc, R.right, R.up, size * (1 - k * 0.08), size * (1 - k * 0.08))
+            if gm then
+              g.setColor(GOLD[1], GOLD[2], GOLD[3], 0.35 - k * 0.09)
+              g.draw(gm)
+            end
+          end
+        end
+        if prevA ~= nil then pcall(g.setBlendMode, prevBlend, prevA)
+        else pcall(g.setBlendMode, prevBlend or "alpha") end
+      end
       if FX then
         local okJ, jR, jU = pcall(FX.jolt, "rib:" .. side, c, R)
         if okJ and jR then

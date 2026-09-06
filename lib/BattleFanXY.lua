@@ -48,14 +48,20 @@ BattleFanXY.ENABLED = true
 -- ------- the fan's geometry, in world pixels (a map cell is 16)
 --
 -- Anchored beside the player's mon: RIGHT_OFF along the camera's own right
--- axis, UP_OFF above the arena floor, which lands the hand over the box's
--- right half where the flat rows used to sit. Sized against the tele rig's
--- lens the same way the rows were sized against the box.
+-- axis, UP_OFF above the arena floor. Sized against the tele rig's lens
+-- the same way the flat rows were sized against the box.
+--
+-- RIGHT_OFF clears the HERO: under BACK SPRITES the player's mon stands
+-- up to BACK_HERO times a cell wide (OverworldBattle), its head on the
+-- side the hand hangs on, and a raised card on its face reads as the menu
+-- pinned to the mon rather than floating beside it. So the hand starts
+-- past the grown card's right edge and reaches toward the foe -- who is
+-- far and small, and reads fine through the glass.
 BattleFanXY.CARD_W = 4.6          -- card width
 BattleFanXY.CARD_H = 6.4          -- card height
 BattleFanXY.STEP = 5.1            -- spacing between card centres
-BattleFanXY.RIGHT_OFF = 11.4      -- fan centre, along camera right
-BattleFanXY.UP_OFF = 6.8          -- fan centre, above the arena floor
+BattleFanXY.RIGHT_OFF = 20.0      -- fan centre, along camera right
+BattleFanXY.UP_OFF = 5.5          -- fan centre, above the arena floor
 BattleFanXY.ROLL_STEP = math.rad(7)   -- in-plane lean per slot: the hand
 BattleFanXY.YAW_TILT = math.rad(10)   -- turn per slot: the foreshortening
 BattleFanXY.ARC_DROP = 0.42       -- outer cards sit lower, like held cards
@@ -93,6 +99,15 @@ BattleFanXY.COLS = 8
 -- the face canvas, in its own pixels
 BattleFanXY.FACE_W = 240
 BattleFanXY.FACE_H = 330
+
+-- the PP meter's colours by state (see drawFace)
+BattleFanXY.PP_COLOR = {
+  full = { 0.38, 0.86, 0.42 },
+  mid = { 0.96, 0.80, 0.25 },
+  low = { 0.96, 0.32, 0.28 },
+  empty = { 0.96, 0.32, 0.28 },
+  disabled = { 0.55, 0.55, 0.60 },
+}
 
 local SWAP_RING = { 1.0, 0.84, 0.40, 0.95 }
 local GOLD = { 1.0, 0.84, 0.40 }
@@ -293,12 +308,86 @@ local function drawFace(slot, mv, def, sel, swap, disabled)
     elseif def then
       rows[#rows + 1] = { "POWER " .. tostring(def.power), B.TEXT }
     end
+
+    -- ------- the PP meter
+    --
+    -- A number is a number; the player wants to SEE how much is left.
+    -- A track of pips at the foot of the card, filled in proportion,
+    -- coloured by how much is left (green, amber under 60%, red under
+    -- 30%, an empty track with a red edge at zero), the exact count
+    -- small inside it. A DISABLED move (the foe's Disable) shows its
+    -- pips grey under a hatch, a padlock on the corner, and the whole
+    -- face dimmed -- blocked at a glance, whatever the count says.
+    local meterH = 28
+    local meterY = H - m - pad * 0.75 - meterH
+    local ppState = "none"
     if pp then
-      rows[#rows + 1] = { ("PP %d/%d"):format(pp, maxPP),
-                          B.ppColor(pp, maxPP) }
+      local ratio = (maxPP and maxPP > 0) and (pp / maxPP) or 0
+      if disabled then ppState = "disabled"
+      elseif pp <= 0 then ppState = "empty"
+      elseif ratio < 0.30 then ppState = "low"
+      elseif ratio < 0.60 then ppState = "mid"
+      else ppState = "full" end
+      local PPC = BattleFanXY.PP_COLOR
+      local col = PPC[ppState] or PPC.full
+      local bx = m + pad * 0.8
+      local bw = W - 2 * m - pad * 1.6
+      -- the track
+      g.setColor(0, 0, 0, 0.48)
+      g.rectangle("fill", bx, meterY, bw, meterH, 6, 6)
+      -- the pips: one per PP when the move has few, eight otherwise
+      local n = math.max(1, math.min(maxPP or 8, 8))
+      local filled = 0
+      if pp > 0 then filled = math.max(1, math.ceil(ratio * n - 1e-6)) end
+      local gap = 3
+      local pw = (bw - 6 - gap * (n - 1)) / n
+      for i = 1, n do
+        local px = bx + 3 + (i - 1) * (pw + gap)
+        if i <= filled then
+          g.setColor(col[1], col[2], col[3], 1)
+        else
+          g.setColor(1, 1, 1, 0.12)
+        end
+        g.rectangle("fill", px, meterY + 3, pw, meterH - 6, 3, 3)
+      end
+      if ppState == "empty" then
+        g.setColor(PPC.low[1], PPC.low[2], PPC.low[3], 0.9)
+        g.setLineWidth(2)
+        g.rectangle("line", bx, meterY, bw, meterH, 6, 6)
+        g.setLineWidth(1)
+      end
+      if ppState == "disabled" then
+        -- the hatch: dark diagonals across the track, clipped to it
+        local sx, sy, sw, sh = g.getScissor()
+        g.setScissor(bx, meterY, bw, meterH)
+        g.setColor(0, 0, 0, 0.55)
+        g.setLineWidth(3)
+        for x = bx - meterH, bx + bw, 9 do
+          g.line(x, meterY + meterH, x + meterH, meterY)
+        end
+        g.setLineWidth(1)
+        if sx then g.setScissor(sx, sy, sw, sh) else g.setScissor() end
+      end
+      -- the count, small, inside the track
+      local label = ("%d/%d"):format(pp, maxPP or pp)
+      if C then
+        local kk = 17 / 9
+        local tw = C.textWidth(label) * kk
+        g.setColor(0, 0, 0, 0.85)
+        C.text(label, (W - tw) * 0.5 + 2, meterY + (meterH - 17) * 0.5 + 2, kk)
+        g.setColor(1, 1, 1, 1)
+        C.text(label, (W - tw) * 0.5, meterY + (meterH - 17) * 0.5, kk)
+      else
+        local th = 17
+        local tw = BattleHudXY.textWidth(label) * (th / 84)
+        B.shadowText(label, (W - tw) * 0.5, meterY + (meterH - th) * 0.5, th,
+                     B.TEXT)
+      end
     end
+    slot.ppState = ppState
+
     local rh = 30
-    local ry = H - m - pad - #rows * rh * 1.35
+    local ry = meterY - 10 - #rows * rh * 1.35
     for _, row in ipairs(rows) do
       if C then
         local kk = rh / 9
@@ -312,6 +401,30 @@ local function drawFace(slot, mv, def, sel, swap, disabled)
         B.shadowText(row[1], (W - tw) * 0.5, ry, rh, row[2])
       end
       ry = ry + rh * 1.35
+    end
+
+    -- blocked: the face dimmed, a padlock on the top-right corner
+    if disabled then
+      g.setColor(0, 0, 0, 0.38)
+      g.rectangle("fill", m, m, W - 2 * m, H - 2 * m, r, r)
+      local lx, lyk, ls = W - m - pad - 6, m + pad * 0.6, 26
+      -- shackle
+      g.setColor(0.92, 0.92, 0.95, 1)
+      g.setLineWidth(5)
+      g.arc("line", "open", lx, lyk + ls * 0.45, ls * 0.32,
+            math.pi, 2 * math.pi)
+      g.line(lx - ls * 0.32, lyk + ls * 0.45, lx - ls * 0.32, lyk + ls * 0.62)
+      g.line(lx + ls * 0.32, lyk + ls * 0.45, lx + ls * 0.32, lyk + ls * 0.62)
+      g.setLineWidth(1)
+      -- body
+      g.setColor(1.0, 0.42, 0.38, 1)
+      g.rectangle("fill", lx - ls * 0.5, lyk + ls * 0.6, ls, ls * 0.75, 5, 5)
+      g.setColor(0.15, 0.05, 0.05, 1)
+      g.circle("fill", lx, lyk + ls * 0.92, ls * 0.11)
+      g.rectangle("fill", lx - ls * 0.05, lyk + ls * 0.92, ls * 0.1, ls * 0.2)
+    elseif pp and pp <= 0 then
+      g.setColor(0, 0, 0, 0.22)
+      g.rectangle("fill", m, m, W - 2 * m, H - 2 * m, r, r)
     end
   end)
   if prevCanvas then g.setCanvas(prevCanvas) else g.setCanvas() end
@@ -570,7 +683,7 @@ function BattleFanXY.draw(battle, shot)
   order[#order + 1] = sel        -- the selected card draws last, on top
 
   local dbg = { n = 0, sel = sel, cx = {}, cy = {}, raise = {},
-                wx = {}, wy = {}, wz = {} }
+                wx = {}, wy = {}, wz = {}, x0 = {}, x1 = {} }
   local drew = 0
   for _, i in ipairs(order) do
     local slot = S.slots[i]
@@ -625,18 +738,25 @@ function BattleFanXY.draw(battle, shot)
     end
     -- the glass physics: the bob, and the shove when a hit's wave passes
     local FX = glassFX()
+    local jT = 0
     if FX then
-      local okJ, jR, jU = pcall(FX.jolt, "card" .. i, center, R)
+      local okJ, jR, jU, tilt = pcall(FX.jolt, "card" .. i, center, R)
       if okJ and jR then
         center = vadd(vadd(center, right, jR), up, jU)
+        jT = tilt or 0
       end
+    end
+    -- the card turns with the shove, about its up
+    local cr = vrot(right, up, te * BattleFanXY.YAW_TILT + jT)
+    cr = vrot(cr, dir, te * BattleFanXY.ROLL_STEP)
+    local cu = vrot(up, dir, te * BattleFanXY.ROLL_STEP)
+    -- its footprint on the floor, for the contact shadow (arena pass)
+    if FX and FX.footprint and p > 0 then
+      pcall(FX.footprint, "card" .. i, center, cr, cu,
+            BattleFanXY.CARD_W, BattleFanXY.CARD_H, shot.groundY)
     end
     -- the size knob: slide toward the eye along this card's own ray
     center = vadd(shot.eye, vadd(center, shot.eye, -1), BattleFanXY.CLOSE)
-
-    local cr = vrot(right, up, te * BattleFanXY.YAW_TILT)
-    cr = vrot(cr, dir, te * BattleFanXY.ROLL_STEP)
-    local cu = vrot(up, dir, te * BattleFanXY.ROLL_STEP)
     if p > 0 and p < 1 then
       local spin = math.sin(p * math.pi) * BattleFanXY.DEAL_SPIN
       cr = vrot(cr, up, spin)
@@ -695,9 +815,47 @@ function BattleFanXY.draw(battle, shot)
         end
       end
 
+      -- the mark a landed hit's wave leaves on this card -- and, on the
+      -- chosen card once it is up, the move's own element alive on the
+      -- glass (BattleGlassFX.overlayType): the weather, the type's
+      -- crawl, the runner round the rim
+      if FX and (FX.overlayPane or FX.overlayType) then
+        local pane = { 10, 10, BattleFanXY.FACE_W - 20,
+                       BattleFanXY.FACE_H - 20 }
+        local map, ss = BattleFanXY.paneMapper(shot, center, cr, cu,
+                                               BattleFanXY.CARD_W,
+                                               BattleFanXY.CARD_H,
+                                               BattleFanXY.FACE_W,
+                                               BattleFanXY.FACE_H, pane)
+        if FX.overlayPane then
+          pcall(FX.overlayPane, "card" .. i, map, ss, pane[3], pane[4],
+                R.project)
+        end
+        if FX.overlayType and i == sel and p >= 1 and not disabled then
+          local tname = def and B and B.typeName(def.type)
+          -- fades in with the raise, so a card just chosen lights up
+          -- as it lifts rather than before
+          local strength = math.max(0, math.min(1, slot.raise or 0))
+          -- the authored sheets first (BattleCardFX), then the glass's
+          -- own frame: halo, runner, glints
+          local okC, CardFX = pcall(V.require, "BattleCardFX")
+          if okC and CardFX and CardFX.draw then
+            pcall(CardFX.draw, "card" .. i, map, ss, pane[3], pane[4],
+                  tname, strength)
+          end
+          pcall(FX.overlayType, "card" .. i, map, ss, pane[3], pane[4],
+                tname, strength, "frame")
+        end
+      end
+
       local sx, sy = project(shot.vp, shot.pw, shot.ph, center)
       dbg.cx[i], dbg.cy[i], dbg.raise[i] = sx, sy, slot.raise
       dbg.wx[i], dbg.wy[i], dbg.wz[i] = center[1], center[2], center[3]
+      -- the card's own left and right edges on screen, for the probe that
+      -- checks the hand clears the hero
+      local hw = BattleFanXY.CARD_W * 0.5
+      dbg.x0[i] = project(shot.vp, shot.pw, shot.ph, vadd(center, cr, -hw))
+      dbg.x1[i] = project(shot.vp, shot.pw, shot.ph, vadd(center, cr, hw))
       drew = drew + 1
     end
   end
@@ -705,6 +863,15 @@ function BattleFanXY.draw(battle, shot)
   dbg.n = drew
   S.last = dbg
   return drew == nMoves
+end
+
+-- what each card's face last showed for its PP -- for the probe
+function BattleFanXY.faceDebug()
+  local out = {}
+  for i, slot in pairs(S.slots) do
+    if type(i) == "number" then out[i] = slot.ppState end
+  end
+  return out
 end
 
 return BattleFanXY

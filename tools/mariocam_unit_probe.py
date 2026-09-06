@@ -189,8 +189,11 @@ print(f"6px there-and-back moved the focus {abs(after-before):.2f}px")
 if abs(after - before) > 1.5:
     fails.append(f"dead zone did not absorb a 6px round trip: {after-before:.2f}")
 
-# ---- 5. the radial yaw actually changes with position around the centre
-# map centre is 160,144. Put the player west of it, then east of it.
+# ---- 5. THE BEARING NEVER MOVES ON ITS OWN. West of the map's centre or
+#         east of it, the view holds the yaw the player last chose -- the
+#         radial orbit this replaced swung through most of a half turn
+#         between these two spots on its own, and that swing was the
+#         "camera changes all the time" the player reported.
 def yaw_at(px, py):
     G.__player.px, G.__player.py = px, py
     MarioCam.cut()
@@ -200,8 +203,46 @@ def yaw_at(px, py):
 yw = yaw_at(40, 144)
 ye = yaw_at(280, 144)
 print(f"viewYaw west={math.degrees(yw):.1f}deg east={math.degrees(ye):.1f}deg")
-if abs(yw - ye) < math.radians(20):
-    fails.append(f"radial yaw did not swing: west {math.degrees(yw):.1f} east {math.degrees(ye):.1f}")
+if abs(yw) > math.radians(1) or abs(ye) > math.radians(1):
+    fails.append(f"the orbit turned on its own: west {math.degrees(yw):.1f} east {math.degrees(ye):.1f}")
+
+
+def cardinal_err(deg):
+    return abs(((deg + 45) % 90) - 45)
+
+
+# ---- 5b. a C press is exactly a quarter turn, and every rest is a cardinal
+MarioCam.rotateRight()
+step(300)
+q1 = math.degrees(MarioCam.viewYaw())
+MarioCam.rotateRight()
+step(300)
+q2 = math.degrees(MarioCam.viewYaw())
+print(f"C-right twice: {q1:.1f} then {q2:.1f} deg")
+if abs(abs(q1) - 90) > 1:
+    fails.append(f"one C press is not a quarter turn: {q1:.1f}")
+if abs(((q2 - 2 * q1 + 180) % 360) - 180) > 1:
+    fails.append(f"two C presses are not two quarters the same way: {q1:.1f}, {q2:.1f}")
+MarioCam.recenter()
+step(300)
+
+# ---- 5c. the stick turns continuously and SNAPS to a quarter when let go
+G.__stick = 0.0
+MarioCam.readStick = L.eval("function() return __stick end")
+G.__stick = 1.0
+step(35)                                    # 0.58s at 120deg/s: ~70deg asked
+held = math.degrees(MarioCam.viewYaw())
+G.__stick = 0.0
+step(300)
+snapped = math.degrees(MarioCam.viewYaw())
+print(f"stick: {held:.1f} deg while held, {snapped:.1f} after release")
+if not (15 < abs(held) < 80):
+    fails.append(f"the stick did not turn the camera while held: {held:.1f}")
+if cardinal_err(snapped) > 1 or abs(abs(snapped) - 90) > 1:
+    fails.append(f"the stick did not snap to a quarter on release: {snapped:.1f}")
+MarioCam.readStick = L.eval("function() return 0 end")
+MarioCam.recenter()
+step(300)
 
 # ---- 6. the row really is two-state: ON produces a camera
 G.__setRung("on")
@@ -314,7 +355,7 @@ c = cam()
 print(f"eye at {c['eye'][0]:.0f},{c['eye'][2]:.0f} focus {c['focus'][0]:.0f},"
       f"{c['focus'][2]:.0f} -- sight blocked: {sight_blocked(c)}")
 if sight_blocked(c):
-    fails.append("occlusion did not steer the camera around the wall")
+    fails.append("occlusion left the player hidden behind the wall")
 
 # ---- 13. the ray test is three-dimensional: the same 2D line, blocked or
 #          clear purely by the HEIGHT it flies at. This is the fix for the
@@ -341,33 +382,76 @@ if not tall_blocked:
 if tall_clear:
     fails.append("clearing the model did not clear the ray")
 
-# ---- 14. the deflection ACCUMULATES: parked with the eye's line through
-#          the ridge, the camera must actually slide around it until the
-#          player is visible -- and let the deflection back out once the
-#          straight view is clear again. The old easing restarted from the
-#          mode's yaw every frame and never got anywhere.
+# ---- 14. THE STANDING BLOCK: looked over, never turned. Parked with the
+#          eye's line through the ridge at a low lens:
+#          (a) nothing happens before WALL_DELAY -- a passing occlusion
+#              must not move the camera;
+#          (b) after it the LENS LIFTS until the ridge is cleared, at the
+#              same distance and bearing -- the pull stays home;
+#          (c) the yaw never moves; and
+#          (d) walking clear lets it back down, slowly.
 G.__Voxel.angle = math.radians(70)          # a low lens, so the ridge really occludes
 MarioCam.cut()
-# near the EAST END of the ridge: rotation can win by looking around the
-# corner. (Dead centre behind an eleven-cell wall is the boxed-in case,
-# where pulling in is the answer and no deflection is the right reading.)
-G.__player.px, G.__player.py = 184, 108
+G.__player.px, G.__player.py = 112, 64      # cell 7,4: two cells north of the ridge
+step(12)                                    # 0.2s: under the delay
+lift_early, t_early = MarioCam.pullState.lift, MarioCam.pullState.t
 step(600)
-ct = MarioCam.cam
-clear = MarioCam.eyeClear(G.__map, ct.focus, ct.dist, ct.pitch, ct.yaw)
-off = MarioCam.avoidState.offset
-off_deg = off * 360.0 / 0x10000
-print(f"avoidance settled: offset {off_deg:.1f} deg, final view clear: {clear}")
-if not clear:
-    fails.append("avoidance never found the player a clear line past the ridge")
-if abs(off_deg) < 8:
-    fails.append(f"the deflection did not accumulate: {off_deg:.1f} deg")
+lift_held, t_held = MarioCam.pullState.lift, MarioCam.pullState.t
+c14 = cam()
+yaw14 = math.degrees(MarioCam.viewYaw())
+d14 = math.dist(c14["eye"], c14["focus"])
+blocked14 = MarioCam.rayBlocked(G.__map, c14["eye"][0], c14["eye"][1], c14["eye"][2],
+                                c14["focus"][0], c14["focus"][1] + 8, c14["focus"][2])
+print(f"standing block: lift {lift_early:.1f} at 0.2s -> {lift_held:.1f} deg settled, "
+      f"pull t {t_early:.2f} -> {t_held:.2f}, dist {d14:.0f}, yaw {yaw14:.1f}, "
+      f"blocked {blocked14}")
+if lift_early > 0.5 or t_early < 0.999:
+    fails.append("the camera answered a block inside the engage delay")
+if lift_held < 5:
+    fails.append(f"a standing block did not lift the lens: {lift_held:.1f} deg")
+if t_held < 0.999:
+    fails.append(f"the lens lifted AND pulled in where a lift alone clears: t {t_held:.2f}")
+if blocked14:
+    fails.append("lifted, the player is still hidden behind the ridge")
+if abs(yaw14) > 1:
+    fails.append(f"the occlusion answer turned the camera: yaw {yaw14:.1f}")
+if abs(d14 - 175) > 3:
+    fails.append(f"the lift changed the distance: {d14:.0f} (want 175)")
 G.__player.px, G.__player.py = 52, 200      # open ground, nothing in the way
+step(30)                                    # half a second: still mostly up
+lift_mid = MarioCam.pullState.lift
 step(600)
-off2 = MarioCam.avoidState.offset * 360.0 / 0x10000
-print(f"after walking clear, offset relaxed to {off2:.1f} deg")
-if abs(off2) > 2:
-    fails.append(f"the deflection did not relax once clear: {off2:.1f} deg")
+lift_out, t_out = MarioCam.pullState.lift, MarioCam.pullState.t
+print(f"cleared: lift {lift_mid:.1f} after 0.5s, {lift_out:.1f} settled; t {t_out:.2f}")
+if lift_mid < lift_held * 0.4:
+    fails.append(f"the lift let go in a lurch: {lift_held:.1f} -> {lift_mid:.1f} in 0.5s")
+if lift_out > 0.05 or t_out < 0.999:
+    fails.append(f"the lift never came back down: {lift_out:.1f} / t {t_out:.2f}")
+
+# ---- 14b. and when NO lift clears it -- a building model far taller than
+#           any pitch looks over -- the last resort: the eye pulls in along
+#           its ray at the fullest lift, still without turning, and lets
+#           go again once clear.
+G.__tall = 400
+G.__player.px, G.__player.py = 112, 64
+step(600)
+lift_t, t_pulled = MarioCam.pullState.lift, MarioCam.pullState.t
+c14b = cam()
+blocked14b = MarioCam.rayBlocked(G.__map, c14b["eye"][0], c14b["eye"][1], c14b["eye"][2],
+                                 c14b["focus"][0], c14b["focus"][1] + 8, c14b["focus"][2])
+yaw14b = math.degrees(MarioCam.viewYaw())
+print(f"boxed in: lift {lift_t:.1f}, pull t {t_pulled:.2f}, blocked {blocked14b}, yaw {yaw14b:.1f}")
+if t_pulled > 0.5:
+    fails.append(f"an unliftable block did not pull the eye in: t {t_pulled:.2f}")
+if blocked14b:
+    fails.append("pulled in, the player is still hidden")
+if abs(yaw14b) > 1:
+    fails.append(f"the pull-in turned the camera: yaw {yaw14b:.1f}")
+G.__tall = None
+G.__player.px, G.__player.py = 52, 200
+step(900)
+if MarioCam.pullState.t < 0.999 or MarioCam.pullState.lift > 0.05:
+    fails.append("the pull-in never let go once clear")
 G.__Voxel.angle = math.radians(35)
 MarioCam.cut()
 
@@ -384,13 +468,13 @@ step(300)
 q0 = MarioCam.quadrant()
 G.__steer = True
 MarioCam.rotateLeft()
-MarioCam.rotateLeft()                       # 120 degrees: two quadrants away
+MarioCam.rotateLeft()                       # 180 degrees: two quadrants away
 step(400)
 q_held = MarioCam.quadrant()
 G.__steer = False
 step(1)
 q_free = MarioCam.quadrant()
-print(f"quadrant: rest {q0}, after 120deg swing held {q_held}, released {q_free}")
+print(f"quadrant: rest {q0}, after 180deg swing held {q_held}, released {q_free}")
 if q_held != q0:
     fails.append(f"quadrant changed under a held direction: {q0} -> {q_held}")
 if q_free == q0:
@@ -425,8 +509,8 @@ MarioCam.reloadShots()
 G.__player.px, G.__player.py = 88, 284      # south of the box
 MarioCam.cut()
 step(300)
-if MarioCam.cam.mode != "radial":
-    fails.append(f"outside the box the mode is {MarioCam.cam.mode}, want radial")
+if MarioCam.cam.mode != "orbit":
+    fails.append(f"outside the box the mode is {MarioCam.cam.mode}, want orbit")
 G.__player.px, G.__player.py = 88, 192      # inside the box
 step(2)
 fov_early = MarioCam.lakitu.fov
@@ -456,7 +540,7 @@ if not MarioCam.consumeBuzz() or MarioCam.ctl.zoom != zoom_before:
 G.__player.px, G.__player.py = 88, 284      # back out
 step(400)
 lens_out = MarioCam.lakitu.fov
-if MarioCam.cam.mode != "radial":
+if MarioCam.cam.mode != "orbit":
     fails.append(f"leaving the box did not restore the orbit: {MarioCam.cam.mode}")
 if not (43.5 < lens_out < 46.5):
     fails.append(f"leaving the box did not release the lens: {lens_out:.1f}")
@@ -464,7 +548,9 @@ print(f"left the box: mode {MarioCam.cam.mode}, lens {lens_out:.1f}")
 
 # ---- 17. pinned-orbit shot: zoom and pitch obey the author, the framing
 #          keys buzz -- and a mode-only shot (a corridor) pins nothing and
-#          keeps every key working.
+#          keeps every key working. Both boxes are written with the OLD
+#          mode names on purpose: a data file that says "radial" or
+#          "eight" must keep getting a camera.
 L.execute("""
 _G.__shots = { TEST = {
   { x = 96, z = 200, bx = 24, bz = 24, mode = "radial", zoom = 120, pitch = 20 },
@@ -534,31 +620,30 @@ MarioCam.reloadShots()
 MarioCam.cut()
 step(60)
 
-# ---- 19. the presentation yaw: zero at a cardinal, a real turn at a
-#          diagonal, and always opposing the camera's divergence from the
-#          drawing's own angle -- checked against independently measured
-#          viewYaw and quadrant, so a sign flip or a wrong-quad read shows.
-G.__player.px, G.__player.py = 280, 144     # due east: a cardinal view
+# ---- 19. the card never needs a "best side": with every rest a cardinal,
+#          the yaw at rest is a multiple of ninety, and the drawing chosen
+#          for it (relativeFacing) walks through all four sides over a
+#          full turn -- so the sheet always has the drawing the view needs.
+G.__player.px, G.__player.py = 280, 144
 MarioCam.recenter()
 MarioCam.cut()
 step(300)
-p0 = math.degrees(MarioCam.presentYaw())
-if abs(p0) > 3:
-    fails.append(f"presentYaw at a settled cardinal is {p0:.1f} deg, want ~0")
-MarioCam.rotateLeft()                       # 60 degrees off the cardinal
-step(400)
-deg = math.degrees(MarioCam.viewYaw())
-q = MarioCam.quadrant()
-off = ((deg - q * 90 + 180) % 360) - 180
-want = max(-18.0, min(18.0, -off * 0.4))
-p1 = math.degrees(MarioCam.presentYaw())
-print(f"presentYaw: cardinal {p0:.1f}, diagonal {p1:.1f} (off {off:.1f}, want {want:.1f})")
-if abs(p1 - want) > 2:
-    fails.append(f"presentYaw {p1:.1f} disagrees with its own contract ({want:.1f})")
-if abs(p1) < 8:
-    fails.append(f"presentYaw barely turns at a diagonal: {p1:.1f}")
+worst_rest = 0.0
+facings_seen = set()
+for i in range(4):
+    MarioCam.rotateLeft()
+    step(300)
+    deg = math.degrees(MarioCam.viewYaw())
+    worst_rest = max(worst_rest, cardinal_err(deg))
+    facings_seen.add(MarioCam.relativeFacing("up"))
+print(f"four C presses: worst rest {worst_rest:.2f} deg off a cardinal, "
+      f"'up' seen as {sorted(facings_seen)}")
+if worst_rest > 1:
+    fails.append(f"the camera rested off a cardinal: {worst_rest:.2f} deg")
+if len(facings_seen) != 4:
+    fails.append(f"a full turn did not show all four sides: {sorted(facings_seen)}")
 MarioCam.recenter()
-step(120)
+step(300)
 
 # ---- 20. the SHOULDER rung: over-the-shoulder everywhere on land --
 #          behind the facing, closer and lower than the orbit, swinging to
@@ -585,7 +670,7 @@ vy_hold = math.degrees(MarioCam.viewYaw()) % 360
 if min(vy_hold, 360 - vy_hold) > 12:
     fails.append(f"turning in place swung the camera: viewYaw {vy_hold:.1f}")
 G.__player.phase = 1                        # now actually walking right
-step(150)                                   # commit (~0.6s) + swing + chase
+step(220)                                   # commit (1.2s) + swing + chase
 vy2 = math.degrees(MarioCam.viewYaw()) % 360
 print(f"shoulder: dist {d_shoulder:.1f}, turn-in-place held {vy_hold:.1f}, "
       f"committed right {vy2:.1f}")
@@ -598,21 +683,78 @@ if abs(vy2 - 90) > 12:
 # alone would leave it ~25-30 out at the second reading, so the bound
 # also proves the reversal latch engaged.
 G.__player.facing = "left"
-step(20)
+step(30)                                    # half a second: under the commit
 vy_early = math.degrees(MarioCam.viewYaw()) % 360
 dev_early = abs(((vy_early - 270 + 180) % 360) - 180)
 if dev_early < 120:
     fails.append(f"the about-face moved before commitment: dev {dev_early:.1f}")
-step(70)
+step(110)                                   # commit at 1.2s, then the urgent swing
 vy3 = math.degrees(MarioCam.viewYaw()) % 360
 dev3 = abs(((vy3 - 270 + 180) % 360) - 180)
 print(f"about-face: early dev {dev_early:.1f} (holding), "
       f"after commit+swing dev {dev3:.1f}")
 if dev3 > 15:
     fails.append(f"the committed about-face is not urgent: {dev3:.1f} deg off")
+
+# ---- 20b. R puts the camera at the player's back -- in the follow, a
+#           re-aim now rather than after the commit; in the orbit, the
+#           same turn as a plain bearing. Standing still first, so the
+#           follow's own hold is what R is measured against.
 G.__player.phase = 0
-G.__player.facing = "down"
+G.__player.facing = "up"                    # the follow sits at left's back
+step(120)                                   # standing: turning in place holds
+vy_before = math.degrees(MarioCam.viewYaw()) % 360
+MarioCam.snapBehind()
+step(200)
+vy_after = math.degrees(MarioCam.viewYaw()) % 360
+print(f"R in the follow: {vy_before:.1f} -> {vy_after:.1f} (want ~0)")
+if min(vy_before, 360 - vy_before) < 60:
+    fails.append(f"the follow re-aimed on a turn in place before R: {vy_before:.1f}")
+if min(vy_after, 360 - vy_after) > 3:
+    fails.append(f"R did not put the follow at the back: {vy_after:.1f}")
 G.__setRung("on")
+MarioCam.cut()
+G.__player.facing = "right"                 # from the back of "right" the view looks east
+step(60)
+MarioCam.snapBehind()
+step(300)
+vy_orbit = math.degrees(MarioCam.viewYaw()) % 360
+print(f"R in the orbit, facing right: viewYaw {vy_orbit:.1f} (want 90)")
+if abs(vy_orbit - 90) > 1:
+    fails.append(f"R in the orbit did not look the way the player faces: {vy_orbit:.1f}")
+
+# ---- 20c. a route connection keeps the bearing; a door resets it
+MarioCam.recenter()
+MarioCam.cut()
+step(60)
+MarioCam.rotateLeft()
+step(300)
+turned = math.degrees(MarioCam.viewYaw())
+L.execute("""
+local old = _G.__map
+local nxt = {}
+for k, v in pairs(old) do nxt[k] = v end
+nxt.def = { id = "NEXT", outdoor = true }
+_G.__mapNext = nxt
+local room = {}
+for k, v in pairs(old) do room[k] = v end
+room.def = { id = "ROOM", outdoor = false }
+_G.__mapRoom = room
+""")
+G.__Game.overworld.map = G.__mapNext          # outdoor -> outdoor: a connection
+step(2)
+kept = math.degrees(MarioCam.viewYaw())
+G.__Game.overworld.map = G.__mapRoom          # outdoor -> a room: a door
+step(2)
+reset = math.degrees(MarioCam.viewYaw())
+print(f"bearing {turned:.1f} -> connection {kept:.1f} -> door {reset:.1f}")
+if abs(((kept - turned + 180) % 360) - 180) > 1:
+    fails.append(f"a route connection reset the bearing: {turned:.1f} -> {kept:.1f}")
+if abs(reset) > 1:
+    fails.append(f"a door did not reset the bearing: {reset:.1f}")
+G.__Game.overworld.map = G.__map
+G.__player.facing = "down"
+MarioCam.recenter()
 MarioCam.cut()
 step(60)
 

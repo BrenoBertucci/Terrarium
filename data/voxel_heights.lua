@@ -2589,6 +2589,112 @@ return {
   -- the flood itself, which every model here depends on, for one scenery
   -- placement.
   buildings = {
+    -- The Pokemon Center lobby as FURNITURE, not pins (lib/RoomKit.lua):
+    -- each entry is a tile grid matched exactly and modelled by the kind
+    -- its `room` names. First claim wins, so the six-row pillar and the
+    -- four-by-four machine come before the 2x2 wall segments they share
+    -- tiles with. `topRows` here is a PALETTE row -- the striped panel
+    -- (40), never matched -- so the plain wall above a window or a sign
+    -- wears the panel's grey. Tiles this list leaves unclaimed (the
+    -- Celadon Hotel's different layout) still fall to the pins above.
+    POKECENTER = {
+      -- the two pillars: four rows of shaft (16 light / 41 grey halves)
+      -- over the plinth (4/5 top, 20/21 base) in the row below the wall
+      { id = "pc_pillar", room = "pillar", seal = "nsew",
+        topRows = { { 40, 40 } },
+        tiles = { { 16, 41 }, { 16, 41 }, { 16, 41 }, { 16, 41 },
+                  { 4, 5 }, { 20, 21 } } },
+      -- the two healing machines: pokeball tray on the wall (58/59 over
+      -- 74/75) above the console (72 grill, 76/77 screen, 6/22 buttons,
+      -- 7/13 or 73 edge)
+      { id = "pc_machine", room = "machine", seal = "nsew",
+        topRows = { { 40, 40, 40, 40 } },
+        tiles = { { 40, 58, 59, 40 }, { 40, 74, 75, 40 },
+                  { 72, 76, 77, 7 }, { 72, 6, 22, 13 } } },
+      { id = "pc_machine_r", room = "machine", seal = "nsew",
+        topRows = { { 40, 40, 40, 40 } },
+        tiles = { { 40, 58, 59, 40 }, { 40, 74, 75, 40 },
+                  { 72, 76, 77, 73 }, { 72, 6, 22, 73 } } },
+      -- the high windows: art at the top of the wall, pane sunk two
+      { id = "pc_window", room = "wall", artTop = true, recess = 2,
+        seal = "nsew", topRows = { { 40, 40 } },
+        tiles = { { 92, 93 }, { 94, 95 } } },
+      -- the board over the counter (76/77 frame, 90/91 light bar): a
+      -- hanging sign standing two voxels proud
+      { id = "pc_sign", room = "wall", artTop = true, jut = 2,
+        seal = "nsew", topRows = { { 40, 40 } },
+        tiles = { { 76, 77 }, { 90, 91 } } },
+      -- the striped wainscot panel
+      { id = "pc_panel", room = "wall", seal = "nsew",
+        topRows = { { 40, 40 } },
+        tiles = { { 40, 40 }, { 40, 40 } } },
+      -- the counters, segment by segment: west cap, the nurse's tray,
+      -- the plain run, the Cable Club's light sections
+      { id = "pc_counter_cap", room = "counter", seal = "nsew",
+        tiles = { { 56, 8 }, { 24, 25 } } },
+      { id = "pc_counter_tray", room = "counter", seal = "nsew",
+        tiles = { { 8, 10 }, { 24, 25 } } },
+      { id = "pc_counter", room = "counter", seal = "nsew",
+        tiles = { { 8, 8 }, { 24, 25 } } },
+      { id = "pc_counter_club", room = "counter", seal = "nsew",
+        tiles = { { 90, 91 }, { 25, 24 } } },
+      -- the PC: three stacked monitor-over-drive strips
+      { id = "pc_terminal", room = "pc", seal = "nsew",
+        tiles = { { 9, 88 }, { 9, 88 }, { 9, 88 } } },
+      -- the lounge couch, matched WITH the man drawn into it (see the
+      -- POKECENTER `figures` entry), painted from the empty tiles; the
+      -- figure pass stands him on the seat (standH)
+      { id = "pc_couch", room = "couch", seal = "nsew", standH = 8,
+        tiles = { { 36, 37 }, { 52, 53 }, { 38, 39 }, { 42, 43 } },
+        paint = { { 52, 39 }, { 52, 39 }, { 38, 39 }, { 42, 43 } } },
+      -- the potted plants: bush over pot
+      { id = "pc_plant", room = "plant", seal = "nsew",
+        tiles = { { 32, 33 }, { 48, 49 }, { 34, 35 }, { 50, 51 } } },
+    },
+
+    -- The Poke Mart (one 4x4-cell layout for every city; the tileset
+    -- shares the Center's atlas image under its own id). Same kit: the
+    -- back wall's display cases stand as bodies with their niche and
+    -- glass sunk, the two shelf racks get real shelves, the clerk's
+    -- booth is a panel with the bottle display on top and the counter
+    -- corner, and the register cell is matched WITH the register (see
+    -- the MART `figures` entry) and painted as the plain work surface.
+    MART = {
+      -- the back wall: SALE cases at the ends (trim, sign, black niche,
+      -- base with goods) and the glass fridges between them
+      { id = "mart_case_sale", room = "case", backWall = true,
+        seal = "nsew", sink = { { 17, 22, 4 } },
+        tiles = { { 40, 40 }, { 78, 79 }, { 76, 77 }, { 23, 29 } } },
+      { id = "mart_case_glass", room = "case", backWall = true,
+        seal = "nsew", sink = { { 9, 22, 1 } },
+        tiles = { { 90, 91 }, { 44, 45 }, { 46, 47 }, { 62, 63 } } },
+      -- the two free-standing shelf racks: bottles over goods
+      { id = "mart_rack", room = "rack", seal = "nsew",
+        tiles = { { 64, 65, 65, 67 }, { 80, 81, 81, 83 },
+                  { 68, 69, 69, 71 }, { 84, 85, 85, 87 } } },
+      -- the clerk's booth back with its bottle display and the
+      -- counter's north-east corner
+      { id = "mart_booth", room = "booth", seal = "nsew", standH = 12,
+        tiles = { { 64, 65, 65, 67 }, { 80, 81, 81, 83 },
+                  { 40, 40, 40, 89 }, { 40, 40, 16, 41 } } },
+      -- the counter's east arm where the register stands (matched with
+      -- it, painted without), and any plain work-surface pair
+      { id = "mart_register", room = "worktop", seal = "nsew", standH = 12,
+        tiles = { { 14, 15 }, { 30, 31 } },
+        paint = { { 16, 41 }, { 16, 41 } } },
+      { id = "mart_worktop", room = "worktop", seal = "nsew", standH = 12,
+        tiles = { { 16, 41 }, { 16, 41 } } },
+      -- the south arm: top band (56 cap, 8) and the work surface over
+      -- the drawn front
+      { id = "mart_counter_south", room = "counter", seal = "nsew",
+        standH = 12,
+        tiles = { { 56, 8, 16, 41 }, { 25, 24, 25, 24 } } },
+      -- the light-topped display counter along the north wall
+      { id = "mart_counter_club", room = "counter", seal = "nsew",
+        standH = 12,
+        tiles = { { 90, 91 }, { 25, 24 } } },
+    },
+
     OVERWORLD = {
       -- assets/docs/buildings/B30: the POKEMON TOWER -- the one drawing
       -- in the catalogue that STRADDLES A MAP BOUNDARY.  Twelve of its
@@ -2647,6 +2753,10 @@ return {
         },
         roofRows = 64, roofBack = 8, roofFront = 8, roofCycle = { 8, 31 },
         slab = 4, frontEave = 4, ledge = nil,
+        -- `tower`: the model is lib/TowerKit.lua's, not the band fold
+        -- above (kept as the fallback should the kit fail to build). The
+        -- table holds overrides of TowerKit.DEF; empty means its defaults.
+        tower = {},
       },
       -- the tower's roof half, where it actually stands on ROUTE_10:
       -- claimed flat so the drawing does not ALSO fold up as a building
@@ -2685,6 +2795,7 @@ return {
         },
         roofRows = 16, roofBack = 7, roofFront = 9, roofCycle = { 5, 8 },
         slab = 4, frontEave = 4, ledge = { 24, 31 },
+        chimney = { x = 44, z = 10, w = 4, h = 4 },
       },
 
       -- assets/docs/buildings/B31: Oak's lab.  The same architecture with a roof
@@ -3160,6 +3271,7 @@ return {
         },
         roofRows = 16, roofBack = 7, roofFront = 9, roofCycle = { 5, 8 },
         slab = 4, frontEave = 4, ledge = nil,
+        chimney = { x = 44, z = 10, w = 4, h = 4 },
       },
 
       -- assets/docs/buildings/B04: the little 4x2 cottage, 12
@@ -3177,6 +3289,7 @@ return {
         },
         roofRows = 16, roofBack = 7, roofFront = 9, roofCycle = { 5, 8 },
         slab = 4, frontEave = 4, ledge = nil,
+        chimney = { x = 44, z = 7, w = 4, h = 4 },
       },
 
       -- assets/docs/buildings/B17: the wide 6x2 house: Cerulean's
@@ -3191,6 +3304,7 @@ return {
         },
         roofRows = 16, roofBack = 7, roofFront = 9, roofCycle = { 5, 8 },
         slab = 4, frontEave = 4, ledge = nil,
+        chimney = { x = 72, z = 7, w = 4, h = 4 },
       },
 
       -- assets/docs/buildings/B11: the 6x2 scenery block, 5
@@ -3205,6 +3319,7 @@ return {
         },
         roofRows = 16, roofBack = 7, roofFront = 9, roofCycle = { 5, 8 },
         slab = 4, frontEave = 4, ledge = nil,
+        chimney = { x = 72, z = 7, w = 4, h = 4 },
       },
 
       -- assets/docs/buildings/B34: the 4x2 scenery block, one
@@ -3219,6 +3334,7 @@ return {
         },
         roofRows = 16, roofBack = 7, roofFront = 9, roofCycle = { 5, 8 },
         slab = 4, frontEave = 4, ledge = nil,
+        chimney = { x = 44, z = 7, w = 4, h = 4 },
       },
 
       -- assets/docs/buildings/B33: the Route 5 day care.
@@ -3236,6 +3352,7 @@ return {
         },
         roofRows = 32, roofBack = 7, roofFront = 8, roofCycle = { 5, 12 },
         slab = 4, frontEave = 4, ledge = nil,
+        chimney = { x = 44, z = 14, w = 4, h = 5 },
       },
 
       -- assets/docs/buildings/B26: the Route 10 scenery block,
@@ -3265,6 +3382,134 @@ return {
         roofRows = 64, roofBack = 8, roofFront = 8, roofCycle = { 8, 31 },
         slab = 4, frontEave = 4, ledge = nil, seal = "s",
       },
+      -- ------- LAVENDER'S TERRACE (lib/TowerKit.lua, `precinct`)
+      --
+      -- The edge of the Pokemon Tower's yard is drawn as hop-down ledge
+      -- tiles: $27 down the two north-south sides, $37 along the south
+      -- with the entrance's dark arch in the middle. Every route in Kanto
+      -- draws the same tiles, so these templates are confined to
+      -- LAVENDER_TOWN (`maps`) and to the terrace's own tiles (`where`):
+      -- the town's OTHER ledge line, west of the plaza, is Route 8's
+      -- ledge carrying on across the seam, and a wall that turned back
+      -- into a ledge at the map's edge would be worse than a ledge -- the
+      -- profile's `ledge` class keeps it, and the south exit's. A
+      -- template's `precinct` names the piece; TowerKit models it in the
+      -- drawing's own white texels, grey the way the tower is. The TOWER
+      -- row's CLASSIC leaves every one of these as a ledge. Ends and
+      -- corners are listed before the plain runs: first claim wins.
+      { id = "terrace_gate", precinct = "gate",
+        maps = { LAVENDER_TOWN = true },
+        tiles = { { 72, 73 }, { 88, 89 } } },
+      { id = "terrace_nw", precinct = "nw",
+        maps = { LAVENDER_TOWN = true },
+        tiles = { { 39, 54 }, { 54, 55 } } },
+      { id = "terrace_ne", precinct = "ne",
+        maps = { LAVENDER_TOWN = true },
+        tiles = { { 55, 19 }, { 19, 39 } } },
+      -- the east run's south end: matched WITH the grass row beyond it,
+      -- so the piece knows it is an end, but claiming only its own cell
+      { id = "terrace_end_s", precinct = "end_s", claimRows = 2,
+        maps = { LAVENDER_TOWN = true }, where = { 20, 0, 37, 31 },
+        tiles = { { 39, 39 }, { 39, 39 }, { 17, 17 } } },
+      { id = "terrace_ns", precinct = "ns",
+        maps = { LAVENDER_TOWN = true }, where = { 20, 0, 37, 31 },
+        tiles = { { 39, 39 }, { 39, 39 } } },
+      { id = "terrace_ew", precinct = "ew",
+        maps = { LAVENDER_TOWN = true }, where = { 20, 10, 37, 11 },
+        tiles = { { 55, 55 }, { 55, 55 } } },
+      -- the grounds: the speckled ground ($11) of the tower's yard and the
+      -- strip east of it, paved wherever a whole cell of it stands inside
+      -- the terrace's quarter of the town (tiles 22..39 x 0..33). $11 is
+      -- half of Kanto's routes and the town's own north-west edge, where
+      -- Route 8's ground carries on across the seam -- those stay ground.
+      { id = "terrace_pave", precinct = "pave",
+        maps = { LAVENDER_TOWN = true }, where = { 22, 0, 39, 33 },
+        tiles = { { 17, 17 }, { 17, 17 } } },
+      -- ------- LEDGES AS BANKS (lib/LedgeKit.lua, `bank`)
+      --
+      -- Every overworld cell that holds a hop-down ledge tile, as a census
+      -- of the shipping maps finds them: seventeen compositions, each one
+      -- or two STROKES -- a ridge along an axis (`dir`), its high side
+      -- (`high`: n = hopped south, e = hopped west, w = hopped east), the
+      -- rows or columns it stands across (`a0`..`a1`) and runs along
+      -- (`b0`..`b1`), and rounded ends (`lo`/`hi` voxels). The drawing's
+      -- tiles are $37 along east-west runs with its $36 west end and $34
+      -- east end, $27 north-south hopped west, $0D and $1D hopped east,
+      -- and $13/$1E/$24/$35 as their faces and corners. Matched after the
+      -- Lavender terrace above, which claims its own ledge tiles first.
+      -- The field is `bank`, not `ledge`: `ledge` is the band templates'
+      -- awning field (the Center's, the gabled house's).
+      -- east-west, hopped south
+      { id = "ledge_ew", bank = {
+          { dir = "ew", high = "n", a0 = 0, a1 = 15, b0 = 0, b1 = 15 } },
+        tiles = { { 55, 55 }, { 55, 55 } } },
+      { id = "ledge_ew_half", bank = {
+          { dir = "ew", high = "n", a0 = 8, a1 = 15, b0 = 0, b1 = 15 } },
+        tiles = { { 44, 44 }, { 55, 55 } } },
+      { id = "ledge_ew_half_path", bank = {
+          { dir = "ew", high = "n", a0 = 8, a1 = 15, b0 = 0, b1 = 15 } },
+        tiles = { { 57, 57 }, { 55, 55 } } },
+      { id = "ledge_ew_half_w", bank = {
+          { dir = "ew", high = "n", a0 = 8, a1 = 15, b0 = 0, b1 = 15, lo = 8 } },
+        tiles = { { 57, 57 }, { 54, 55 } } },
+      { id = "ledge_ew_half_e", bank = {
+          { dir = "ew", high = "n", a0 = 8, a1 = 15, b0 = 0, b1 = 15, hi = 8 } },
+        tiles = { { 44, 44 }, { 55, 52 } } },
+      -- the ends of a sixteen-deep run: the whole cell is the rounding
+      { id = "ledge_ew_end_e", bank = {
+          { dir = "ew", high = "n", a0 = 0, a1 = 15, b0 = 0, b1 = 15, hi = 16 } },
+        tiles = { { 52, 36 }, { 55, 52 } } },
+      { id = "ledge_ew_end_w", bank = {
+          { dir = "ew", high = "n", a0 = 0, a1 = 15, b0 = 0, b1 = 15, lo = 16 } },
+        tiles = { { 53, 55 }, { 36, 53 } } },
+      -- north-south, hopped west (high side east)
+      { id = "ledge_ns", bank = {
+          { dir = "ns", high = "e", a0 = 0, a1 = 15, b0 = 0, b1 = 15 } },
+        tiles = { { 39, 39 }, { 39, 39 } } },
+      { id = "ledge_ns_half", bank = {
+          { dir = "ns", high = "e", a0 = 0, a1 = 7, b0 = 0, b1 = 15 } },
+        tiles = { { 39, 44 }, { 39, 44 } } },
+      { id = "ledge_ns_start", bank = {
+          { dir = "ns", high = "e", a0 = 0, a1 = 15, b0 = 0, b1 = 15, lo = 16 } },
+        tiles = { { 35, 30 }, { 30, 39 } } },
+      -- north-south, hopped east (high side west): the light top over the
+      -- shaded face
+      { id = "ledge_nsr", bank = {
+          { dir = "ns", high = "w", a0 = 0, a1 = 15, b0 = 0, b1 = 15 } },
+        tiles = { { 29, 36 }, { 29, 36 } } },
+      { id = "ledge_nsr_b", bank = {
+          { dir = "ns", high = "w", a0 = 0, a1 = 15, b0 = 0, b1 = 15 } },
+        tiles = { { 13, 36 }, { 13, 36 } } },
+      -- corners and junctions: two strokes, the maximum of the two
+      { id = "ledge_corner_nw", bank = {
+          { dir = "ns", high = "e", a0 = 0, a1 = 7, b0 = 0, b1 = 15 },
+          { dir = "ew", high = "n", a0 = 8, a1 = 15, b0 = 0, b1 = 15 } },
+        tiles = { { 39, 54 }, { 54, 55 } } },
+      { id = "ledge_corner_nw_b", bank = {
+          { dir = "ns", high = "e", a0 = 0, a1 = 7, b0 = 0, b1 = 15 },
+          { dir = "ew", high = "n", a0 = 8, a1 = 15, b0 = 0, b1 = 15 } },
+        tiles = { { 39, 44 }, { 54, 55 } } },
+      { id = "ledge_corner_ne", bank = {
+          { dir = "ew", high = "n", a0 = 0, a1 = 7, b0 = 0, b1 = 15 },
+          { dir = "ns", high = "e", a0 = 8, a1 = 15, b0 = 0, b1 = 15 } },
+        tiles = { { 55, 19 }, { 19, 39 } } },
+      { id = "ledge_corner_sw_r", bank = {
+          { dir = "ns", high = "w", a0 = 0, a1 = 15, b0 = 0, b1 = 7, hi = 8 },
+          { dir = "ew", high = "n", a0 = 8, a1 = 15, b0 = 0, b1 = 15, hi = 8 } },
+        tiles = { { 29, 36 }, { 55, 52 } } },
+      { id = "ledge_corner_sw_r_b", bank = {
+          { dir = "ns", high = "w", a0 = 0, a1 = 15, b0 = 0, b1 = 7, hi = 8 },
+          { dir = "ew", high = "n", a0 = 8, a1 = 15, b0 = 0, b1 = 15, hi = 8 } },
+        tiles = { { 13, 36 }, { 55, 52 } } },
+      -- the mound's shaded east slope ($24, a whole cell of it, 354 cells
+      -- across Kanto) and its north-east corner over a path: the same
+      -- bank as a north-south ledge, the mound to its west
+      { id = "ledge_slope_e", bank = {
+          { dir = "ns", high = "w", a0 = 0, a1 = 15, b0 = 0, b1 = 15 } },
+        tiles = { { 36, 36 }, { 36, 36 } } },
+      { id = "ledge_slope_ne", bank = {
+          { dir = "ns", high = "w", a0 = 0, a1 = 15, b0 = 0, b1 = 15, lo = 16 } },
+        tiles = { { 2, 57 }, { 36, 2 } } },
     },
 
     FOREST = {

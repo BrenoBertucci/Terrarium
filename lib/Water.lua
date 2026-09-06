@@ -59,6 +59,48 @@ Water.ART_MIX = 0.35
 Water.ASSET_DIR = "assets/water/"
 Water.ASSET_FILE = "water.png"
 
+-- ------- THE BASIN: water has a bed, and the bed has depth
+--
+-- The surface used to be the whole of it: one quad at BASE wearing the
+-- tileset's tile, opaque, and a two-pixel lip where the bank stepped down
+-- to it. Water drawn that way is a blue floor. Out here the water is a
+-- VOLUME: every water tile carries a bed below the surface, stepped down in
+-- voxel terraces by how far the tile is from the nearest bank (ChunkMesher
+-- runs a BFS over the map's tiles), the banks drop to the bed rather than to
+-- the surface, and the surface is drawn translucent in a pass of its own
+-- (Voxel3D.drawWater) so the bed shows through it -- sand in the shallows,
+-- the body's own blue where the column is deep enough to absorb the light
+-- that would have come back up (Beer-Lambert, per channel: red dies first).
+--
+-- BED is the terrace height by distance from the bank, one terrace per
+-- BED_TILES tiles (two tiles = one map cell), the last one for everything
+-- further out. Whole voxel steps rather than a slope, because this is a
+-- voxel world and a lake bed cut in terraces reads as built the same way
+-- the hills are -- and five shallow steps rather than three deep ones,
+-- because from this camera a terrace is a flat colour and one big step
+-- read as a swimming pool's deep end.
+Water.BED = { -5, -7, -9, -11, -13 }
+Water.BED_TILES = 2            -- tiles per terrace step
+-- The bed's colour before the water takes its share: a warm sand the
+-- tileset's own texel then leans (a third) so a recoloured palette still
+-- owns its lake.
+Water.SAND = { 0.92, 0.86, 0.66 }
+-- Absorption per world pixel of depth, per channel. Four pixels down the
+-- sand is already a green shallow; twelve down it is the deep blue.
+Water.ABSORB = { 0.220, 0.090, 0.030 }
+-- The surface sheet's own body colour, as a tint on the tile's blue, reached
+-- SHORE_MAX tiles out from the bank.
+Water.DEEP_TINT = { 0.42, 0.58, 0.92 }
+-- Coverage of the sheet: how much of a pixel is the water's own colour
+-- rather than the bed seen through it, at the bank and in the deep. The
+-- Fresnel share of the sky lands on top of both.
+Water.ALPHA_SHALLOW = 0.15
+Water.ALPHA_DEEP = 0.62
+Water.REFLECT = 0.85           -- how much of the Fresnel share the sky gets
+Water.SHORE_MAX = 6            -- tiles from the bank where "deep" saturates
+Water.SHORE_FOAM = 0.25        -- tiles from the bank the foam ring reaches
+Water.FOAM = { 0.93, 0.97, 1.0 }
+
 -- ------- THE SPECTRUM: three trains of FIXED length, and nothing else
 --
 -- The size of a body of water used to shorten the wave by scaling the wave

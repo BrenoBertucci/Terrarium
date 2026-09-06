@@ -257,3 +257,29 @@ drawn by the wind — a screen of grey specks over the path read as dirt, and
 the 16 px silhouettes read as no leaf at all — but stay loaded for
 `WindFX.emit`'s other callers (StepFX, SprayFX) and for AmbientLife.
 Measured by `tests/windfx_sheet_probe.lua`.
+
+## Downloaded elemental VFX (Pimen, 2026-09-02) -- `pimen_*.png`
+
+Sheets copied unaltered (grid metadata lives in `lib/BattleCardFX.lua`)
+from Pimen's name-your-price packs on itch.io, fetched through the site's
+own download flow (see tools/_vfx_dl/pimen_elem for the archives):
+
+| file | pack | sheet |
+|---|---|---|
+| pimen_thunderstrike.png, pimen_thundersplash.png | Thunder Spell Effect 02 | Thunderstrike / Thunder splash (w blur) |
+| pimen_firebreath.png | Fire Spell Effect 01 | Fire Breath SpriteSheet |
+| pimen_explosion2.png | Fire Spell Effect 02 | Explosion 2 SpriteSheet |
+| pimen_waterimpact.png | Water Spell Effect 02 | WaterBall - Impact |
+| pimen_watersplash.png | Magical Water Effect (Water Effect 01) | Water Splash 01 - Spritesheet |
+| pimen_ice2active.png, pimen_ice1hit.png | Ice Spell Effect 01 | Ice VFX 2 Active / Ice VFX 1 Hit |
+| pimen_dark1.png, pimen_dark2.png | Dark Spell Effect | Dark VFX 1 / Dark VFX 2 |
+| pimen_holy2.png | Holy Spell Effect | Holy VFX 02 |
+| pimen_rocks.png | Earth Spell Effect 01 | Irregular rock Spritesheet |
+| pimen_earthbump.png | Earth Spell Effect 02 | Earth Bump |
+| pimen_hit1.png, pimen_hit2.png | Battle VFX: Hit Spark | Hit Effect 01 1 / 2 |
+| pimen_smoke2.png | Smoke VFX 1 | Smoke VFX 2 |
+
+License (Pimen): free for personal and commercial projects, credit
+appreciated, redistributing the sprites on their own is not allowed --
+the same exception to this folder's CC0-only rule already recorded for
+the wind sheets, with the user's approval.

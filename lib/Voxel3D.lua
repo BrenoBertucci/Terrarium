@@ -128,6 +128,7 @@ local SHADER = [[
   varying float vWaterSurf;   // 1 on recessed water geometry always (y < -1)
   varying vec3 vWave;         // and the normal of the swell under it
   varying float vSwellH;      // the swell's own height here, -1 .. 1
+  varying float vShore;       // surface only: tiles to the nearest bank, 0 at it
   // Wave trains live in BOTH stages: the vertex displaces continuously so
   // the mesh stays watertight, and the fragment re-evaluates height on a
   // quantized world-XZ cell so cel band edges do not crawl (see the water
@@ -153,6 +154,28 @@ local SHADER = [[
   // The row's own amplitude, in world pixels; 0 = flat. Shared rather than
   // vertex-only because the fragment's glint window is scaled by it.
   uniform float swell;
+  // ------- THE BASIN (see Water.BED)
+  //
+  // waterPass is 1 while a map's water SURFACE group is drawn
+  // (Voxel3D.drawWater) and 0 for everything else; basinOn is 1 while a
+  // TERRAIN group is drawn, the only pass that carries geometry below the
+  // ground plane -- the bed and the banks. Both are per-draw switches, put
+  // back to 0 by the draw that raised them, like glassOn and packedShade.
+  uniform float waterPass;
+  uniform float basinOn;
+  uniform float waterBase;    // Water.BASE: the sheet's rest height
+  uniform float iceLift;      // freeze raises the surface a little
+  uniform vec3 eye;           // the camera, for the sheet's Fresnel
+  uniform vec3 waterSand;     // the bed before the water takes its share
+  uniform vec3 waterAbsorb;   // per world pixel of depth, per channel
+  uniform vec3 waterDeepTint; // the sheet's own colour, far from the bank
+  uniform vec2 waterAlpha;    // sheet coverage at the bank / in the deep
+  uniform float waterReflect; // the sky's share of the Fresnel term
+  uniform float waterShoreMax;// tiles out where the deep saturates
+  uniform float waterShoreFoam;// tiles out the foam ring reaches
+  uniform vec3 waterFoam;     // what foam, glint and the waterline paint
+  uniform vec3 waterSky;      // the dome's colour, what the sheet mirrors
+  uniform vec2 waterTexel;    // 1 / the bound atlas, in texels
   // Tempo of each train relative to the long one (Water.RATE_LONG/MID/SHORT).
   // Constants, the same at every point on the map -- which is the property
   // that lets dispersion exist here without entering any gradient.
@@ -227,6 +250,57 @@ local SHADER = [[
                   waveMix.z * (mixShape.y + (1.0 - mixShape.y) * lo));
     return vec4(w / max(w.x + w.y + w.z, 1e-6), amp);
   }
+
+  // ------- THE SWELL, evaluated once for every stage that needs it
+  //
+  // Height in -1..1 with the crest steepening applied, the three trains'
+  // angles (the paint's foam, the bed's caustics), the body's shape (mix and
+  // amplitude share, see waterShape) and |h| before steepening. The vertex
+  // stage displaces the sheet by it, the sheet's paint re-evaluates it on a
+  // snapped cell, and the basin asks it where the waterline is on a bank --
+  // and every one of them has to agree, so there is one of it.
+  float swellEval(vec2 xz, out vec4 shape, out vec3 ang, out float ah) {
+    shape = waterShape(xz);
+    vec3 wmix = shape.xyz;
+    float adv = waterAdvect * waterEnergy * dot(xz, waterCurrent);
+    // Each train's clock runs at its own tempo (omega ~ sqrt(k)); the
+    // current's drag runs at one speed for the whole ocean and is added
+    // after, undispersed. Same as Water.heightField.
+    vec3 ph = swellPhase * mix(vec3(1.0), waveRate, waterDisperse) + adv;
+    ang = vec3(dot(xz, swellA) - ph.x,
+               dot(xz, swellB) + ph.y,
+               dot(xz, swellC) - ph.z);
+    float h = sin(ang.x) * wmix.x + sin(ang.y) * wmix.y + sin(ang.z) * wmix.z;
+    ah = abs(h);
+    // Gerstner-ish Y steepening: sharpens crests under chop energy
+    return h + waterSteep * h * ah;
+  }
+
+  // The colour of the atlas TILE a fragment samples, without the marks drawn
+  // on it: four texels around the centre of the 8-texel tile `tc` lies in.
+  // The water tile is a blue with light wave marks, and a sheet that wears
+  // every mark at full strength is a wallpaper of them; the marks ride on
+  // this at a third instead. Inside the tile by construction, so nothing
+  // bleeds in from the tile next door.
+  vec3 tileFlat(Image tex, vec2 tc) {
+    vec2 tileC = (floor(tc / (8.0 * waterTexel)) + 0.5) * 8.0 * waterTexel;
+    vec2 d = 2.0 * waterTexel;
+    return 0.25 * (Texel(tex, tileC + vec2(-d.x, -d.y)).rgb
+                 + Texel(tex, tileC + vec2( d.x, -d.y)).rgb
+                 + Texel(tex, tileC + vec2(-d.x,  d.y)).rgb
+                 + Texel(tex, tileC + vec2( d.x,  d.y)).rgb);
+  }
+
+  // World height of the surface over xz: the class's recess, the swell this
+  // body of water carries, and the ice lift. What the basin measures its
+  // depth from.
+  float surfaceY(vec2 xz) {
+    if (swell <= 0.0 && iceLift <= 0.0) return waterBase;
+    vec4 shape; vec3 ang; float ah;
+    float h = swellEval(xz, shape, ang, ah);
+    return waterBase + swell * shape.w * h + iceLift;
+  }
+
 #ifdef VOXEL_GRID
   // model space, one unit per voxel -- see VoxelGrid. Precision matters
   // here in a way it does not for a colour: the seam is the FRACTIONAL
@@ -239,7 +313,6 @@ local SHADER = [[
   uniform mat4 model;
   uniform mat4 sunModel;      // where the SUN sees this vertex (see below)
   uniform mat4 sunVP;         // world -> the shadow map's unit cube
-  uniform vec3 eye;
   uniform float pull;
   uniform vec4 curve;         // xy = the focus in world XZ, z = k; 0 = off
                               // w = the deepest the bend may go (see below)
@@ -309,7 +382,6 @@ local SHADER = [[
   // uniforms, because the fragment stage needs it too: the glint window is
   // sized against the slope this water can reach and the row's amplitude is
   // half of that product. Nothing else moved -- iceLift is vertex-only.
-  uniform float iceLift;      // freeze raises the surface a little (still y<-1 id)
   attribute float VertexShade;
   // One number per TUFT, from the 8x8 cell it stands in. The grass mesh is
   // one buffer for a whole map and carries no per-instance attribute, so
@@ -739,73 +811,60 @@ local SHADER = [[
         }
       }
     }
-    // THE WATER SURFACE, which is the only geometry in this world that
-    // stands below zero -- it is recessed to -2 so the shoreline shows a
-    // lip, and every other class sits at zero or above (see Water.lua).
-    // So the test is a compare on a number the mesh already carries, and
-    // costs no attribute and no memory.
+    // THE WATER SURFACE, drawn as a group of its own (Voxel3D.drawWater,
+    // waterPass = 1). It used to be identified by height alone -- the only
+    // geometry below zero -- and that is no longer true: the basin (the bed
+    // and the banks, see Water.BED) lives below zero in the terrain group
+    // and must NOT heave. So the sheet says so through the pass, and the
+    // height test is gone.
     //
-    // Identity is the height test ALONE. Motion (swell) is a separate
-    // axis: freeze damps swell to zero on the CPU, and ice still needs
-    // vWater set so the fragment can paint frozen bands. FLAT with no
-    // freeze leaves both zero and the still plane untouched.
+    // The mesher packs each corner's distance to the nearest bank into the
+    // shade attribute (1 + tiles / 8, ChunkMesher's surface quad), which the
+    // sheet has no other use for: it is lit flat. Unpacked here into vShore
+    // for the shore foam and the depth tint.
     //
     // The displacement is a function of world XZ ALONE (Y = f(XZ)), which
     // is what keeps the surface watertight: two quads meeting at a shared
     // corner are moved by the same amount, so the mesh never opens a seam
-    // even though it is unindexed and they do not share a vertex.
+    // even though it is unindexed and they do not share a vertex. Motion
+    // (swell) is a separate axis from identity: freeze damps swell to zero
+    // on the CPU, and ice still needs vWater set so the fragment can paint
+    // frozen plates. FLAT with no freeze leaves the sheet still and
+    // unpainted by the swell, but still a translucent sheet.
     //
-    // The normal comes free with it. The height is two sines, so its
-    // gradient is two cosines -- the exact analytic slope, not a
-    // difference of samples, and it is what the sparkle below reflects
-    // the sun off.
+    // The normal comes free with it. The height is three sines, so its
+    // gradient is three cosines -- the exact analytic slope, not a
+    // difference of samples, and it is what the glint reflects the sun off
+    // and the Fresnel leans the sky on.
     vWater = 0.0;
-    // Always mark recessed water geometry so optional surface art
-    // (assets/water/water.png) can replace the tileset tile even under FLAT.
-    vWaterSurf = (vertex_position.y < -1.0) ? 1.0 : 0.0;
+    vWaterSurf = waterPass;
     vWave = vec3(0.0, 1.0, 0.0);
     vSwellH = 0.0;
-    if (vertex_position.y < -1.0 && (swell > 0.0 || iceLift > 0.0)) {
-      vWater = 1.0;
-      // Body size + wind advection + crest steepening -- byte for byte with
-      // Water.heightField / phaseAt (feet and mesh share one ocean).
-      //
-      // `shape` is the size of the water here: x shortens the wave on small
-      // bodies, y is how much of the row's swell this body can carry. Both
-      // are functions of XZ ALONE, which is what keeps the surface
-      // watertight -- two quads meeting at a corner are shortened and damped
-      // by the same amount, so the unindexed mesh still cannot open a seam.
-      vec4 shape = waterShape(w.xz);
-      vec3 wmix = shape.xyz;         // long / mid / short, summing to 1
-      float amp = swell * shape.w;
-      float adv = waterAdvect * waterEnergy * dot(w.xz, waterCurrent);
-      // Each train's clock runs at its own tempo (omega ~ sqrt(k)); the
-      // current's drag runs at one speed for the whole ocean and is added
-      // after, undispersed. Both stages and Water.heightField.
-      vec3 ph = swellPhase * mix(vec3(1.0), waveRate, waterDisperse) + adv;
-      float aL = dot(w.xz, swellA) - ph.x;
-      float aM = dot(w.xz, swellB) + ph.y;
-      float aS = dot(w.xz, swellC) - ph.z;
-      float h = sin(aL) * wmix.x + sin(aM) * wmix.y + sin(aS) * wmix.z;
-      // Gerstner-ish Y steepening: sharpens crests under chop energy
-      float ah = abs(h);
-      h = h + waterSteep * h * ah;
-      w.y += amp * h + iceLift;
-      vSwellH = h;
-      if (amp > 0.001) {
-        // d/dx of sin(k·x - p) is exactly k cos, now that no k is a function
-        // of x. The steep term adds the (1+2*steep*|h|) chain.
-        //
-        // The grad(amp) and grad(wmix) terms are left out -- see
-        // Water.bodyAmp for the measurement of what the first costs. The
-        // second is the same shape and the same size, and unlike the wave
-        // vector it used to replace, it is BOUNDED by the ramp itself.
-        float chain = 1.0 + 2.0 * waterSteep * ah;
-        vec2 g = swellA * (cos(aL) * wmix.x)
-               + swellB * (cos(aM) * wmix.y)
-               + swellC * (cos(aS) * wmix.z);
-        g *= chain;
-        vWave = normalize(vec3(-g.x * amp, 1.0, -g.y * amp));
+    vShore = 0.0;
+    if (waterPass > 0.5) {
+      vShore = max(shadeMag - 1.0, 0.0) * 8.0;
+      vShade = 1.0;
+      if (swell > 0.0 || iceLift > 0.0) {
+        vWater = 1.0;
+        // Body size + wind advection + crest steepening -- byte for byte
+        // with Water.heightField / phaseAt (feet and mesh share one ocean).
+        vec4 shape; vec3 ang; float ah;
+        float h = swellEval(w.xz, shape, ang, ah);
+        float amp = swell * shape.w;
+        w.y += amp * h + iceLift;
+        vSwellH = h;
+        if (amp > 0.001) {
+          // d/dx of sin(k.x - p) is exactly k cos, now that no k is a
+          // function of x. The steep term adds the (1+2*steep*|h|) chain.
+          // The grad(amp) and grad(wmix) terms are left out -- see
+          // Water.bodyAmp for the measurement of what the first costs.
+          float chain = 1.0 + 2.0 * waterSteep * ah;
+          vec2 g = swellA * (cos(ang.x) * shape.x)
+                 + swellB * (cos(ang.y) * shape.y)
+                 + swellC * (cos(ang.z) * shape.z);
+          g *= chain;
+          vWave = normalize(vec3(-g.x * amp, 1.0, -g.y * amp));
+        }
       }
     }
     // The shadow lookup runs off `sunModel`, not `model`. For terrain the
@@ -1110,6 +1169,12 @@ local SHADER = [[
   uniform float glassPhase;   // the glint's phase: advances with TRAVEL
   uniform float glassGlint;   // and its strength: 0 while standing still
   uniform float glassOn;      // 0 for sprite-sheet draws (see Voxel3D.glass)
+  // HAUNTED GLASS (lib/TowerKit.lua): panes inside this world XZ box (x0,
+  // z0, x1, z1) burn cold, sparse and breathing instead of lamp-warm, and
+  // read as dark glass by day. hauntOn = 0 draws every pane as before.
+  uniform vec4 hauntBox;
+  uniform vec3 hauntColor;
+  uniform float hauntOn;
   // Up to eight nearby street lamps. xy = world XZ, z = radius and w =
   // intensity.  They are individual warm pools, not a global yellow tint.
   //
@@ -1350,152 +1415,142 @@ local SHADER = [[
       vec3 fart = Texel(floorArt, vWorld.xz / floorArtScale).rgb;
       rgb = mix(rgb, fart * vShade * light, floorArtMix);
     }
-    // THE CEL WATER. Three effects, all analytic, all keyed off varyings
-    // the mesh already carries -- and all of them FLAT-shaded on purpose:
-    // this is a four-colour world drawn on a pixel grid, and a smooth
-    // gradient over it reads as an airbrush. Every boundary here is a hard
-    // step, softened only by the checkerboard dither the 8-bit sky already
-    // established as this mod's idiom for "between two colours".
+    float outA = 1.0;
+    // ------- THE BASIN: what the terrain pass draws BELOW the ground plane
     //
-    // vWater tells the three zones apart with no new data: exactly 1 on
-    // the surface (every plane vertex is water), interpolating 1 -> 0 up a
-    // shoreline lip face (bottom edge attached to the water, top edge to
-    // the bank), 0 everywhere else. FLAT with no freeze never sets it, so
-    // the old still plane is untouched. Gated on vWater alone (not
-    // sparkle): rain kills the glint but must KEEP bands, lip foam and
-    // crest foam -- a dull wet pond is still a painted pond.
-    if (vWater > 0.0) {
-      // Band / foam decisions snap to a CELL of the render buffer -- the
-      // same idiom the sky uses for its dither grid (Sky.lua: floor(sc/cell)).
-      // Without this, hard step()s ride a continuously moving swell field
-      // and crawl one fragment at a time: the "ants" on the pond, made
-      // worse at RES 1/2 where nearest upscale freezes every crawl step
-      // onto a display pixel. cell=2 is one display pixel at the default
-      // rung and still reads as the pixel grid at FULL.
+    // Water is the only class that stands below zero (see Water.lua), so in
+    // the terrain pass everything under the ground plane is the water's own
+    // basin: the bank walls dropping from the lip, the terraced bed, the
+    // risers between terraces. `basinOn` is what says "terrain pass" -- a
+    // character card or a particle passing below zero must not be painted
+    // as lake bed. The waterline is the sheet's height HERE (the same
+    // three trains the sheet is displaced by), so it climbs and falls on the
+    // bank with the swell, and the foam rides it.
+    if (basinOn > 0.5 && vWorld.y < -0.02) {
+      float bcell = 2.0;
+      vec2 bgc = floor(sc / bcell);
+      float bcheck = mod(bgc.x + bgc.y, 2.0);
+      // one evaluation of the swell serves the waterline and the caustics
+      // both: a bed fragment used to pay for two, plus a second fetch of
+      // the body field, on every water pixel in the frame
+      vec4 cshape; vec3 cang; float cah;
+      float ch = swellEval(vWorld.xz, cshape, cang, cah);
+      float surfY = waterBase + swell * cshape.w * ch + iceLift;
+      float under = surfY - vWorld.y;        // the water over this point
+      if (under > 0.0) {
+        // SUBMERGED. The bed is sand lit by the hour, and what comes back up
+        // through the column is what the water did not absorb -- per
+        // channel, red first (Beer-Lambert), which is the whole of why the
+        // shallows are green-gold and the deep is blue without one blue
+        // being painted. The tileset's texel keeps a share so a recoloured
+        // palette still owns its lake.
+        // the texel is already fetched; tileFlat's four more are not worth
+        // a whisper of palette on a bed the water tints anyway
+        vec3 sand = mix(waterSand, p.rgb, 0.12) * vShade * light;
+        vec3 absorb = exp(-under * waterAbsorb);
+        vec3 bed = sand * absorb;
+        // CAUSTICS: where the long and mid trains peak together the surface
+        // is a lens and the bed under it lights up. Hard diamonds, dithered
+        // on the render cell, fading with depth as the light does -- and
+        // only while the water MOVES: a FLAT pond focuses nothing.
+        float lens = sin(cang.x * 3.1 + 0.7) * sin(cang.y * 3.1 - 0.4);
+        float caus = step(0.50, lens + (bcheck - 0.5) * 0.30)
+                   * clamp(swell, 0.0, 1.0) * (1.0 - freeze);
+        bed += light * caus * 0.22 * absorb.g;
+        // the bed is all sand; a submerged bank keeps a share of its own
+        // art, so the shore reads as the shore continuing under the water
+        rgb = mix(rgb, bed, mix(0.72, 0.92, vUp));
+        // THE WATERLINE on a bank: a lapping foam line where the sheet meets
+        // the wall (vUp is 0 on a wall and 1 on the bed), a world pixel tall.
+        float lap = 0.25 * sin(foamPhase * 2.0 + vWorld.x * 0.23
+                                                + vWorld.z * 0.17);
+        float line = step(under, 0.7 + lap + (bcheck - 0.5) * 0.30)
+                   * (1.0 - vUp) * (1.0 - freeze);
+        rgb = mix(rgb, waterFoam * light, line * 0.85);
+      } else {
+        // THE DRY LIP, just above the waterline: damp, so the bank reads as
+        // a bank the water reaches rather than a wall it was cut into.
+        float damp = step(-under, 1.6 + (bcheck - 0.5) * 0.6);
+        rgb *= 1.0 - 0.22 * damp;
+      }
+    }
+    // ------- THE SHEET (the water pass): a translucent surface over the basin
+    //
+    // Drawn after everything solid and blended, so what shows through it is
+    // the bed the basin block already absorbed by depth. The sheet itself
+    // only has to be what a surface IS: a Fresnel mirror of the sky, the
+    // body's own colour where the water is deep enough to scatter, the sun
+    // caught on the swell, and foam where it meets the bank. Every boundary
+    // is still a hard step softened by the checker -- the four-colour
+    // world's own idiom for "between two colours".
+    if (vWaterSurf > 0.5) {
       float cell = 2.0;
       vec2 gc = floor(sc / cell);
       float check = mod(gc.x + gc.y, 2.0);
+      // 0 at the bank, 1 in open water (the mesher's corner distance)
+      float deep = clamp(vShore / max(waterShoreMax, 0.5), 0.0, 1.0);
+      // Fresnel off the swell's own normal: looking straight down into
+      // water sees the bed, looking across it sees the sky. Smooth on
+      // purpose: stepped and dithered, it blotched the open sea, because
+      // the swell's normal sweeps every threshold every second.
+      vec3 V = normalize(eye - vWorld);
+      float cosT = clamp(dot(vWave, V), 0.0, 1.0);
+      float f1 = 1.0 - cosT;
+      float f2 = f1 * f1;
+      float fres = 0.04 + 0.96 * f2 * f2;
+      float reflW = clamp(fres * waterReflect, 0.0, 1.0);
+      // the sky it mirrors: the dome's colour, greyed by the cloud deck
+      vec3 skyCol = mix(waterSky, cloudReflCol, clamp(cloudRefl, 0.0, 1.0));
+      // the body: the tile's own blue with its wave marks (and the surface
+      // art it was handed) riding on it at a third, leaning to the deep
+      // tint away from the bank
+      vec3 flatLit = tileFlat(tex, tc) * vShade * light;
+      vec3 body = mix(flatLit, rgb, 0.35);
+      body = mix(body, body * waterDeepTint, deep);
+      rgb = mix(body, skyCol, reflW);
+      // coverage: the shallows are mostly bed, the deep mostly body, and the
+      // mirror's share is opaque whatever the depth
+      float alpha = mix(waterAlpha.x, waterAlpha.y, deep);
+      alpha = alpha + reflW * (1.0 - alpha);
       if (vWater > 0.98) {
-        // ON THE SURFACE -- advanced cel ocean, still only hard steps +
-        // checker dither. Height re-evaluated on a world-XZ cell so edges
-        // cannot crawl (sky floor(sc/cell) idiom). Geometry is Y=f(XZ);
-        // paint snaps.
-        // Spatial paint grid (sky floor idiom). Larger cell = thicker band
-        // edges, fewer fragments on a hard step as continuous phase slides.
-        // paintPhaseStep is optional temporal snap (default 0 -- see Water.lua).
-        float wcell = mix(paintWCell, paintWCellIce, freeze);
-        if (wcell < 1.0) wcell = 1.0;
+        // THE SWELL'S PAINT, only while it moves. Height re-evaluated on a
+        // world-XZ cell so band edges cannot crawl (sky floor idiom), the
+        // geometry it is painted on being the continuous one.
+        float wcell = max(mix(paintWCell, paintWCellIce, freeze), 1.0);
         vec2 wz = floor(vWorld.xz / wcell) * wcell;
-        // Sampled on the SNAPPED cell, like everything else in this block:
-        // the paint has to agree with itself across a cell, and the geometry
-        // it is painted on is already the continuous one. Same field, same
-        // two numbers as the vertex stage -- see waterShape.
-        vec4 shape = waterShape(wz);
-        vec3 wmix = shape.xyz;       // long / mid / short, summing to 1
+        vec4 shape; vec3 ang; float ahQ;
+        float hQ = swellEval(wz, shape, ang, ahQ);
+        vec3 wmix = shape.xyz;
         float bodyAmp = shape.w;
-        float adv = waterAdvect * waterEnergy * dot(wz, waterCurrent);
-        // Three dispersive clocks + one undispersed drag, exactly as the
-        // vertex stage above builds them -- a disagreement here slides a band
-        // edge off the crest it belongs to.
-        vec3 ph = swellPhase * mix(vec3(1.0), waveRate, waterDisperse) + adv;
-        if (paintPhaseStep > 0.001) {
-          ph = floor(ph / paintPhaseStep + 0.5) * paintPhaseStep;
-        }
-        float wa = dot(wz, swellA) - ph.x;      // long
-        float wb = dot(wz, swellB) + ph.y;      // mid
-        float wc = dot(wz, swellC) - ph.z;      // short
-        float hQ = sin(wa) * wmix.x + sin(wb) * wmix.y + sin(wc) * wmix.z;
-        float ahQ = abs(hQ);
-        hQ = hQ + waterSteep * hQ * ahQ;
-        // Capillary micro-ripples (paint): harmonics of the SAME two trains.
+        float wa = ang.x;
+        float wb = ang.y;
+        // capillary micro-ripples under rain: harmonics of the same trains
         float micro = waterWet * (1.0 - freeze)
                     * (sin(wa * 2.15 + wb * 0.5) * 0.14
                      + sin(wa * 3.1 - wb * 0.8) * 0.07 * waterEnergy);
         float jit = (check - 0.5) * 0.16 + stepJitter * (check - 0.5) * 0.45;
         float h = hQ + micro + jit;
-        // ---- DEPTH COLOUR (Roystan toon-water, free tutorial; adapted to
-        // cel without a depth buffer). Shallow vs deep is the swell height
-        // itself: troughs = deep, crests = shallow. Hard mixes only -- no
-        // smooth gradient airbrush. Source techniques:
-        // https://roystan.net/articles/toon-water/ (MIT-friendly tutorial)
-        float depth01 = clamp(0.5 - 0.5 * h, 0.0, 1.0); // 0 crest .. 1 trough
-        float depthRung = floor(depth01 * 3.0 + 0.001) / 3.0; // 4 hard rungs
-        // shallow (0.325, 0.807, 0.971) / deep (0.086, 0.407, 1.0) -- Roystan defaults
-        vec3 shallowCol = vec3(0.325, 0.807, 0.971);
-        vec3 deepCol    = vec3(0.086, 0.407, 1.000);
-        vec3 depthTint  = mix(shallowCol, deepCol, depthRung);
-        // multiply-tint so the tileset art stays legible; freeze kills it
-        rgb = mix(rgb, rgb * depthTint * 1.15, (1.0 - freeze) * 0.42);
-        // ---- THE SKY IN THE WATER, as coverage and not as shape.
-        //
-        // The deck's colour, leaned toward by how much of the hemisphere is
-        // covered, dithered on the checker so it is a cel step and not a
-        // wash. What this buys is the thing an overcast lake actually does:
-        // it goes flat and grey, because the bright blue dome that was
-        // lighting it went away. It buys no cloud SHAPES, deliberately --
-        // see Sky.deckColor for why that is the feature and not the
-        // shortcut.
-        //
-        // Weighted DOWN in the troughs (depthRung) so it reads as something
-        // landing on the surface rather than as a tint mixed into the body,
-        // and killed by freeze: ice reflects, but it is not what this is.
-        float reflW = cloudRefl * (1.0 - freeze)
-                    * (0.62 + 0.38 * check)
-                    * (1.0 - 0.45 * depthRung);
-        rgb = mix(rgb, cloudReflCol, clamp(reflW, 0.0, 1.0));
-        // ---- 4-rung height cel (value mass): deep trough / trough / mid / crest
-        float d0 = mix(-0.55, -0.28, freeze);
-        float d1 = mix(-0.22, -0.08, freeze);
-        float d2 = mix( 0.18 - waterWet * 0.04, 0.10, freeze);
-        float d3 = mix( 0.42 - waterWet * 0.05, 0.22, freeze);
-        float band =
-            - step(h, d0) * (0.20 + waterWet * 0.05)
-            - step(h, d1) * (0.10 + waterWet * 0.03)
-            + step(d2, h) * 0.10
-            + step(d3, h) * (0.12 + waterEnergy * 0.04);
-        rgb *= 1.0 + band;
-        // ---- SURFACE NOISE FOAM (Roystan): binary cutoff on analytic
-        // "noise" built from the two trains + a cell hash -- no texture.
-        // Scrolls with foamPhase the way his noise scrolls with _Time.
-        // Gated on chop/rain: a CALM clear pond keeps bands+depth only --
-        // floating mid-pond foam was free frame-to-frame flip under nearest
-        // upscale (shimmer probe R0/R3: continuous churn is swell+paint).
+        // value mass: trough dark, crest light -- three hard rungs
+        float band = - step(h, -0.35) * 0.06
+                     + step(0.30, h) * 0.05
+                     + step(0.60, h) * (0.05 + waterEnergy * 0.04);
+        rgb *= 1.0 + band * (1.0 - freeze);
+        // SURFACE NOISE FOAM under chop (rain / wind): binary cutoff on an
+        // analytic "noise" built from the trains + a cell hash (Roystan's
+        // toon water, cel tempo). A CALM clear pond keeps none of it.
         float chopPaint = clamp(crest + waterEnergy + waterWet, 0.0, 1.0);
         float nScroll = foamPhase * 0.22;
         float noiseSamp = 0.5 + 0.5 * sin(wa * 1.7 + nScroll)
                                * cos(wb * 1.3 - nScroll * 0.7);
-        // cheap hash on the band cell for irregularity (no Perlin tex)
         float nHash = fract(sin(dot(wz, vec2(12.9898, 78.233))) * 43758.5453);
         noiseSamp = clamp(noiseSamp * 0.65 + nHash * 0.35, 0.0, 1.0);
-        // cutoff rises in troughs (less foam mid-pond), drops near crests
-        // and under chop -- shoreline-like density without a depth buffer
-        float noiseCut = mix(0.78, 0.48, clamp(crest + waterEnergy * 0.4, 0.0, 1.0));
-        noiseCut = mix(noiseCut, 0.88, depthRung); // deep = less floating foam
+        float noiseCut = mix(0.80, 0.50, clamp(crest + waterEnergy * 0.4, 0.0, 1.0));
         float surfaceNoise = step(noiseCut, noiseSamp + (check - 0.5) * 0.08)
                            * (1.0 - freeze) * step(0.04, chopPaint);
-        rgb = mix(rgb, vec3(0.93, 0.97, 1.0), surfaceNoise * 0.55);
-        // Interference "caustics": hard spots where trains constructively
-        // peak -- cel diamonds, not a soft caustic texture. Same calm gate.
-        float inter = sin(wa) * sin(wb);
-        float caust = step(0.55, inter + (check - 0.5) * 0.20)
-                    * (1.0 - freeze) * (0.10 + 0.08 * waterEnergy)
-                    * step(0.04, chopPaint);
-        rgb *= 1.0 + caust;
-        // Cel fresnel: facing-camera water is darker (looking into mass),
-        // glancing is brighter. vWave.y is the up component of the analytic
-        // normal -- hard steps only.
-        float face = vWave.y;
-        float fres = step(face, 0.88) * 0.08 + step(face, 0.78) * 0.07;
-        fres *= (1.0 - freeze * 0.7);
-        rgb *= 1.0 - fres;
-        // Wind streaks: foam filaments along current (hard dashed dither).
-        // Same paint-phase snap as bands -- continuous foamPhase would
-        // rattle the dashes every frame under the nearest upscale.
-        float fpPaint = foamPhase;
-        if (paintPhaseStep > 0.001) {
-          fpPaint = floor(fpPaint / paintPhaseStep + 0.5) * paintPhaseStep;
-        }
-        float streak = dot(wz, waterCurrent) * 0.11 + fpPaint * 1.7;
+        rgb = mix(rgb, waterFoam * light, surfaceNoise * 0.55);
+        alpha = max(alpha, surfaceNoise * 0.6);
+        // Wind streaks: foam filaments along the current (hard dashes).
+        float streak = dot(wz, waterCurrent) * 0.11 + foamPhase * 1.7;
         float streakFoam = step(0.72, sin(streak) + check * 0.25)
                          * waterEnergy * (1.0 - freeze) * 0.35;
         // Ice: multi-rung silver plate + crystal diagonals from world cell.
@@ -1503,9 +1558,9 @@ local SHADER = [[
         float iceHi = step(0.70, freeze + (1.0 - check) * 0.18);
         float iceXtal = step(0.55, sin((wz.x + wz.y) * 0.08)
                          + (check - 0.5) * 0.30) * freeze;
-        rgb = mix(rgb, vec3(0.70, 0.84, 0.98), iceBand * freeze * 0.58);
-        rgb = mix(rgb, vec3(0.86, 0.93, 1.0), iceHi * freeze * 0.40);
-        rgb = mix(rgb, vec3(0.92, 0.96, 1.0), iceXtal * 0.28);
+        rgb = mix(rgb, vec3(0.70, 0.84, 0.98) * light, iceBand * freeze * 0.58);
+        rgb = mix(rgb, vec3(0.86, 0.93, 1.0) * light, iceHi * freeze * 0.40);
+        rgb = mix(rgb, vec3(0.92, 0.96, 1.0) * light, iceXtal * 0.28);
         // Cold therm deepens the blue of liquid water; warm therm leaves
         // the tile palette alone (hard mix, not a gradient ramp).
         float coldWash = step(waterTherm, 0.35) * (1.0 - freeze) * 0.12;
@@ -1518,82 +1573,55 @@ local SHADER = [[
         float crack3 = step(0.5, mod(floor(gc.x * 0.5) + gc.y, 2.0))
                      * meltCrack * stepJitter * 0.25;
         rgb = mix(rgb, rgb * 0.68, crack + crack2 + crack3);
-        // Specular rings: analytic normal · sun, quantized. Ice silver
-        // lives beside rain-killed sparkle.
-        //
-        // The window is measured from the FLAT plane's own alignment with the
-        // sun, so `glint` is a pair of deviations -- and it is a pair of
-        // FRACTIONS, because the deviation this water can reach is not a
-        // constant and the absolute pair that used to live here was measuring
-        // a slope no lake in the game ever made. At the default rung the
-        // largest deviation anywhere was 0.0269 against a floor of 0.020: `s`
-        // reached 0.029 of 1.0, every fragment quantised to ring 0, and the
-        // effect was off. See Water.GLINT_LO.
-        //
-        // What sets the ceiling: the slope is `amp * grad h`, the normal tips
-        // by it, and only the part of the tip that leans along the sun's
-        // ground track shows -- hence |sunRay.xz|. bodyAmp is in this scale on
-        // purpose, so a puddle's window closes with its own swell and it keeps
-        // the glint that SIZE_AMP_MIN exists to preserve, rather than being
-        // measured against an ocean it is not.
-        // Every cosine allowed to peak at once, weighted by how loud its own
-        // train is here -- so the ceiling follows the spectrum: a puddle is
-        // measured against the short chop it actually carries and the sea
-        // against its long swell.
+        // THE GLINT: the analytic normal against the sun, quantized to
+        // rings. The window is a pair of FRACTIONS of the slope this water
+        // can reach (see Water.GLINT_LO): every cosine allowed to peak at
+        // once, weighted by how loud its train is here, times the row's
+        // amplitude and this body's share of it, times how much of the tip
+        // leans along the sun's ground track.
         float flatDot = -sunRay.y;
         float gradMax = dot(wmix, waveK) * (1.0 + 2.0 * waterSteep * ahQ);
         float devMax = max(swell * bodyAmp * gradMax * length(sunRay.xz), 1e-5);
-        float s = smoothstep(flatDot + glint.x * devMax,
-                             flatDot + glint.y * devMax,
-                             dot(vWave, -sunRay));
-        s = floor(s * 4.0 + 0.5) / 4.0;
+        float sg = smoothstep(flatDot + glint.x * devMax,
+                              flatDot + glint.y * devMax,
+                              dot(vWave, -sunRay));
+        sg = floor(sg * 4.0 + 0.5) / 4.0;
         float glintAmt = sparkle + iceSparkle;
-        rgb = mix(rgb, vec3(0.93, 0.97, 1.0), s * glintAmt);
-        // Breaking crest foam + tip whitewater + wind streaks.
-        //
-        // ALL of it scaled by bodyAmp, and the bands and depth tint above
-        // deliberately NOT. A wave breaks because it got tall enough to
-        // break, so whitewater is the one thing here that has to know how
-        // big the water is -- a fountain throwing spray is the tell that
-        // gave the old single-amplitude ocean away. The cel bands are the
-        // water's COLOUR and a puddle still has a colour, so they read off
-        // the normalised height and stay.
+        // the glint is the SUN itself: unlit white, and opaque
+        rgb = mix(rgb, waterFoam, sg * glintAmt);
+        alpha = max(alpha, sg * glintAmt);
+        // Breaking crest foam + tip whitewater + wind streaks, all scaled by
+        // bodyAmp: a wave breaks because it got tall enough to break, so
+        // whitewater is the one thing here that knows how big the water is.
         float breakT = mix(0.66, 0.46, clamp(crest + waterEnergy * 0.35, 0.0, 1.0));
         float crestFoam = step(breakT, h) * crest * (1.0 - freeze);
         float tipFoam = step(0.78, h) * crest * (waterWet + waterEnergy)
                       * (1.0 - freeze);
-        // Steepness foam: where |slope| is high (from vWave tilt).
         float slope = 1.0 - vWave.y;
         float steepFoam = step(0.12, slope) * waterEnergy * (1.0 - freeze)
                         * (0.25 + 0.35 * check);
-        rgb = mix(rgb, vec3(0.93, 0.97, 1.0),
-                  (crestFoam * (0.58 + 0.38 * check)
-                 + tipFoam * 0.60
-                 + steepFoam * 0.40
-                 + streakFoam) * bodyAmp);
+        float white = clamp((crestFoam * (0.58 + 0.38 * check)
+                           + tipFoam * 0.60
+                           + steepFoam * 0.40
+                           + streakFoam) * bodyAmp, 0.0, 1.0);
+        rgb = mix(rgb, waterFoam * light, white);
+        alpha = max(alpha, white * 0.8);
         // Snow veil on liquid.
         float veil = snowVeil * (0.42 + 0.22 * check) * (1.0 - freeze * 0.50);
-        rgb = mix(rgb, vec3(0.95, 0.97, 1.0), veil);
-      } else if (vWater > 0.45) {
-        // Shore lip foam -- rides the waterline; chop multiplies reach.
-        // Lap clock snapped with paintPhaseStep so the foam edge does not
-        // crawl along the bank one fragment at a time (Roystan foam spirit,
-        // cel tempo).
-        float fpLip = foamPhase;
-        if (paintPhaseStep > 0.001) {
-          fpLip = floor(fpLip / paintPhaseStep + 0.5) * paintPhaseStep;
-        }
-        float lap = 0.14 * sin(fpLip * 2.0 + gc.x * cell * 0.23
-                                         + gc.y * cell * 0.17);
-        float foamEdge = 0.66 + lap - check * 0.11
-                       - crest * 0.12 - waterWet * 0.09
-                       - waterEnergy * 0.06;
-        float foam = step(foamEdge, vWater);
-        // Spray flecks above the lip under high energy (still lip band).
-        float spray = step(0.55, vWater) * step(foamEdge - 0.08, vWater)
-                    * waterEnergy * check * 0.35;
-        rgb = mix(rgb, vec3(0.93, 0.97, 1.0), foam * 0.90 + spray);
+        rgb = mix(rgb, vec3(0.95, 0.97, 1.0) * light, veil);
+        alpha = max(alpha, veil);
       }
+      // THE SHORE: a foam ring where the sheet meets the bank, lapping on
+      // the tide's clock and reaching further under chop.
+      float lap = 0.10 * sin(foamPhase * 2.0 + vWorld.x * 0.21 + vWorld.z * 0.16);
+      float ring = step(vShore, waterShoreFoam + lap + (check - 0.5) * 0.10
+                                + (crest + waterEnergy) * 0.30)
+                 * (1.0 - freeze);
+      rgb = mix(rgb, waterFoam * light, ring * 0.70);
+      alpha = max(alpha, ring * 0.75);
+      // ice is a lid
+      alpha = mix(alpha, 1.0, freeze);
+      outA = clamp(alpha, 0.0, 1.0);
     }
 #ifdef VOXEL_GRID
     // darken what is there rather than painting a colour, so a seam across
@@ -1649,12 +1677,30 @@ local SHADER = [[
       float cellSeed = dot(floor(vWorld / 8.0), vec3(0.913, 7.077, 3.217));
       float room = fract(sin(dot(paneId, vec2(26.651, 47.113))
                              + cellSeed) * 2913.33);
-      float home = step(0.30, room);
-      float flick = mix(1.0,
-                        0.80 + 0.20 * sin(lampFlicker * 0.7 + room * 41.0),
-                        step(0.93, fract(room * 9.77)));
-      vec3 lamp = lampColor * (0.5 + 0.55 * shine)
-                * (0.80 + 0.40 * fract(jit + room * 3.7)) * flick;
+      // HAUNTED GLASS (lib/TowerKit.lua). Inside hauntBox -- the Pokemon
+      // Tower's own footprint, in world XZ -- a pane is a dead room's: six
+      // in ten stay dark, what burns is the cold hauntColor rather than the
+      // lamps' amber and dimmer, and every lit one BREATHES on the slow
+      // clock instead of the odd one flickering. By day the same panes read
+      // as dark glass, no lamp-yellow behind the tower's stone. Zero outside
+      // the box and with hauntOn 0, where every line below folds back to
+      // what it was.
+      float haunted = hauntOn
+                    * step(hauntBox.x, vWorld.x) * step(vWorld.x, hauntBox.z)
+                    * step(hauntBox.y, vWorld.z) * step(vWorld.z, hauntBox.w);
+      float home = step(mix(0.30, 0.60, haunted), room);
+      float flickLamp = mix(1.0,
+                            0.80 + 0.20 * sin(lampFlicker * 0.7 + room * 41.0),
+                            step(0.93, fract(room * 9.77)));
+      float breathe = 0.60 + 0.40 * sin(lampFlicker * 0.29 + room * 19.0)
+                                  * (0.7 + 0.3 * sin(lampFlicker * 0.83 + room * 7.0));
+      float flick = mix(flickLamp, breathe, haunted);
+      vec3 burn = mix(lampColor, hauntColor, haunted);
+      vec3 lamp = burn * (0.5 + 0.55 * shine)
+                * (0.80 + 0.40 * fract(jit + room * 3.7)) * flick
+                * mix(1.0, 0.85, haunted);
+      pane = mix(pane, pane * vec3(0.30, 0.36, 0.55),
+                 haunted * (1.0 - glassNight));
       rgb = mix(pane, lamp, glassNight * glass * home);
     }
     // The snow lying ON this surface, if it is one snow can lie on. A hard
@@ -1729,7 +1775,9 @@ local SHADER = [[
       // that was wanted in the first place.
       float canopyCap = smoothstep(0.35, 0.85, vCanopy);
       float lie = mix(snowSide, 1.0, max(max(vUp, vGrassCap), canopyCap));
-      float depth = snowTop * lie;      // how deep it lies on this face
+      // ... and not on liquid water at all: the sheet takes it only once
+      // it has frozen into a lid (the basin under it never sees the sky)
+      float depth = snowTop * lie * (1.0 - vWaterSurf * (1.0 - freeze));
 
       // ------- the two noises every layer below is cut from
       //
@@ -1862,7 +1910,7 @@ local SHADER = [[
     // solid silhouette. Last in the chain, so neither the sun nor a voxel
     // seam can mottle it.
     rgb = mix(rgb, ghostColor, ghost);
-    return vec4(rgb, 1.0) * color;
+    return vec4(rgb, outA) * color;
   }
 #endif
 ]]
@@ -2338,6 +2386,13 @@ Voxel3D.tint = { 1, 1, 1 }
 -- (DayNight.windowLight). nil / 0 -- the defaults -- draw no glass effect.
 Voxel3D.glassMask = nil
 Voxel3D.glassNight = 0
+-- The haunted building this scene stands, if any: VoxelScene reads it off
+-- the map's structure cache (Buildings.stamp records a TowerKit model's
+-- `haunt`). { x0, z0, x1, z1 } in world XZ plus `color`; nil draws every
+-- pane the ordinary way. HAUNT_COLOR is the fallback for a haunt that
+-- names no colour of its own.
+Voxel3D.haunt = nil
+Voxel3D.HAUNT_COLOR = { 0.62, 0.80, 1.0 }
 
 -- What the lamps behind that glass burn, in 0..1 -- pushed in from outside
 -- exactly like glassNight, and for the same reason: the hour is the
@@ -2607,6 +2662,29 @@ function Voxel3D.beginScene(w, h, cx, cy, vw, vh, sky, slot)
   pcall(sh.send, sh, "mixShape", { Water.MIX_FLOOR_LONG, Water.MIX_FLOOR_SHORT,
                                    Water.MIX_KNEE })
   pcall(sh.send, sh, "iceLift", Water.iceLift())
+  -- the basin and the sheet (see Water.BED): both per-draw switches
+  -- start the scene at 0, and only drawGroup / drawWater raise them
+  pcall(sh.send, sh, "waterPass", 0)
+  pcall(sh.send, sh, "basinOn", 0)
+  pcall(sh.send, sh, "waterBase", Water.BASE or -2)
+  pcall(sh.send, sh, "waterSand", Water.SAND or { 0.86, 0.78, 0.58 })
+  pcall(sh.send, sh, "waterAbsorb", Water.ABSORB or { 0.15, 0.085, 0.045 })
+  pcall(sh.send, sh, "waterDeepTint", Water.DEEP_TINT or { 0.42, 0.58, 0.92 })
+  pcall(sh.send, sh, "waterAlpha", { tonumber(Water.ALPHA_SHALLOW) or 0.28,
+                                     tonumber(Water.ALPHA_DEEP) or 0.78 })
+  pcall(sh.send, sh, "waterReflect", tonumber(Water.REFLECT) or 0.85)
+  pcall(sh.send, sh, "waterShoreMax", tonumber(Water.SHORE_MAX) or 5)
+  pcall(sh.send, sh, "waterShoreFoam", tonumber(Water.SHORE_FOAM) or 0.45)
+  pcall(sh.send, sh, "waterFoam", Water.FOAM or { 0.93, 0.97, 1.0 })
+  pcall(sh.send, sh, "waterTexel", { 1 / 128, 1 / 48 })
+  -- what the sheet mirrors: the sky this scene was cleared to. No sky
+  -- (indoors, a rung that paints none) mirrors the tint of the hour.
+  do
+    local sk = Voxel3D.skyFill
+    local dome = (type(sk) == "table" and tonumber(sk[3]))
+                 and { sk[1], sk[2], sk[3] } or (sky or { 1, 1, 1 })
+    pcall(sh.send, sh, "waterSky", dome)
+  end
   -- how big the water is, as a field over the drawn neighbourhood. The
   -- sampler is bound every frame whether or not there is a bake -- unbound
   -- is a crash, `waterFieldOn` is the switch. See waterShape in the shader.
@@ -2715,6 +2793,16 @@ function Voxel3D.beginScene(w, h, cx, cy, vw, vh, sky, slot)
   pcall(sh.send, sh, "glassGlint", Voxel3D.glassGlint or 0)
   -- on until a sprite pass says otherwise, reset per frame like `ghost`
   pcall(sh.send, sh, "glassOn", 1)
+  -- the haunted glass box, sent every scene like the lamps so a map
+  -- without a tower cannot keep the last one's cold
+  local haunt = Voxel3D.haunt
+  if haunt then
+    pcall(sh.send, sh, "hauntBox", { haunt.x0, haunt.z0, haunt.x1, haunt.z1 })
+    pcall(sh.send, sh, "hauntColor", haunt.color or Voxel3D.HAUNT_COLOR)
+    pcall(sh.send, sh, "hauntOn", 1)
+  else
+    pcall(sh.send, sh, "hauntOn", 0)
+  end
   pcall(sh.send, sh, "packedShade", 0)
   -- the wind's bearing, wavelength and phase. Constant across the frame --
   -- only `sway` varies per draw, and it is what decides whether a mesh
@@ -3277,6 +3365,13 @@ function Voxel3D.drawGroup(group, texture, model, pull, sunModel, b)
   pcall(sh.send, sh, "pull", pull or 0)
   -- terrain is planted by definition: buildings do not lean
   pcall(sh.send, sh, "sway", 0)
+  -- and it is the only pass that owns geometry below the ground plane:
+  -- the water's basin (see Water.BED). Raised for the group, dropped after.
+  pcall(sh.send, sh, "basinOn", 1)
+  if texture and texture.getWidth then
+    pcall(sh.send, sh, "waterTexel", { 1 / texture:getWidth(),
+                                       1 / texture:getHeight() })
+  end
   local chunks = group.chunks
   for i = 1, #chunks do
     local ch = chunks[i]
@@ -3289,6 +3384,48 @@ function Voxel3D.drawGroup(group, texture, model, pull, sunModel, b)
       love.graphics.draw(ch.mesh)
     end
   end
+  pcall(sh.send, sh, "basinOn", 0)
+end
+
+-- Draw a map's WATER SURFACE group -- ChunkMesher hangs it off the
+-- terrain group as `.water` -- blended over everything the basin pass
+-- already drew. Depth-TESTED, so a bank standing in front still wins;
+-- depth-WRITING, so what comes after (spray, motes, and the screen-space
+-- pass's own water test, which reads the depth buffer) sees the surface
+-- as a surface. `waterPass` is what tells the shader to displace and
+-- paint the sheet; it goes back to 0 before anything else can inherit it,
+-- like basinOn above.
+function Voxel3D.drawWater(group, texture, model, b)
+  if not (active and group and group.chunks) then return end
+  local sh = activeShader
+  if not sh then return end
+  local g = love.graphics
+  pcall(sh.send, sh, "model", "row", model or IDENTITY)
+  pcall(sh.send, sh, "sunModel", "row", model or IDENTITY)
+  pcall(sh.send, sh, "pull", 0)
+  pcall(sh.send, sh, "sway", 0)
+  pcall(sh.send, sh, "snowTop", Voxel3D.snowTop or 0)
+  pcall(sh.send, sh, "snowColor", Voxel3D.SNOW_COLOR)
+  pcall(sh.send, sh, "snowSide", Voxel3D.SNOW_SIDE)
+  pcall(sh.send, sh, "waterPass", 1)
+  if texture and texture.getWidth then
+    pcall(sh.send, sh, "waterTexel", { 1 / texture:getWidth(),
+                                       1 / texture:getHeight() })
+  end
+  local prevBlend, prevAlpha = g.getBlendMode()
+  pcall(g.setBlendMode, "alpha", "alphamultiply")
+  pcall(g.setDepthMode, "lequal", true)
+  local chunks = group.chunks
+  for i = 1, #chunks do
+    local ch = chunks[i]
+    if not b or (ch.x1 >= b[1] and ch.x0 <= b[3]
+                 and ch.z1 + math.max(ch.ymax, 0) >= b[2] and ch.z0 <= b[4]) then
+      if texture then ch.mesh:setTexture(texture) end
+      g.draw(ch.mesh)
+    end
+  end
+  pcall(g.setBlendMode, prevBlend or "alpha", prevAlpha or "alphamultiply")
+  pcall(sh.send, sh, "waterPass", 0)
 end
 
 -- Draw a particle field: ONE mesh, many colours, one set of uniforms.

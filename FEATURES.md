@@ -49,22 +49,27 @@ menu.
 | `5`, or the **V-GRID** options row | OFF / ON — a one-pixel wireframe on every voxel |
 | `6`, or the **T-SHIFT** options row | OFF → 1 → 2 → 3 → OFF (miniature blur) |
 | `7`, or the **V-CURVE** options row | OFF → 1 → 2 → 3 — bend the world over the horizon |
-| `m`, or the **SM64CAM** options row | ON / OFF — the Super Mario 64 camera. A camera operator instead of a fixed mount: it turns to look at you far faster than it flies to where it wants to stand, takes its height from the **ground** under you so walking up a step does not bob the frame, leads the way you are walking, and slides **around** a building that gets between you rather than zooming through it. The camera orbits the **map's** centre rather than trailing your back, the way it orbits Bob-omb Battlefield's mountain — and the **D-pad turns with it**, as in Mario 64. See below |
+| `m`, or the **SM64CAM** options row | ON / OFF — the Super Mario 64 camera. A camera operator instead of a fixed mount: it turns to look at you far faster than it flies to where it wants to stand, takes its height from the **ground** under you so walking up a step does not bob the frame, leads the way you are walking, and looks **over** a wall that stands between you for more than a moment rather than steering round it. It orbits **you**, at a bearing only you change, a quarter turn at a time — it never turns on its own — and the **D-pad turns with it**, as in Mario 64. See below |
 | `8`, or the **3D-BTL** options row | ON / OFF — fight on the map instead of on a white field |
 | `9`, or the **WILD** options row | ROAM / MIX / OFF — wild Pokémon standing in the grass instead of a dice roll on every step |
 | the **W-COUNT** options row | SOME / FEW / MANY — how many stand within reach at once. Only on the menu while **WILD** is on |
-| the **BACK SPRITES** options row | OFF / ON — keep your own Pokémon on the battle menu, seen from behind in its classic slot, instead of standing it on the map; the foe is still out there. Only on the menu while **3D-BTL** is on, because it decides nothing without it |
+| the mon pack (always on when `assets/mons` is present) | the Pokemon standing on the field wear their Generation 5 (Black/White) sprites, front and back, in full colour, instead of the Game Boy pic through a palette. ADVANCED and the other COLORS modes do not touch them; the hour's light does. Trainer pics stay the engine's |
+| the **BACK SPRITES** options row | OFF / ON — your own Pokémon seen from behind, the series' shot: ON stands it on its tile in the arena wearing its back art, grown to a foreground hero (`OverworldBattle.BACK_HERO`) under the same light and shadow as the foe, with the move cards and the panels floating in front of it; OFF stands it on the map facing the foe, at the foe's own scale. Only on the menu while **3D-BTL** is on, because it decides nothing without it |
 | the **DAYTIME** options row | SYNC / DAY / NIGHT / DUSK / DAWN / CYCLE — what time it is outdoors, on the diorama *and* on the flat 2D world; held at SYNC (and off the menu) while VOXEL is FULL |
 | the **RTX** options row | RT / AO / OFF / MAX — the screen-space pass; see below |
 | the **AMBIENT** options row | ON / OFF — butterflies and ground birds by day (the birds startle and fly off when you get close), dragonflies over the water, fireflies through the night, a flock crossing the sky, leaves on the wind — and civilian NPCs glance at you as you pass. Trainers never turn: their facing is their line of sight |
 | the **WEATHER** options row | AUTO / OFF / RAIN / SNOW — occasional showers, with the whole sky going over with them; snow through the winter of the SYNC clock. See below |
 | the **GROUND** options row | ON / OFF — what the weather leaves behind: puddles that gather through a shower and are still there afterwards, snow that settles in drifts, and footprints behind everybody walking on it. Only on the menu while **WEATHER** is on. See below |
 | the **TREES** options row | 3D / VOXEL — how trees are built in the diorama. 3D stamps the authored tree bake (a real canopy, wind in the crown) on every round-tree site; VOXEL is the classic outline-hulled ball carved from the tileset art. Flipping it rebuilds the map's meshes over the next frames |
-| the **COMBAT** options row | DINAMICA / CLASSICA — the whole dynamic battle costume. DINAMICA swings the camera in behind the attacker, floats the menu and the box on glass in the arena, hangs HP capsules beside the mons, and puts typed hit sheets at the blow. CLASSICA holds the camera and lays every panel flat. Only on the menu while **3D-BTL** is on |
+| the **COMBAT** options row | DINAMICA / CLASSICA — the whole dynamic battle costume. DINAMICA swings the camera in behind the attacker, floats the menu and the box on glass in the arena, hangs HP capsules beside the mons, and puts typed hit sheets at the blow — and the blow reaches the room: a spotlight closes on the attacker, the hit flashes the defender's cell in the move's colour, voxel cubes fly off the floor, a scorch / puddle / frost / crater stays under the defender's feet, a gold damage figure floats up, and every pane of glass leans with the shove, cracks or ripples where the wave strikes it, and prints a shadow on the floor. On the move menu the chosen card wears its element: lightning crawls an ELECTRIC card's edges, flames lick a FIRE card's foot, a swell rolls a WATER card, frost grows on ICE, rings breathe on PSYCHIC, with the type's colour running the rim. CLASSICA holds the camera, lays every panel flat and answers a blow with nothing but the engine's own anims. Only on the menu while **3D-BTL** is on |
 | the **EXP** options row | TEAM / SPLIT / OFF — experience for the whole party instead of only the Pokémon that fought. TEAM gives everyone still standing what the fighters got; SPLIT divides that same total among them; OFF is 1996. Only the fighter gets a text box |
 | the **ECOLOGY** options row | ON / TIME / OFF — who is out *right now*: the nocturnal half of the dex after dark, the birds and the caterpillars by day, and water Pokémon while it rains. See below |
 | the **SOUNDS** options row | ON / OFF — crickets after dark, birdsong by day, water within earshot, rain when it rains and thunder after the flash. CC0 recordings, crossfaded by what the world is doing, with the Game Boy's own channels as the fallback. See below |
 | the **INDOOR** options row | ON / OFF — a Pokémon asleep on the floor of about two houses in five, and mugs still steaming on the tables |
+| the **HEARTH** options row | ON / OFF — chimneys that smoke. The house family stands a chimney on its roof, and a house with a fire going puts a chain of cel puffs off it that climb, cool, take the wind and thin away. Most houses at dusk, some at dawn, a few through the night, and the cold lights the rest. See below |
+| the **TOWER** options row | NEW / CLASSIC — which Pokemon Tower stands in Lavender: the tower modelled by hand (default), or the building kit's plain fold of the same drawing, as it stood before. Flipping it rebuilds the map's meshes on the spot. See below |
+| the **LEDGES** options row | BANK / CLASSIC — what a hop-down ledge is: a bank of earth that rises steeply on the side you stand on, crests, and falls gently toward where you land, the ground's own grass rolling over its top and the drawing's earth showing where the fall is steep; or the profile's six-pixel box wearing the ledge drawing on top, as before. Every route in Kanto. See below |
+| the **HAUNT** options row | ON / OFF — the tower of graves is haunted. Lavender's Pokemon Tower stands as a tower now (plinth, ashlar body with a pointed portal, storeys of pointed windows under cornices, a lantern storey, a pagoda roof and a spire), its glass burns cold, sparse and breathing after dark, and pale wisps drift out of it. The row is the wisps and the cold glass; the tower stands either way. See below |
 | the **TOWN** options row | ON / OFF — trainers' Pokemon loose in the streets of every town. Most are out for a stroll (press A to hear them); the one that STARES you down wants to battle, at your own lead's level |
 | the **A-FARM** options row | OFF / P1–P6 — pick a party slot and a bot trains that Pokemon; see below |
 | the **QOL** options row | ON / OFF — ten mercies: the **bag sorted into pockets** (balls, medicine, TMs and HMs, key items), wrapping and taking a held direction; the PC **following a catch** into whichever box it landed in, and a full box rolling forward instead of refusing a deposit; **RENAME** on the party menu, because Kanto has no NAME RATER; **hidden items glint** on the ground (it does not name them or take them — you still walk there and press A); hold **B to run**; **field poison stops at 1 HP** instead of killing; **trade evolutions at level 37** without a second machine; effectiveness markers on the move menu (`+`/`-`/`x` against the Pokémon in front of you); a fresh REPEL used the moment one wears off; and HMs on the A button — A at a tree CUTs, A at water SURFs, A at a boulder wakes STRENGTH, all behind the same badges and checks the menu applies. OFF is the full 1996 friction |
@@ -148,13 +153,28 @@ Measured in the running game, the body's steady-state lag comes out 6.33 times
 the gaze's against a predicted 6.35 -- that gap is most of what SM64 feels
 like, and it costs two constants.
 
-### It orbits the map, not you
+### It never turns on its own
 
-The radial camera does not follow your back. It orbits a fixed point of the
-**area** -- here, the map's own centre -- so walking round a town slides the
-camera along the town's edge with the buildings between you and it. That is
-why Bob-omb Battlefield feels the way it does, and a Gen 1 map is the same
-shape: a hand-drawn rectangle with its business in the middle.
+SM64's defining mode orbits a fixed point of the **area** -- a mountain you
+cannot stand on -- and the first cut of this port did the same with the map's
+own centre. On a Gen 1 town that centre is the square everybody walks through,
+and the orbit's yaw swings hardest exactly there: measured, twenty degrees
+across Celadon's plaza with no key touched. Add the wall steering (up to eighty
+degrees round every fence and house corner, and back) and the camera "changed
+all the time", which is the complaint that retired both.
+
+The camera is now an orbit round **you**, at a bearing that **only you
+change**. It does not turn for where you are on the map, for which way you
+walk, or for a wall. What is left of SM64 is everything else: the two-layer
+chase, the floor-derived height, the lead, the dead zone, and the spherical
+arc between one bearing and the next.
+
+**Every bearing it rests at is a quarter turn.** The sprites are four drawings
+-- front, back, one profile and its mirror -- with nothing for in between, and
+a camera parked at 60 degrees showed a character walking diagonally across the
+screen in art drawn for straight on. So `q`/`e` step ninety degrees, the stick
+snaps to the nearest quarter when you let go, and the SHOULDER follow re-aims
+to a cardinal. The view still arcs between them; it never stops in between.
 
 ### The D-pad turns with it
 
@@ -163,26 +183,24 @@ Everything else is presentational and says so.
 
 SM64 makes the stick camera-relative in one line, and without it an orbiting
 camera is not a camera, it is a puzzle: the world turns under you while Up
-keeps meaning north. So Up means **away from the camera**, at every angle.
+keeps meaning north. So Up means **away from the camera**, at every quarter
+turn -- and the mapping only ever changes when *you* turn the camera, never
+under a held button.
 
 The walk itself is an ordinary walk through ordinary collision -- the world
 still speaks compass in every direction that matters, and press Up under a
 quarter turn and the player genuinely walks west, exactly as if west had been
 pressed. Turn the row off and the 1996 controls come back untouched.
 
-One consequence worth knowing, and it is true of SM64 too: because the camera
-orbits the map's centre, **Up walks you toward the middle of the map**. Down
-goes outward, left and right go around. In Bob-omb Battlefield, pushing away
-from the camera runs you at the mountain for the same reason.
-
 | control | does |
 | --- | --- |
-| `q` / `e` | turn the camera (SM64's C-left / C-right: 60 degrees on the first press, on to the limit if you press the same way again) |
-| `r` | lock the camera to 45-degree steps and back (SM64's R button) |
+| `q` / `e` | turn the camera a quarter turn (SM64's C-left / C-right) |
+| `r` | put the camera at your back (SM64's R button, repurposed: the alternate mode it swapped to existed to stop an automatic camera turning, and this one never does) |
 | `f` | the zoom ladder, three rungs (SM64's C-down) |
-| right stick | the same turn, continuously. The N64 had four C buttons and no second stick; this machine has one |
+| right stick | the same turn, continuously, settling on the nearest quarter when released. The N64 had four C buttons and no second stick; this machine has one |
 
-Every press answers with a sound -- the game's own `Tink` and `Switch`.
+Every press answers with a sound -- the game's own `Tink` and `Switch`, and
+`Denied` inside an authored shot that has taken the framing.
 
 ### Characters turn to face you
 
@@ -207,7 +225,10 @@ rather than from you, so steps and ledges do not bob the frame; a dead zone
 just under a cell absorbs the grid's staircase while you walk and recentres
 when you stop; mode changes interpolate in spherical coordinates so the camera
 *arcs* around you instead of cutting through the building it changed because
-of; warps and map changes cut rather than fly; and the shake is a damped
+of; warps and map changes cut rather than fly; a wall that stands between
+you and the lens for more than half a second lifts the lens to look over it,
+and pulls the camera in only when no lift clears it (a corner passed at a
+walk moves nothing); and the shake is a damped
 cosine applied *after* the smoothing, attenuated by distance from whatever
 caused it, so it leaves no drift behind.
 
@@ -786,6 +807,212 @@ already had to.
 The sleeper is a real map object and stands in the room in **both** modes; the
 steam and the Zs are drawings composited into the diorama's own overlay pass,
 so those two want the **VOXEL** camera on.
+
+## Chimneys that smoke — the HEARTH row
+
+Every house in Kanto has had a stove going since 1996 and not one of them has
+ever shown it. The building kit already knew how to stand a **chimney** on a
+roof — only the Center's rooftop ball ever asked for one. The house family
+asks now: the two-storey gabled house, the cottage, the wide house, the day
+care and the doorless blocks that share their drawings all carry a small stack
+at the back of the roof, capped in the drawing's own outline shade.
+
+**And a house with a fire going puts smoke on it.** A puff leaves the flue
+every second or so (the **PFX** row scales that), climbs hard at first and
+slower as it cools — the lift dies with the puff's age, squared — takes
+whatever air the **WIND** row is moving and its eddies, spreads as it rises
+and thins into nothing over about five seconds. Rain weighs the plume down and
+shortens it; a gale tears it flat. In a dead calm the column stands straight
+up, which is exactly when the wind's own field has nothing to draw.
+
+**Which houses.** Not every house, and not all day. Each chimney holds a
+stable number from a hash of the house's own place on the map — the same
+trick the **INDOOR** row picks its sleepers by, so the same houses always
+light first. Against it stands one figure: how many of the town's hearths are
+lit *right now*. It rises with the meals of the day — nearly everyone at dusk,
+about half at dawn, the banked fires through the night, almost nobody at noon
+— and with the cold: winter on the SYNC calendar, snow falling or lying, a wet
+evening. A chimney smokes while its number is under that figure, so as the
+evening comes on the town lights up house by house, always in the same order.
+
+**The puff is authored, not shipped.** A sixteen-pixel cloud drawn at load in
+the three tones everything cel in this mod wears — a body, a darker underside,
+a one-pixel rim — with a hard silhouette and no gradient. It is a card in the
+diorama's own 3D pass, so a roof hides the smoke behind it, the hour tints it
+(warm at dusk, near-white in snow) and the sun's shadow falls on it; drawn last
+and without writing depth, because smoke is translucent and must not hide the
+roof it is drifting past. Wants the **VOXEL** camera on; the flat 2D world
+gets nothing, like every other drawing in this list.
+
+`tests/hearth_probe.lua` measures it: the mouths the map stands, the gate, the
+dusk figure, the rate against the module's own clock, the climb, the drift
+with and without wind, the batches, and an ON/OFF pair of captures above each
+stack.
+
+## The tower of graves — the HAUNT row
+
+Lavender's Pokemon Tower was the one building in Kanto whose Game Boy drawing
+is a **tower** — a three-tier latticed roof over twelve rows of windowed
+facade, straddling the Route 10 seam — and the one the building kit folded
+wrong: the roof band laid flat, the facade extruded, a 96-by-100 brick box
+with a striped lid. It stands as a tower now (`lib/TowerKit.lua`), modelled
+by hand the way the interiors are: a stone plinth in the drawing's own
+threshold; a blind lower body in weathered ashlar — staggered joints,
+damp-dark at the foot, streaks running down from under the string course —
+with a pointed portal opening on black, lantern niches either side of it and
+slit windows; a pale cornice; a set-back storey of three courses of tall
+pointed windows sunk three voxels deep under white sills, quoins at the
+corners; a second cornice; a lantern storey of pointed glass on every face;
+and the drawing's own lattice roof wrapped as a three-tier pagoda under a
+spire. Two hundred and thirty voxels from the ground to the tip — four
+houses high — and every voxel wears a texel of the tower's own drawing.
+
+**The sombre part is light, not paint.** The palette is the town's own and
+stays that way. What turns the drawing into stone is a shade per texel class
+that the model hands the building kit: the drawing's white held to well under
+half its brightness is the grey of the blocks, the same white a shade under it
+the joints, the damp foot and the streaks; the lattice keeps its deep violet,
+the cornices' fascia stays pale — and the whole tower is darkest at the foot,
+in the town's shadow, climbing toward the light at the top, which is most of
+what makes a tall thing read tall. Grey stone under a violet roof: the tower
+belongs to Lavender without being another purple house. The sun pass grew to
+cover it (`ShadowMap.HEIGHT`), so its shadow falls whole.
+
+**Haunted glass.** The windows are the facade's own panes, so they light
+after dark like every window in Kanto — except that inside the tower's
+footprint the scene shader draws them as a dead house's: six in ten stay
+dark, what burns is a cold pale blue rather than lamp-amber, dimmer, and every
+lit pane breathes on the slow clock instead of the odd one flickering. By day
+the same panes read as dark glass, no lamp-yellow behind the stone.
+
+**And the tower breathes.** After dark — on the same curve that lights the
+town's windows — pale wisps slip out of the lantern storey's glass, a few from
+the portal's mouth, a rare one off the spire; they climb, hang, take the
+**WIND** row's air and its eddies and thin into the violet haze over about
+eight seconds. Each is a teardrop card with a halo behind it, drawn flattened
+toward its own glow so the night cannot put it out, in the diorama's 3D pass
+with depth writes off, like the smoke. The **HAUNT** row is the wisps and the
+cold glass; the tower stands either way. Wants the **VOXEL** camera on.
+
+**The terrace.** Lavender draws the edge of the tower's yard as hop-down
+ledges — down both sides and along the south, with the entrance's dark arch
+in the middle — and the profile's ledge class stood them as six-pixel boxes
+wearing the lip drawing on top: a mat of orange wicker round the foot of a
+stone tower. They stand now as the tower's own low ashlar wall, six voxels
+thick under a pale coping, with piers at the corners, at the end and either
+side of the gate, in the ledge's own white texels held down to grey. One
+piece per cell shape, matched by tiles and confined to the terrace — the same
+ledge tiles run every route in Kanto, and the town's other ledge line is Route
+8's carrying on across the seam, so those stay ledges. The hop still works; it
+is a wall you hop over. And the speckled ground of the yard and the strip east
+of it — half of Kanto's routes wear the same tile and keep it — is paved one
+voxel deep in grey flagstones of two sizes, the same white held down.
+
+**Which tower.** The **TOWER** options row picks NEW — this one — or CLASSIC,
+the building kit's plain fold of the same drawing, as it stood before.
+Flipping it rebuilds the map's meshes on the spot, the way the **TREES** row
+does; the cold glass, the wisps and the terrace wall belong to the NEW
+tower only.
+
+`tests/lavender_tower_probe.lua` measures it: the model builds without
+falling back to the band fold, the stamp records its haunt and the camera's
+occluder height, the shader compiles, the wisps are live at night, frame time
+at a fixed frame day and night — and screenshots from the plaza, the door and
+the orbit, at dawn, day and night (`tests/run_tower.cmd`).
+
+## What a ledge is — the LEDGES row
+
+A Gen 1 ledge is a one-way step: you stand on the high side, press toward
+it, and hop down to the landing. The overworld draws it as a bump of hatched
+earth seen face-on, and the profile's ledge class stood every one of those
+tiles as a six-pixel box wearing the drawing on its **top** — a run of orange
+wicker mats across every route in Kanto.
+
+**In a flat world a ledge is a bank.** The diorama's ground is one plane, so
+the high side and the landing both stand at zero and there is no terrace for
+a terrace edge to belong to. The honest shape left is a ridge of earth: it
+rises steeply on the side you stand on, crests, and falls away gently toward
+where you land. From the camera, which looks north and down, an east-west
+bank's steep side hides behind its crest and the gentle side faces the lens —
+a grassy slope with a dark rim at its foot, which is what the drawing meant. A
+north-south bank shows its steep side obliquely, as the small earthen face it
+is; a north-south bank is symmetric, crest down the middle, because a steep
+side there would face the lens as a small cliff for no reason the flat world
+can give. Eight voxels tall for a run sixteen deep, six for one eight deep.
+
+**Every ledge in Kanto.** A census of the shipping maps finds seventeen cell
+compositions holding a ledge tile — east-west runs and their rounded ends,
+north-south runs hopped westward and eastward, the corners and junctions
+between them — plus the mound's shaded east slope and its north-east corner,
+which the same art language draws beside them and the profile stood as
+sixteen-pixel boxes; each is one or two *strokes* in the profile
+(`data/voxel_heights.lua`): a ridge along an axis with a height profile across
+it and a rounded taper at its ends; a cell's height is the maximum of its
+strokes, so an L of ridges meets in a rounded corner for free.
+
+**Nothing is repainted.** The bank's top and its gentle slope wear the ground
+tile of the side you hop from, picked per placement and tiled on the world
+grid so the meadow continues over the bank; the steep risers and the foot
+wear the drawing's own earth and outline. A grass or path tile that shares a
+cell with a ledge is never claimed, so a path does not turn to grass where a
+ledge crosses it. Lavender's terrace keeps its stone wall; the rest of the
+town's ledges are banks like Route 8's, so nothing changes at the seam.
+
+`tests/ledges_probe.lua` measures it in five towns and routes: the banks
+build with their ground variants, the shared tiles stay unclaimed, the
+CLASSIC row brings the boxes back, and frame time on Route 4's hundred-odd
+ledge cells — with screenshots of each kind (`tests/run_ledges.cmd`).
+
+## Water with a bed — the WATER row
+
+CALM / SWELL / FLAT is still what the row says, and it still means what it
+meant: how much the surface heaves. What changed is underneath it. The
+water is no longer a picture of water.
+
+It used to be one quad per water tile, sunk two pixels below the ground and
+wearing the tileset's own animated tile — the Game Boy's water standing on
+its side, with a two-pixel lip where the bank stepped down to it. A blue
+floor. Now every water tile carries a **bed**, cut in whole voxel terraces
+by how far the tile is from the nearest bank (five steps of one cell each,
+from the shallows against the shore down to the deep), the banks drop all
+the way to it, and the **surface is a translucent sheet** drawn last of the solid
+world, so the bed shows through it.
+
+What that buys, with nothing painted blue anywhere:
+
+- **Depth you can read.** The bed is sand lit by the hour, and what comes
+  back up through the water is what the water did not absorb — red first,
+  blue last, per channel. So the shallows along every bank are sand and
+  green-gold, and the middle of a lake is the deep blue because it is deep.
+- **The shore continues under the water.** A bank keeps a share of its own
+  art below the waterline, darkening as it goes down, instead of stopping
+  at a lip.
+- **Caustics.** Where the swell's long trains peak together the surface is
+  a lens, and the bed under it lights up in hard cel diamonds that move
+  with the waves and fade with depth. A FLAT pond focuses nothing.
+- **A waterline that moves.** The surface's own height says where the
+  water meets the bank, so the foam line on a wall climbs and falls with
+  the swell, and just above it the bank is damp.
+- **A Fresnel sky.** Looking down into the water you see the bed; looking
+  across it you see the sky — the dome's own colour, greyed by whatever
+  cloud deck is over it — and the sun still catches on the crests.
+- **A foam ring** where the sheet meets the bank, lapping on the tide's
+  clock and reaching further under chop.
+
+Everything the row and the weather already did — three fixed wave trains,
+the size-of-the-body field, the glint window measured against the slope
+this water can reach, chop and crest foam under rain and wind, freeze into
+an opaque lid, snow that only lies on it once it has frozen — still
+happens, on the sheet. RT / MAX reflect off it as they did. Surfing, the
+swimming Pokémon and the waterline cut on their sprites never moved: the
+sheet sits exactly where the old plane sat.
+
+Cost: every water pixel is now shaded twice (the bed, then the sheet over
+it), plus one quad per water tile in a group of its own culled with the
+terrain and bank walls a few pixels taller. Measured on the i3 + UHD at
+FULL and RTX MAX, on the two wettest shots (the Route 25 lake, the Route
+21 sea): about a tenth to a seventh slower than the flat water was --
+and RES 1/2 or RTX RT gives it all back. Land is untouched.
 
 ## Fake ray tracing — the RTX row
 
