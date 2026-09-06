@@ -285,6 +285,14 @@ at the top of this file.
 **Letter hotkeys (TERRARIUM):** `v` VOXEL | `g` V-GRID | `t` T-SHIFT | `c` V-CURVE | `m` SM64CAM | `b` 3D-BTL | `n` WILD | `p` MAP. Upstream still uses digits.
 `c` V-CURVE | `b` 3D-BTL | `n` WILD | `p` MAP. Upstream still uses digits.
 
+## YouTube / videos
+
+If you want to make YouTube videos with **builds newer than the public
+releases**, get in touch on Discord: **carrara2803**.
+
+Quem quiser gravar no YouTube com versões mais recentes do que as releases
+públicas pode me chamar no Discord: **carrara2803**.
+
 ## Quiver / launcher packaging
 
 - Install folder must be `mods/TERRARIUM` (matches `manifest.json` id).
