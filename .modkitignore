@@ -189,3 +189,26 @@ tests/run_veg.cmd
 # too. Left as found rather than swept in on a release that is about the
 # grass -- but it is a gap against this file's own rule, and it is written
 # down here so the next person does not have to rediscover it.
+
+# Concept art. Generated references for features that are designed but not
+# necessarily built: they are what the code is measured against during
+# authoring, and a player installs the result rather than the drawing of it.
+# 19 MB on a 42 MB download for pictures the game never reads.
+# modkit matches literally, so every file is named.
+concepts/battle-dynamic/01-arena-wide.png
+concepts/battle-dynamic/02-move-cards.png
+concepts/battle-dynamic/03-attack-moment.png
+concepts/battle-dynamic/04-turn-ribbon.png
+concepts/battle-dynamic/05-menu-redesign.png
+concepts/battle-dynamic/06-message-redesign.png
+concepts/battle-dynamic/07-ui-kit-sheet.png
+concepts/battle-dynamic/08-hud-in-scene.png
+concepts/battle-dynamic/09-hud-player-closeup.png
+concepts/battle-dynamic/10-hud-kit-sheet.png
+concepts/battle-dynamic/11-box-menu-in-scene.png
+concepts/battle-dynamic/12-box-menu-kit-sheet.png
+concepts/battle-dynamic/13-pokeball-kit-sheet.png
+concepts/battle-dynamic/14-pokeball-in-scene.png
+concepts/battle-dynamic/15-card-fire-variants.png
+concepts/battle-dynamic/16-card-water-variants.png
+concepts/battle-dynamic/README.md
