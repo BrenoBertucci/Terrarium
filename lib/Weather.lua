@@ -70,6 +70,8 @@
 
 -- the mod namespace (see main.lua): V.require loads a sibling module
 local V = ...
+local WaterMap = V.require("WaterMap")   -- where water may be drawn at all
+
 
 local ModSetting = V.require("ModSetting")
 local DayNight = V.require("DayNight")
@@ -1213,7 +1215,7 @@ local function splashCell(ow)
   for _ = 1, Weather.WATER_TRIES do
     local cx = p.cellX + rand(-7, 7)
     local cy = p.cellY + rand(-7, 7)
-    if map:inBounds(cx, cy) and map:isWaterCell(cx, cy) then
+    if map:inBounds(cx, cy) and WaterMap.surfaceCell(map, cx, cy) then
       return cx * 16 + rand(1, 15), cy * 16 + rand(1, 15), "water", 0
     end
   end
@@ -1356,7 +1358,7 @@ local function surfaceAt(ow, wx, wz)
   local cx = math.floor((wx or 0) / 16)
   local cy = math.floor((wz or 0) / 16)
   if not map:inBounds(cx, cy) then return 0, "ground" end
-  if map:isWaterCell(cx, cy) then
+  if WaterMap.surfaceCell(map, cx, cy) then
     local y = Weather.SPLASH_POND_LIFT
     local ok, s = pcall(Water.surfaceAt, wx, wz)
     if ok and tonumber(s) then y = s end

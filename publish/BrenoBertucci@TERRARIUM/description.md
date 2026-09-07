@@ -38,6 +38,13 @@ Upstream Dramatic Shape still uses `3` / `5` / `6` / `7` / `8` / `9`.
 - Wild Pokemon visible in the grass; ecology / shelter / city life systems
 - Tuned defaults for lower-end / mobile hardware
 
+## New in 1.31.0-beta
+
+**Beta for testers. Nothing more.**
+
+The zip now includes the battle UI art, so the Clair Obscur staged fight
+looks the same for everyone who downloads it.
+
 ## New in 1.30.1
 
 If the 3D mode never came up for you on Android, this is the build.

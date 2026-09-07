@@ -74,6 +74,8 @@
 
 -- the mod namespace (see main.lua): V.require loads a sibling module
 local V = ...
+local WaterMap = V.require("WaterMap")   -- where water may be drawn at all
+
 
 local ModSetting = V.require("ModSetting")
 local DayNight = V.require("DayNight")
@@ -924,7 +926,7 @@ function GroundFX.puddleScore(map, cx, cy)
       if dx ~= 0 or dy ~= 0 then
         local nx, ny = cx + dx, cy + dy
         if map:inBounds(nx, ny) then
-          if map:isWaterCell(nx, ny) then
+          if WaterMap.surfaceCell(map, nx, ny) then
             waterN = waterN + 1
           elseif not map:isWalkableCell(nx, ny) then
             if groundAt(map, nx, ny) > h + 3 then walls = walls + 1 end

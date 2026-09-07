@@ -55,18 +55,32 @@ local ModSetting = V.require("ModSetting")
 local Trees3D = {}
 
 -- The TREES options row picks the path:
---   3D     the authored bake on every round-tree site (default)
---   VOXEL  the classic outline-hulled ball, even with the bake on disk
--- available() answers false on VOXEL, which is the single gate the mesher
+--   VOXEL    the authored bake on every round-tree site (default)
+--   CLASSIC  the outline-hulled ball carved from the tileset's own art
+--
+-- THE LABELS SWAPPED MEANING, and that was the point rather than an
+-- accident. The authored path used to be a decimated photogrammetry GLB, so
+-- "3D" against "VOXEL" named the real difference: a scanned mesh or a hull.
+-- It is now tools/bake_voxel_tree.py's grown voxel tree, which makes "3D"
+-- the wrong word for it and "VOXEL" the right one -- and it left the row
+-- saying the opposite of what it did, offering a player who wants voxels
+-- the one option that is not.
+--
+-- ModSetting.indexOf falls back to values[1] for anything it does not
+-- recognise, so a save left on the old "voxel" AND one left on the old "3d"
+-- both land on the bake. Nobody has to re-pick, and nobody who asked for
+-- voxels keeps getting hulls.
+--
+-- available() answers false on CLASSIC, which is the single gate the mesher
 -- consults -- so the row decides at chunk-build time, and flipping it has
 -- to drop the built meshes (remesh below) or the forest keeps the shape it
 -- was built with.
 Trees3D.setting = ModSetting.new("trees3d", "TREES",
-                                 { "3d", "voxel" },
-                                 { "3D", "VOXEL" })
+                                 { "voxel", "classic" },
+                                 { "VOXEL", "CLASSIC" })
 
 function Trees3D.wants3D()
-  return Trees3D.setting:get() == "3d"
+  return Trees3D.setting:get() ~= "classic"
 end
 
 -- Remesh every map when the row flips: hull quads vs recorded sites are
@@ -107,14 +121,31 @@ Trees3D.ASSET_DIR = "assets/ground/tree/"
 -- Species ship as sibling bakes. Each carries its own texture, so each is
 -- its own mesh and its own draw call -- four species is four calls for the
 -- whole forest, which is still nothing next to the hulls' one.
-Trees3D.SPECIES = { "tree_willow" }
+Trees3D.SPECIES = { "oak", "pine", "birch", "willow" }
 
 -- Per-tree ceiling, checked against what the bake actually contains. The
 -- number is not a preference: this template is stamped on EVERY round-tree
 -- site, so its cost is multiplied by the forest. Refusing is the honest
 -- answer -- the hulls are the classic path, they are free, and a forest
 -- that draws beats one that is correct and does not.
-Trees3D.MAX_TRIS = 450
+--
+-- 450 WAS THE WRONG UNIT, and it refused meshes cheaper than the one it
+-- was protecting. What this hardware pays for is the VERTEX stage: the
+-- forest is one mesh and every vertex runs the sway branch. The GLB bake it
+-- was written for spent 1091 verts on 420 triangles, because a decimator's
+-- output shares almost nothing between faces. A greedy-meshed voxel quad is
+-- 4 verts and 2 triangles, so the same 1091 verts buy 544 triangles -- and
+-- a limit written in triangles reads that as 20% more expensive when it is
+-- exactly the same cost.
+--
+-- 1200 admits the four species in tools/bake_tree.py at its default
+-- lattice (RES = 0.6): 640 to 1100 triangles, 1300 to 2100 verts, one
+-- lattice for wood and leaves so the crown is lobes rather than crates.
+-- Against the shipped GLB that is roughly 1.6x the vertices on the species
+-- average; the frame cost of that is measured in tests/treevox_probe.lua
+-- (run_treefable.cmd), and the knob that buys it back is --res in the
+-- baker, not this number.
+Trees3D.MAX_TRIS = 1200
 
 -- Whole-map ceiling. Past this the map keeps its hulls rather than paying
 -- a build hitch measured in seconds.
@@ -153,6 +184,27 @@ Trees3D.CARD_UV_CUT = 0.75
 -- The fade is real and it is the right shape (a fade reads as loading, a
 -- stutter reads as broken), but there is no headroom left in it -- do not
 -- raise this without re-running the probe's build timing.
+--
+-- DROPPED 6 -> 4 WITH THE VOXEL BAKE, THEN PUT BACK, and the round trip is
+-- worth keeping because the reason it came back is not the reason it left.
+--
+-- It dropped because the stamp is a per-vertex loop and the voxel species
+-- were heavier than the 1091-vert GLB it was tuned against: the probe
+-- measured 2.03 ms/site, so six would have been 12 ms of a 16.7 ms frame.
+--
+-- It went back to 6 because SHADOW_PROXY changed the arithmetic underneath
+-- it. stampRange stamps a site TWICE -- once into the scene mesh and once
+-- into the caster -- and the caster went from the card-less solid mesh
+-- (~1400 verts) to a 34-vert hull. So the second stamp all but disappeared,
+-- and the probe now measures:
+--
+--     874.2 ms for 862 trees = 1.01 ms/site, so a 6-site slice is 6.1 ms
+--
+-- That is under the ~7.8 ms the note above settled on, at the top of the
+-- measurement's own range (0.80-1.20 ms/site) as well as at its median. So
+-- six is not a return to the old risk -- it is strictly safer than the
+-- configuration that number was written for, and the forest fades in half
+-- again as fast.
 Trees3D.SLICE_SITES = 6
 
 -- The sun's depth pass draws the card-less mesh (see solidIndices below).
@@ -186,6 +238,15 @@ Trees3D.SLICE_SITES = 6
 -- (What actually settled the noise: this run was the first with the depth
 -- pass no longer advancing the build. Same hardware, same map.)
 Trees3D.SHADOW_SOLID_ONLY = true
+
+-- Cast from a measured hull instead of the tree (see buildShadowProxy).
+--
+-- A switch rather than a decision, for the same reason SHADOW_SOLID_ONLY is
+-- one: the claim "the sun does not need the leaves" is an argument until a
+-- probe diffs the two passes with it on and off, and this renderer has a
+-- history of arguments that turned out to cost nothing. Flip it in
+-- tests/treevox_probe.lua and remesh to price it.
+Trees3D.SHADOW_PROXY = true
 
 -- Advances a build may go untouched before it is thrown away.
 --
@@ -323,6 +384,177 @@ local function loadTexture(name)
   return nil
 end
 
+-- ------- WHAT THE SUN ACTUALLY NEEDS
+--
+-- The depth pass costs MORE than the scene pass, and it is drawing detail
+-- that cannot survive into a shadow. Measured on ROUTE_2, 862 trees, clear
+-- sky, medians of 3 x 100 frames (spreads 1-12%):
+--
+--     no trees            21.55 ms/frame
+--     + the scene pass    28.78   (+7.24)
+--     + the sun's pass    39.96   (+11.18)
+--
+-- Eleven milliseconds to re-draw ~700 triangles per tree into a depth
+-- buffer, so that a canopy fifty pixels across can put a soft grey patch on
+-- the grass. SHADOW_SOLID_ONLY already dropped the alpha cards from that
+-- pass for the same reason; this is the rest of the argument.
+--
+-- So the caster is not the tree. It is a HULL of the tree: a six-sided
+-- barrel whose ring radii are measured off the bake's own crown, band by
+-- band, plus a prism for the bole. ~60 triangles against ~700, and the
+-- silhouette it casts is the silhouette the real crown casts, because the
+-- rings come from the real crown rather than from a guessed cylinder.
+--
+-- MEASURED OFF THE MESH, NOT DERIVED FROM canopyR. A single radius makes
+-- every species the same barrel, which throws away the one thing the
+-- shadows differ by: the pine tapers to a point and the oak does not, and
+-- at this size the taper is most of what says "conifer" in a shadow.
+--
+-- The proxy carries the same canopy weights as the crown it replaces, even
+-- though the depth pass sends no `sway` today and therefore cannot bend it.
+-- That is deliberate: the day the shadow does sway, a proxy weighted zero
+-- would hold a still shadow under a moving tree, and that reads as a bug in
+-- the wind rather than as a stale assumption here.
+local PROXY_SIDES, PROXY_BANDS = 6, 3
+
+local function buildShadowProxy(tpl)
+  local verts, weights = tpl.verts, tpl.weights
+  local solid = tpl.solidIndices
+  if not (verts and solid and #solid >= 3) then return end
+
+  -- Only vertices the SOLID mesh actually uses. A card vertex sits out past
+  -- the crown by design, so letting one into the profile would inflate every
+  -- ring to the reach of the fringe.
+  local used = {}
+  for i = 1, #solid do used[solid[i]] = true end
+
+  -- One UV for the whole proxy, borrowed from a solid vertex so it is
+  -- guaranteed to land on an opaque texel. The fragment stage still runs its
+  -- alpha discard in the depth pass, and a proxy pointed at a transparent
+  -- corner of the atlas would cast no shadow at all -- silently, and only
+  -- for whichever species had a hole there.
+  local uu, vv = 0.5, 0.5
+  for i = 1, #verts do
+    if used[i] and verts[i][5] <= Trees3D.CARD_UV_CUT then
+      uu, vv = verts[i][4], verts[i][5]
+      break
+    end
+  end
+
+  local h = tpl.height or 0
+  local cy = tpl.canopyY or 0
+  if not (h > 0) or cy >= h then return end
+  -- A crown that reaches the ground (the droopy species do) leaves no bole
+  -- to model; the barrel simply starts at zero.
+  local hasTrunk = cy > h * 0.06
+
+  local pv, pi, pw = {}, {}, {}
+  local function put(x, y, z, w)
+    pv[#pv + 1] = { x, y, z, uu, vv, 0.80 }
+    pw[#pw + 1] = w
+    return #pv
+  end
+  local function tri(a, b, c)
+    pi[#pi + 1] = a; pi[#pi + 1] = b; pi[#pi + 1] = c
+  end
+
+  -- ---- the crown, band by band
+  local bandH = (h - cy) / PROXY_BANDS
+  local rings = {}
+  local crownW = 0
+  local nW = 0
+  for k = 0, PROXY_BANDS do
+    local y = cy + bandH * k
+    local r, w, n = 0, 0, 0
+    for i = 1, #verts do
+      if used[i] then
+        local v = verts[i]
+        if math.abs(v[2] - y) <= bandH * 0.65 and v[2] >= cy - 0.001 then
+          local d = math.sqrt(v[1] * v[1] + v[3] * v[3])
+          if d > r then r = d end
+          w = w + (weights[i] or 0); n = n + 1
+        end
+      end
+    end
+    if n > 0 then w = w / n else w = crownW end
+    -- An empty band (a crown with a waist, or the very tip) keeps a token
+    -- radius rather than pinching the barrel shut on a ring nothing
+    -- measured.
+    if r <= 0 then r = (tpl.canopyR or 1) * 0.25 end
+    rings[k] = { y = y, r = r, w = w }
+    crownW = crownW + w; nW = nW + 1
+  end
+  crownW = (nW > 0) and (crownW / nW) or 0.6
+
+  local ringIdx = {}
+  for k = 0, PROXY_BANDS do
+    local ring = rings[k]
+    local idx = {}
+    for s = 0, PROXY_SIDES - 1 do
+      local a = (s / PROXY_SIDES) * math.pi * 2
+      idx[s] = put(math.cos(a) * ring.r, ring.y, math.sin(a) * ring.r, ring.w)
+    end
+    ringIdx[k] = idx
+  end
+  for k = 0, PROXY_BANDS - 1 do
+    local lo, hi = ringIdx[k], ringIdx[k + 1]
+    for s = 0, PROXY_SIDES - 1 do
+      local t = (s + 1) % PROXY_SIDES
+      tri(lo[s], lo[t], hi[t])
+      tri(lo[s], hi[t], hi[s])
+    end
+  end
+  -- caps: a fan to the axis at each end, so the barrel is a closed volume
+  -- and the depth buffer never sees through it from above
+  local topC = put(0, h, 0, rings[PROXY_BANDS].w)
+  local botC = put(0, cy, 0, rings[0].w)
+  for s = 0, PROXY_SIDES - 1 do
+    local t = (s + 1) % PROXY_SIDES
+    tri(ringIdx[PROXY_BANDS][s], ringIdx[PROXY_BANDS][t], topC)
+    tri(ringIdx[0][t], ringIdx[0][s], botC)
+  end
+
+  -- ---- the bole
+  if hasTrunk then
+    -- THE LOWER PART OF THE BOLE ONLY. Measuring the whole band below the
+    -- crown catches the flare where the first limbs leave the trunk, and a
+    -- prism built on that reach casts a stalk as wide as a branch spread --
+    -- which on the oak and the birch, whose crowns start past half height,
+    -- is most of the tree's width laid on the grass. The bottom 60% is
+    -- unambiguously bole.
+    local tr = 0
+    local boleTop = cy * 0.6
+    for i = 1, #verts do
+      if used[i] then
+        local v = verts[i]
+        if v[2] < boleTop then
+          local d = math.sqrt(v[1] * v[1] + v[3] * v[3])
+          if d > tr then tr = d end
+        end
+      end
+    end
+    if tr > 0.2 then
+      local SIDES = 4
+      local lo, hi = {}, {}
+      for s = 0, SIDES - 1 do
+        local a = (s / SIDES) * math.pi * 2 + math.pi / SIDES
+        local x, z = math.cos(a) * tr, math.sin(a) * tr
+        lo[s] = put(x, 0, z, 0)
+        hi[s] = put(x, cy, z, math.min(crownW * 0.35, 0.4))
+      end
+      for s = 0, SIDES - 1 do
+        local t = (s + 1) % SIDES
+        tri(lo[s], lo[t], hi[t])
+        tri(lo[s], hi[t], hi[s])
+      end
+    end
+  end
+
+  tpl.shadowVerts = pv
+  tpl.shadowIndices = pi
+  tpl.shadowWeights = pw
+end
+
 -- A "TTR2" bake:
 --
 --   0  "TTR2"          8  indices       16  height    24  canopy y
@@ -438,6 +670,7 @@ local function loadTemplate(name)
     canopyY = canopyY, canopyR = canopyR,
     trunkIndices = nTrunk,
   }
+  buildShadowProxy(templates[name])
   return templates[name]
 end
 
@@ -551,7 +784,11 @@ local function placement(site, nNames)
     pick = pick,
     yaw = unit(mx, mz, 1) * math.pi * 2,
     scale = siteScale * (1.55 + unit(mx, mz, 2) * 0.55),
-    yscale = siteScale * (1.05 + unit(mx, mz, 4) * 0.75),
+    -- WAS 1.05-1.80 against a 1.55-2.10 width scale, which squashed every
+    -- bake into a bush: a 52 px oak landed 27-47 px tall next to a 16 px
+    -- cell.  Matching the width range stands the forest up without moving
+    -- the canopy-cover discs (those use `scale`, not yscale).
+    yscale = siteScale * (1.50 + unit(mx, mz, 4) * 0.55),
     -- Wider canopies close the gaps but make the 16px GRID louder, not
     -- quieter: bigger discs on exact lattice points read as a pattern. A
     -- few pixels of offset per site breaks the rows without moving a tree
@@ -577,9 +814,17 @@ function Trees3D.stampRange(st, from, to)
     local tpl = templates[names[pick]]
     stamp(b.verts, b.indices, tpl.verts, tpl.indices, mx + jx, mz + jz,
           yaw, scale, yscale, tpl.weights)
+    -- The caster is the HULL when there is one (buildShadowProxy above),
+    -- and the card-less solid mesh when there is not -- an older bake, or
+    -- one whose crown the profile could not read.
     local sb = st.shadow[pick]
-    stamp(sb.verts, sb.indices, tpl.verts, tpl.solidIndices, mx + jx, mz + jz,
-          yaw, scale, yscale, tpl.weights)
+    if Trees3D.SHADOW_PROXY and tpl.shadowVerts then
+      stamp(sb.verts, sb.indices, tpl.shadowVerts, tpl.shadowIndices,
+            mx + jx, mz + jz, yaw, scale, yscale, tpl.shadowWeights)
+    else
+      stamp(sb.verts, sb.indices, tpl.verts, tpl.solidIndices, mx + jx, mz + jz,
+            yaw, scale, yscale, tpl.weights)
+    end
   end
 end
 
@@ -697,7 +942,22 @@ function Trees3D.eachCanopyCell(map, fn)
         -- SUB x SUB point tests on a handful of cells per site, once per
         -- map bind, is nothing; being wrong by an order of magnitude on
         -- every cell of every wood is not.
-        local SUB = 4
+        --
+        -- AND THE SUB-GRID SHRINKS AS THE CROWN GROWS, because the error it
+        -- was written against does too. A 4x4 grid was needed when a crown
+        -- was ~14 px across the radius and a cell is 16: at that size a cell
+        -- is BIGGER than the thing it is sampling, so its centre routinely
+        -- misses a crown covering most of it. The voxel bake's crowns reach
+        -- 29-53 px, where a cell sits well inside the disc and 2x2 lands
+        -- within a few percent of 4x4.
+        --
+        -- The cost is not academic: this is a triple loop per site over the
+        -- crown's whole footprint, and the footprint grows with the SQUARE
+        -- of the radius. Holding 4x4 through a 1.6x wider crown would have
+        -- turned ~230k point tests per map bind into ~600k -- tens of
+        -- milliseconds of Lua on the frame a map loads, which is the one
+        -- frame that can least afford it.
+        local SUB = (r > 24) and 2 or 4
         local step = CELL / SUB
         local inv = 1 / (SUB * SUB)
         local r2 = r * r
@@ -887,7 +1147,23 @@ end
 -- The same knob Wind.FLOWER_SHARE is, and for the same reason: the wind is
 -- one system with one bearing and one clock, and everything standing in it
 -- takes a share rather than keeping its own weather.
-Trees3D.WIND_SHARE = 2.2
+--
+-- RAISED 2.2 -> 2.9 WITH THE VOXEL BAKE, and the reason is that this number
+-- was never really about the wind -- it is about how far a crown may move
+-- BEFORE IT LOOKS DETACHED, and that ceiling scales with the tree. The old
+-- bake stood 28.5 px with a 15.7 px crown, and 2.2 was measured as its
+-- limit (4.4 turned the canopy to a blur). The voxel species stand 40-48 px
+-- with crowns of 18.6-25.4, about 1.6x, so holding 2.2 would have quietly
+-- made the forest stiffer than the one it replaced while the number on the
+-- page said nothing had changed.
+--
+-- 2.9 is that ratio applied, kept short of it deliberately: a blocky canopy
+-- shows a sliding leaf more plainly than a smooth one, because the voxel
+-- grid gives the eye a straight edge to notice the shear against.
+-- 2.9 -> 3.4: photo leaf cards give the eye a lobe to follow, so the same
+-- shear that looked like a sliding voxel now reads as leaves in the wind.
+-- Still short of the old 4.4 that turned the crown into a blur.
+Trees3D.WIND_SHARE = 3.4
 
 -- Draw this map's forest. One call per species, under the hour's own light
 -- exactly like the terrain -- no flatten pass, a tree is not a lamp.

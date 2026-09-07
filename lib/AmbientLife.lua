@@ -51,6 +51,8 @@
 
 -- the mod namespace (see main.lua): V.require loads a sibling module
 local V = ...
+local WaterMap = V.require("WaterMap")   -- where water may be drawn at all
+
 
 local ModSetting = V.require("ModSetting")
 local DayNight = V.require("DayNight")
@@ -250,7 +252,7 @@ local function waterCellNear(ow)
   for _ = 1, CELL_TRIES do
     local cx = p.cellX + rand(-RADIUS, RADIUS)
     local cy = p.cellY + rand(-RADIUS, RADIUS)
-    if map:inBounds(cx, cy) and map:isWaterCell(cx, cy) then
+    if map:inBounds(cx, cy) and WaterMap.surfaceCell(map, cx, cy) then
       return cx * 16 + rand(2, 14), cy * 16 + rand(2, 14)
     end
   end

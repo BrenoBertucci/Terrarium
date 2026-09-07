@@ -23,6 +23,8 @@
 
 -- the mod namespace (see main.lua): V.require loads a sibling module
 local V = ...
+local WaterMap = V.require("WaterMap")   -- where water may be drawn at all
+
 
 local Collision = require("src.world.Collision")
 local SpriteRenderer = require("src.render.SpriteRenderer")
@@ -74,7 +76,7 @@ local nextId = 0
 function Roamer.standable(kind, map, cx, cy)
   if not map:inBounds(cx, cy) then return false end
   if map:warpAtCell(cx, cy) then return false end
-  if kind == "water" then return map:isWaterCell(cx, cy) end
+  if kind == "water" then return WaterMap.surfaceCell(map, cx, cy) end
   if not map:isWalkableCell(cx, cy) then return false end
   if kind == "grass" then return map:isGrassCell(cx, cy) end
   return true

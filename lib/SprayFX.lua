@@ -35,6 +35,8 @@
 -- the everyday feature; the waterfall waits for a reason to exist.
 
 local V = ...
+local WaterMap = V.require("WaterMap")   -- where water may be drawn at all
+
 
 local Wind = V.require("Wind")
 local WindFX = V.require("WindFX")
@@ -76,8 +78,7 @@ local function scan(map)
   for i = #S.shore, 1, -1 do S.shore[i] = nil end
   S.mapId = map.id
   local function water(cx, cy)
-    local ok, w = pcall(map.isWaterCell, map, cx, cy)
-    return ok and w or false
+    return WaterMap.surfaceCell(map, cx, cy)
   end
   for cy = 0, SprayFX.SCAN - 1 do
     for cx = 0, SprayFX.SCAN - 1 do

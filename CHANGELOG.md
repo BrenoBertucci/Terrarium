@@ -20,9 +20,206 @@ The old `-mobile` channel is retired. Historical tags keep it (`v1.28.0-mobile` 
 
 Tags and packages:
 
-- Git tag: `v1.30.1`
-- Zip asset: `TERRARIUM-1.30.1.zip`
-- `manifest.json` / catalog `version` field: `1.30.1`
+- Git tag: `v1.31.0-beta`
+- Zip asset: `TERRARIUM-1.31.0-beta.zip`
+- `manifest.json` / catalog `version` field: `1.31.0-beta`
+
+## Unreleased
+
+## 1.31.0-beta
+
+**Beta for testers. Nothing more.**
+
+The zip includes the battle UI art (`assets/battlexy`, `assets/hudxy`,
+`assets/menuxy`) so the Clair Obscur staged fight -- glass plates, Unova
+capsules, command buttons, HUD -- looks the same for everyone who
+downloads it. Without those files the fight falls back to Game Boy
+panels.
+
+### The forest is grown, not scanned (`tools/bake_tree.py`, `lib/Trees3D.lua`, `lib/Voxel3D.lua`, `main.lua`)
+
+The report was that the trees are small, flat and never move. All three were
+true, and none of them were about the trees: the **TREES** row was set to
+`voxel`, and in this code `voxel` meant *the Gen 1 hull* -- the outline-hulled
+ball carved from the tileset's own art. So the forest on screen was one sphere
+repeated across every cell, and it could not move in the wind even in
+principle, because a hull rides in the chunk mesh and the chunk mesh never
+receives the sway uniform. No amount of work on the bake would have fixed it.
+
+**The row's two labels swapped meaning.** `VOXEL` is now the authored bake and
+`CLASSIC` is the hull. `ModSetting.indexOf` falls back to `values[1]`, so a
+save left on the old `voxel` and one left on the old `3d` both land on the
+bake -- nobody re-picks, and nobody who asked for voxels keeps getting hulls.
+
+**Every tree site is one cell, which is the fact the whole shape depends on.**
+`placement` reads `siteScale = (site.r or 8) / 16` and it looks like a bake is
+stamped at 1.55x-2.10x. It is not: `site.r` is 8 on all 2325 sites the probes
+counted across four maps -- the 2x2 `r=16` branch in `Structures` never fires
+on a Gen 1 tileset. The real scale is 0.78x-1.05x, so **a bake's file height is
+its world height**, against a 16 px cell. Getting this wrong is expensive and
+silent: a first round of species authored at 27-34 px came out at exactly the
+on-screen size of the bake that prompted the complaint, for twice its vertex
+cost. Height is pure scale and costs nothing; resolution is what costs.
+
+**`tools/bake_tree.py` grows the tree.** Four species (oak, pine, birch,
+willow) on ONE lattice -- leaves on a doubled lattice read as crates painted
+green at this size -- with the crown built as overlapping ellipsoid lobes
+rather than a single mass, rims eaten by low-frequency noise so no outline is
+a circle, ambient occlusion baked into the vertex shade, and a fringe of alpha
+cards cut from CC0 leaf photographs (`tools/make_leaf_cards.py`). The willow's
+fronds are cards rather than geometry. Bakes stand 40-50 px, so 2.1-3.1 cells,
+with crowns narrow enough (radius under ~18 px) to stay separate while still
+touching their neighbours a cell away -- a wood, not a row of parasols.
+
+**The budget moved because its unit was wrong.** `Trees3D.MAX_TRIS` was 450,
+written against a decimated GLB that spent 1091 verts on 420 triangles. What
+costs here is the vertex stage -- the forest is one mesh and every vertex runs
+the sway branch -- and a greedy voxel quad is 4 verts to 2 triangles, so the
+same 1091 verts buy 544 triangles. A limit in triangles read that as 20% more
+expensive when it was identical. It is now 1200. `SLICE_SITES` drops 6 -> 4:
+the stamp is a per-vertex loop and a site measures 1.78 ms, so a four-site
+slice is 7.1 ms of a 16.7 ms frame where six would have been over eleven.
+
+**Wind, in three tiers.** The crown still rolls as one mass on a single
+harmonic with the rain tick over it. Above `grassDetail >= 2` a branch tier
+swings on a hash of the vertex's own 8 px cell, with an intermittent activity
+envelope so a wood is never uniformly busy, and above that a leaf tier that
+only cards reach: each card pivots on its hinge, reading `VertexTexCoord` for
+how far along and across the leaf a vertex sits, with a shade glint as it
+turns. `WIND_SHARE` goes 2.2 -> 2.9 because that number is really "how far a
+crown may move before it looks detached" and the ceiling scales with the tree;
+the mass tier then takes 0.38 of it and the rest is spent on the two tiers
+above.
+
+**Canopy cover sub-sampling is now adaptive.** `eachCanopyCell` sampled every
+cell on a 4x4 grid because a crown used to be about the size of a cell and
+centre-sampling missed. The new crowns span 2-3 cells, where 2x2 lands within
+a few percent -- and the loop runs over a footprint growing with the square of
+the radius, so holding 4x4 would have turned ~230k point tests per map bind
+into ~600k, on the one frame a map load can least afford.
+
+**The sun does not need the tree, it needs its shape** (`SHADOW_PROXY`). The
+depth pass cost MORE than the scene pass, re-drawing ~600 solid triangles per
+tree so that a canopy fifty pixels across could put a soft patch on the grass.
+It now casts from a hull derived at load: a six-sided barrel whose ring radii
+are measured off the bake's own crown band by band, plus a four-sided prism
+for the bole. Measured off the mesh rather than from `canopyR`, because a
+single radius makes every species the same barrel and throws away the one
+thing shadows differ by -- the pine tapers and the oak does not. Card vertices
+are excluded from the profile or the fringe inflates every ring, and the bole
+is measured over its bottom 60% only: taking the whole band below the crown
+catches the flare where the first limbs leave, and on species whose crown
+starts past half height that cast a stalk as wide as a branch spread.
+
+    caster        2058 -> 224 triangles (9.2x),  5356 -> 136 verts (39.4x)
+    full mesh     38.35 ms/frame   (spread  4%)
+    hull          30.95 ms/frame   (spread  4%)
+    hull, repeat  32.99 ms/frame   -- drift 2.04 ms against a 7.40 ms effect
+
+**And the shadow got better, not merely cheaper**, which is worth holding on
+to before trusting that number: a caster that vanished entirely would post a
+better one. Compare `treeshadow_full.png` with `treeshadow_proxy.png` -- under
+the solid mesh the ground beneath the trees is almost unshaded, because a
+voxel canopy is mostly gaps at shadow-map resolution and every leaf lets light
+past. The pass was paying seven milliseconds to cast almost nothing.
+
+It also paid for `SLICE_SITES`, which went 6 -> 4 with the voxel bake and then
+back to 6. `stampRange` stamps every site twice, once into the scene mesh and
+once into the caster, and the caster fell from ~1400 verts to 34 -- so the
+second stamp all but vanished and a site now measures **1.01 ms** against the
+2.03 ms that forced the drop. A six-site slice is 6.1 ms, under the 7.8 ms
+budget even at the top of the measurement's range, so the forest fades in half
+again as fast than it did at four.
+
+**What the forest costs now**, ROUTE_2, 862 trees, clear sky, medians of
+3 x 100 frames, with the repeat landing 0.04 ms from the first reading:
+
+    no trees        23.08 ms/frame   (spread 41% -- the shakiest reading here)
+    + scene pass    27.97            (+4.88, spread  3%)
+    + sun pass      31.01            (+3.04, spread 31%; repeat 31.16)
+
+Against the same probe's reading of the system this replaces -- the GLB bake
+with the solid caster -- at +7.24 ms in the scene and +11.18 in the sun, the
+whole forest more than halved while the trees roughly doubled in size. And the
+authored forest now measures 31.01 ms/frame against the hulls' 31.32, which is
+a difference far inside both spreads: **at this precision the grown forest and
+the free one cost the same**. That is a claim about this machine and this
+route, not a general one, and the hull sample's own min-to-max ran 6.28 to
+14.55 ms/tick -- it is quoted as "indistinguishable", never as "cheaper".
+
+One caveat carried from the probe's own output: it reports `the depth pass was
+cached (ShadowMap.stale)` during the sub-test that toggles the caster without
+rebuilding, so the +3.04 ms attributed to the sun above is a floor rather than
+a figure. The trustworthy shadow number is the A/B further up, which rebuilds
+the meshes between states and therefore cannot be served a cached pass.
+
+Probes: `tests/treeshadow_probe.lua` (the shadow A/B, which refuses its own
+result if the spreads exceed 15% or the drift between two readings of one
+state is as large as the difference between states), `tests/treevox_probe.lua`
+(bake numbers, pictures, and a PAIRED wind A/B -- measuring amplitudes in
+sequential blocks reads the weather, not the wind), and `tools/bake_tree.py`'s
+own preview.
+
+### Where the water is (`lib/WaterMap.lua`, `lib/TileShape.lua`, `data/voxel_heights.lua`, +9 callers)
+
+Three reports from the same demo, and one cause under all of them: nothing in
+this mod ever checked whether a map's tileset is allowed to have water.
+
+`Map.new` (`src/world/Map.lua`) builds its water set from a stale-cache
+fallback, because no Gen 1 tileset record stamps `waterTiles`/`shoreTiles`:
+`$14` is water on **every** tileset in the game, and `$32`/`$48` are shore on
+every tileset but `SHIP_PORT`. The engine knows -- `Map:isWaterCell`'s own
+comment says *"Tileset membership in water_tilesets.asm is checked by the
+caller"*, and `OverworldState:tilesetHasWater` is where it checks. This mod was
+the caller that never did, so it drew water wherever those three ids happened
+to be used as furniture.
+
+Measured over every Red map: **31 tiles of pond in the Indigo Plateau Pokemon
+Center** (tileset `MART` -- the two healing machines and the lobby planter),
+**72 under the dragon statues of Lance's room** and 8 more in the Fighting Dojo
+(`DOJO`, where `$32` is a plinth and there is no water in the building at all).
+
+`lib/WaterMap.lua` is the gate those callers were missing, and it answers three
+questions the old one-liner could not:
+
+1. **The tileset.** Only a tileset in `data.field.waterTilesets` may hold water.
+   A ROM that ships no such table -- Gold, a stub map in a probe -- ALLOWS
+   everything rather than refusing it: an unknown gate must not blank the water
+   of a game the list was never written for.
+2. **Shore is not surface.** `$32`/`$48` are the tiles you may mount Surf FROM.
+   On the overworld they are drawn as the water's own diagonal edge and stay
+   wet; in the Dojo the same id is a statue's base. What separates them is not
+   the id but whether real water is beside it, so a shore tile is a surface
+   only when a 4-neighbour cell carries the tileset's true water tile.
+3. **The art is per tile, the collision is per cell.** Gen 1 draws a shore cell
+   with the BANK in its top half over the water in its bottom (`$33` over `$14`
+   the length of Cerulean's channel, `$54` and `$31` elsewhere). Painting the
+   whole cell sank the bank to the water plane, and 1488 tiles across 21 maps
+   lost their shoreline lip -- which is why the water at Cerulean's seams read
+   as a slab with a hard edge instead of a bank running into a channel.
+
+And the same gate the other way round. **`CAVERN`'s `$14` was pinned `ground`**,
+so Seafoam's channels and Cerulean Cave's lake were the only water in the game
+with no depth at all: a flat pool lying level with the rock, running straight
+into the foot of every flight of steps beside it. That pin was right when
+`water` was one quad at -2 and wrong now that it is a basin with a bed under a
+translucent surface -- 1744 tiles across the four cave maps are real water
+again, and the stairs come down to a bank instead of into a puddle.
+
+Nine ambient readers moved onto the same gate, so a Center's counter no longer
+attracts fish, ripples, splash sounds or a blue patch on the minimap:
+`AmbientLife`, `AmbientSound`, `Ecology`, `Roamer`, `Weather`, `SprayFX`,
+`MiniMap`, `GrassWear`, `GroundFX`, plus `WaterBody`'s size field and the ice
+walk in `Water.lua`. Gameplay is untouched: surf, collision and encounters
+still ask the engine.
+
+Measured with `tests/water_where_probe.lua` (per-tile class dump from the live
+`TileShape`, not from the data files): Indigo Plateau Lobby 31 -> 0, Lance's
+room 72 -> 0, Fighting Dojo 8 -> 0, Cerulean 612 -> 600 (the 12 bank tiles
+back at ground), Route 4 108 -> 90, Seafoam B4F 0 -> 816, B3F 0 -> 304,
+Cerulean Cave 1F 0 -> 272, B1F 0 -> 272. Mt Moon, Rock Tunnel and Victory Road
+stay dry, and `tests/water_look_probe.lua` builds all six overworld water maps
+with no shader error and no frame cost.
 
 ## 1.30.1
 

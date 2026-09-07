@@ -420,6 +420,15 @@ local SHADER = [[
   float tuftHash(vec2 cell) {
     return fract(sin(dot(cell, vec2(127.1, 311.7))) * 43758.5453);
   }
+  // A triangle wave with its corners rounded off (Crytek's
+  // SmoothTriangleWave, GPU Gems 3 ch. 16). What the leaves flutter on:
+  // it has a flat crest a sine does not, so a leaf HOLDS at the end of
+  // each turn instead of passing through it, and it costs a fract and a
+  // multiply against a sine's polynomial. 0..1.
+  float smoothTri(float x) {
+    float t = abs(fract(x + 0.5) * 2.0 - 1.0);
+    return t * t * (3.0 - 2.0 * t);
+  }
   vec4 position(mat4 transform_projection, vec4 vertex_position) {
     // magnitude is the shading, sign is the face normal's Y (see vUp). A
     // shade is a product of positive factors with a floor well above zero,
@@ -537,12 +546,117 @@ local SHADER = [[
         // envelope. A separate storm curve would be two winds disagreeing
         // about which way the air is going, in the same wood, on the same
         // frame.
-        float amp = sway * (1.0 + 0.55 * gust);
+        // A THIRD of the reach goes to the mass, and that is the fix for
+        // the whole crown sliding sideways off its trunk as one rigid
+        // block, which is what the motion probe photographed under a
+        // gale (tests/treefable_motion_probe.lua): a canopy does not
+        // translate, its parts move. The rest of the reach is spent
+        // below, on twigs and leaves, where the eye reads wind.
+        float amp = sway * (1.0 + 0.55 * gust) * 0.38;
         w.xz += windDir * (amp * bend * wave);
         // No arc-length drop, unlike the grass. That term is lean^2/2H,
         // and at a canopy's amplitude over a tree's height it is a
         // fraction of a pixel -- a dot and a divide per vertex to move
         // nothing visible.
+
+        // ------- THE LEAVES, ON TOP OF THE MASS (tier 2)
+        //
+        // The roll above is the crown moving as one thing, and on its own
+        // it reads as a bush being pushed. What says LEAVES is the second
+        // layer Crytek calls detail bending (GPU Gems 3, ch. 16): every
+        // leaf turning on its own stalk, out of phase with its
+        // neighbours, at a few cycles a second -- so the crown shimmers
+        // while it rolls.
+        //
+        // Who flutters is read off the weight the bake already packed.
+        // Wood is under 0.6; a leaf voxel face sits 0.6..0.98 depending
+        // on the branch under it; a card (the cutout leaf cluster on the
+        // fringe) carries 0.999. smoothstep turns that into a share, so a
+        // twig tip jitters a little, a clump face more, and the fringe
+        // does the whole dance. Nothing new in the mesh.
+        //
+        // Per-leaf phase from the vertex's OWN position in the map (the
+        // forest is stamped in map space, `model` is a translate), on an
+        // 8 px cell: one card is ~10-15 px, so its four corners mostly
+        // share a phase and the ones that straddle a cell bend the leaf,
+        // which is what a leaf does. Hashed off the model position rather
+        // than `w`, which the roll above has already moved.
+        //
+        // Tier-gated like the meadow's flutter, for the same reason: this
+        // is texture on the motion, and OFF/LOW rungs keep the roll only.
+        // Cost at FULL is one hash and two smoothTri per canopy vertex --
+        // measured against the roll's own 0.23 ms/frame on ROUTE_2 in
+        // tests/treevox_probe.lua, not argued here.
+        //
+        // THREE LEVELS, NOT ONE. The first cut of this was one flutter at
+        // one rate on every leaf vertex, and it read as a machine: every
+        // leaf jiggling at 2 Hz forever, sliding sideways as a whole.
+        // A tree in wind is a hierarchy -- the crown rolls (above), each
+        // TWIG swings on its own slow clock, and each LEAF turns on its
+        // stalk, fast, and only while the air is actually on it. Three
+        // clocks, three phases, and the top one is intermittent.
+        if (grassDetail >= 2.0 && bend > 0.6) {
+          float leaf = smoothstep(0.6, 0.98, bend);
+          // a card carries 0.999; nothing solid gets past 0.85 (baker)
+          float isCard = step(0.985, bend);
+          // which twig: an 8 px cell of the vertex's own map position
+          vec2 cell = floor(vertex_position.xz * 0.125);
+          float lid = tuftHash(cell + floor(vertex_position.y * 0.125) * 7.0);
+          float ph2 = lid * 6.2831;
+
+          // ------- activity: is the air working THIS twig right now?
+          // A slow envelope on the twig's own phase, so at any instant
+          // some leaves are busy and their neighbours are resting -- the
+          // sparkle of a real crown, and the thing a constant flutter
+          // cannot fake. Never fully off: a leaf in wind is never still.
+          float act = smoothstep(0.30, 0.85,
+                                 0.5 + 0.5 * sin(windPhase * 0.9 + ph2));
+          act = 0.20 + 0.80 * act;
+          // rain: a wet leaf is heavier, and a gust doubles everything
+          float drive = (0.22 + 0.40 * gust) * (1.0 - 0.35 * wet) * act;
+
+          // ------- the TWIG: a slow swing on the roll's bearing, two
+          // incommensurate sines so no two twigs agree, and a little
+          // vertical give
+          float bp = windPhase * 0.55 + ph2 + p * 0.4;
+          float swing = sin(bp) + 0.5 * sin(bp * 0.53 + 1.3);
+          float bamp = sway * leaf * drive * 1.1;
+          w.xz += windDir * (bamp * swing)
+                + vec2(-windDir.y, windDir.x) * (bamp * 0.35 * sin(bp * 0.71 + 2.1));
+          w.y  += bamp * 0.30 * sin(bp * 1.7 + 0.6);
+
+          if (isCard > 0.5) {
+            // ------- the LEAF: a card TURNS, it does not slide.
+            //
+            // Two facts the card already carries say where its stalk is.
+            // Its v runs from the cut (0.75) at one edge to 1.0 at the
+            // other, so `along` is 0 on the hinge edge and 1 on the free
+            // one; its u runs across one 32-texel slot, so `across` is
+            // -0.5 on one side and +0.5 on the other. Flap on the first,
+            // twist on the second: the free edge lifts and drops, and the
+            // two sides go opposite ways so the cluster turns about its
+            // stalk -- which is the motion of a leaf, and the one that
+            // makes its brightness change as it shows more or less face.
+            float along  = clamp((VertexTexCoord.y - 0.75) * 4.0, 0.0, 1.0);
+            float across = fract(VertexTexCoord.x * 4.0) - 0.5;
+            // ~1 turn a second at rest (smoothTri has a period of ONE);
+            // Wind.RATE_LIVE rises with the drive so a squall quickens it
+            float fp = windPhase * 1.0 + lid + p * 0.25;
+            float f1 = smoothTri(fp) * 2.0 - 1.0;
+            float f2 = smoothTri(fp * 0.793 + 0.37) * 2.0 - 1.0;
+            float famp = sway * drive;
+            w.y  += famp * along * f1 * 0.8;
+            w.xz += windDir * (famp * along * f2 * 0.5);
+            w.xz += vec2(-windDir.y, windDir.x) * (famp * across * 1.6 * f2)
+                  + windDir * (famp * across * 0.8 * f1);
+            // the glint follows the TURN, not the flap: a face coming
+            // round to the light brightens, one turning away darkens
+            vShade *= 1.0 + 0.18 * f2 * act;
+          } else {
+            // the solid mass only breathes with its twig
+            vShade *= 1.0 + 0.05 * leaf * swing * act;
+          }
+        }
       }
     } else if (sway > 0.0) {
       // Height fraction. `grassH` is what the mesh in front of the shader

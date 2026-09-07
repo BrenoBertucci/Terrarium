@@ -55,6 +55,8 @@
 
 -- the mod namespace (see main.lua): V.require loads a sibling module
 local V = ...
+local WaterMap = V.require("WaterMap")   -- where water may be drawn at all
+
 
 local GrassWear = {}
 
@@ -474,10 +476,7 @@ local function bakeShelter(st, map)
       -- the things a breeze goes around rather than through.
       if not ok then return false end
       if walk then return false end
-      if map.isWaterCell then
-        local okw, wet = pcall(map.isWaterCell, map, cx, cy)
-        if okw and wet then return false end
-      end
+      if WaterMap.surfaceCell(map, cx, cy) then return false end
       return true
     end
   end
