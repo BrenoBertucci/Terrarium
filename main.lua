@@ -740,12 +740,17 @@ local SETTINGS = {
   -- Tree shape is not a camera preset either: both FULL and a light RES
   -- need to be able to hand the forest back to the free hulls.
   { Trees3D.setting,
-    "How trees are built in the diorama. 3D stamps the authored tree bake "
-    .. "under assets/ground/tree/ (real triangles, a real canopy, wind in "
-    .. "the crown) on every round-tree site. VOXEL is the classic "
-    .. "outline-hulled ball carved from the tileset art -- lighter, closer "
-    .. "to Gen 1. If the bake is missing, the hulls are used either way. "
-    .. "Changing the row rebuilds the map's meshes on the next frames.",
+    "How trees are built in the diorama. VOXEL grows a real tree on every "
+    .. "round-tree site: a trunk you can see, branches that fork, a canopy "
+    .. "of leaf clumps with occlusion baked into it, a fringe of leaf cards "
+    .. "around the silhouette, four species mixed across the wood -- and "
+    .. "the crown bends in the wind while the bole stays planted. CLASSIC "
+    .. "is the Gen 1 ball: one outline-hulled sphere carved from the "
+    .. "tileset's own art, the same on every cell, free because it rides "
+    .. "in the chunk mesh -- and for that reason it cannot move in the "
+    .. "wind at all. If the bake is missing, the hulls are used either "
+    .. "way. Changing the row rebuilds the map's meshes on the next "
+    .. "frames.",
     full = true },
   -- Not a diorama knob either: like 3D-BTL, this decides how a FIGHT is
   -- presented, so FULL sets nothing here and the row stays offered.
@@ -2188,7 +2193,7 @@ end)
 -- first so this cannot drift again: this literal sat five minors behind the
 -- manifest, and in a feature-encoded form the versioning rules in CHANGELOG.md
 -- forbid outright (`.snow.1` -- features live in the changelog, not here).
-mod.exports.version = mod.version or "1.30.1"
+mod.exports.version = mod.version or "1.31.0-beta"
 -- exposed so a companion mod can pin its own tiles' shapes or read the
 -- camera without reaching into this mod's file layout
 mod.exports.lib = V

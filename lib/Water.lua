@@ -35,6 +35,10 @@ local ModSetting = V.require("ModSetting")
 -- rather than pushed in, and safe to: WaterBody knows about maps and cells
 -- and nothing about waves, so there is no way back to this file.
 local WaterBody = V.require("WaterBody")
+-- where water may be drawn at all (lib/WaterMap.lua): ice must not make
+-- a Pokemon Center's counter walkable just because the engine calls its
+-- tile $14 water
+local WaterMap = V.require("WaterMap")
 
 local Water = {}
 
@@ -720,11 +724,8 @@ function Water._playerOnWaterSurface()
   if not p then return false end
   local px = (p.px or ((p.cellX or 0) * 16)) + 8
   local pz = (p.py or ((p.cellY or 0) * 16)) + 8
-  local onWaterCell = false
-  if ow.map and ow.map.isWaterCell then
-    local wok, water = pcall(ow.map.isWaterCell, ow.map, p.cellX, p.cellY)
-    onWaterCell = wok and water
-  end
+  local onWaterCell = ow.map
+    and WaterMap.surfaceCell(ow.map, p.cellX, p.cellY) or false
   if not onWaterCell then return false end
   if p.surfing then return true, px, pz, p end
   if Water.walkableIce(px, pz) then return true, px, pz, p end
@@ -957,8 +958,8 @@ function Water.installWalk()
   function Map:isWalkableCell(cx, cy)
     if walk(self, cx, cy) then return true end
     if type(self.isWaterCell) == "function" then
-      local wok, water = pcall(self.isWaterCell, self, cx, cy)
-      if wok and water and Water.canUseSurf() then
+      local water = WaterMap.surfaceCell(self, cx, cy)
+      if water and Water.canUseSurf() then
         local wx, wz = (cx or 0) * 16 + 8, (cy or 0) * 16 + 8
         if Water.walkableIce(wx, wz) then return true end
       end

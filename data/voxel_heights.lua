@@ -500,21 +500,27 @@ return {
       -- B4F).  The first pass read its blocky white dither as "bright
       -- rubble mass" and pinned it `wall`, which stood both lakes up as
       -- 16px rock -- two thirds of SEAFOAM_ISLANDS_B4F was a rock slab
-      -- you were meant to surf across.  It is water, and it lies at the
-      -- floor plane: `ground` keeps the drawn (and animated) water art
-      -- exactly as it is and puts its surface at 0, level with the dark
-      -- floor you step off onto, one 6px step below the lit shelf you
-      -- cannot surf onto.  NOT the `water` class -- that is -2, a
-      -- shoreline lip for the overworld sea, and a cave pool must never
-      -- read as a trough sunk into the floor you are walking on.
+      -- you were meant to surf across.  It is water, and it is pinned
+      -- `water` -- which it was NOT until now, and the reason it was not
+      -- has expired.  Back when the class was one quad at -2, a cave pool
+      -- in it read as a two-pixel trough scratched into the floor you
+      -- were walking on, and `ground` (flat, at the floor plane, wearing
+      -- the animated art unchanged) was the better of the two.  `water`
+      -- is a BASIN now: a bed terraced down by distance to the bank with
+      -- a translucent surface over it (Water.BED, lib/ChunkMesher.lua
+      -- runGeometry), which is what a cave lake actually is.  The flat
+      -- pin was why Seafoam's channels and Cerulean Cave's lake were the
+      -- only water in the game with no depth -- the pool lay level with
+      -- the rock and ran straight into the foot of every flight of steps
+      -- beside it, which is what "water on top of the stairs" was.
       --
       -- $2F over $22 is Seafoam's and Victory Road's fall-through drop
       -- hole (Map's warpPadTiles calls $22 a "hole").  Its art is a lit
       -- rim over solid black and its cell is walkable -- you step on it
       -- and drop a floor -- so it stays flat at the floor plane; the pin
       -- keeps the rim out of the wall fallback.
+      water = { 20 },              -- $14, the surfable cave water
       ground = { 32, 33, 42,       -- $20/$21/$2A, the dark lower floor
-                 20,               -- $14, the surfable cave water
                  47, 34 },         -- $2F over $22, the drop hole
       -- ---- 0 to 16: the ladders, the caves' real staircases ----
       --

@@ -23,6 +23,8 @@
 -- Purely presentational -- never writes collision, flags, warps or scripts.
 
 local V = ...
+local WaterMap = V.require("WaterMap")   -- where water may be drawn at all
+
 
 local ModSetting = V.require("ModSetting")
 local Quality = V.require("Quality")
@@ -193,11 +195,7 @@ local function buildGrid(map, side)
       if not inb then
         r, g, b, a = COL.paper[1], COL.paper[2], COL.paper[3], 0.4
       else
-        local water = false
-        if map.isWaterCell then
-          local okW, yes = pcall(map.isWaterCell, map, cx, cy)
-          water = okW and yes
-        end
+        local water = WaterMap.surfaceCell(map, cx, cy)
         if water then
           r, g, b = COL.water[1], COL.water[2], COL.water[3]
         else

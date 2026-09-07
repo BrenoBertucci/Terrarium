@@ -58,6 +58,11 @@
 -- the mod namespace (see main.lua): V.require loads a sibling module
 local V = ...
 
+-- where water may be drawn at all (lib/WaterMap.lua): the size field has to
+-- measure the same bodies the mesher builds, or a lake gets a shoreline
+-- gradient off a pond nobody can see
+local WaterMap = V.require("WaterMap")
+
 local WaterBody = {}
 
 -- One cell of the 2D game is 16 world pixels, and one texel here is one
@@ -163,7 +168,10 @@ local function classify(list, gx, gz)
     if lx >= 0 and lz >= 0 and lx < cw and lz < ch then
       local m = p.map
       if type(m.isWaterCell) ~= "function" then return LAND end
-      return m:isWaterCell(lx, lz) and WATER or LAND
+      -- WaterMap, not isWaterCell: an interior's floor tiles read as water
+      -- to the engine (see lib/WaterMap.lua), and seeding a BFS on the
+      -- Pokemon Center's counter measured a "body" the geometry never had
+      return WaterMap.surfaceCell(m, lx, lz) and WATER or LAND
     end
   end
   return UNKNOWN

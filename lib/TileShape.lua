@@ -41,6 +41,11 @@
 -- the mod namespace (see main.lua): V.data loads a shipped data file
 local V = ...
 
+-- where water may be drawn at all: the engine's own tileset gate, which
+-- this file used to skip (lib/WaterMap.lua). Loaded at the top because it
+-- has no dependencies of its own -- it reads Game lazily, inside a call.
+local WaterMap = V.require("WaterMap")
+
 local TileShape = {}
 
 -- class -> height fallbacks, used when data/voxel_heights.lua is missing
@@ -346,7 +351,17 @@ function TileShape.forMap(map)
       shapes[t] = shapeFor("grass", heights, true)
     elseif flowerTiles[t] then
       shapes[t] = shapeFor("flower", heights, true)
-    elseif map.waterTiles and map.waterTiles[t] then
+    -- NOT map.waterTiles: that set is the engine's stale-cache fallback and
+    -- claims $14/$32/$48 on every tileset in the game, so this rule alone
+    -- put water in the Warden's house and on the Safari gates. WaterMap
+    -- asks whether the TILESET may hold water at all (see lib/WaterMap.lua)
+    -- isDeepTile, not isSurfaceTile: this rule has no POSITION, and a shore
+    -- tile is only water when real water is next to it (rule 2 in
+    -- WaterMap's header). Answered here it made Lance's dragon plinths a
+    -- pond -- $32 is a shore id, DOJO is a water tileset, and the Dojo has
+    -- no water in it anywhere. Shore is resolved in TileShape.at, which has
+    -- the cell to look around from.
+    elseif WaterMap.drawsWater(map) and WaterMap.isDeepTile(map, t) then
       shapes[t] = shapes.classes.water
     elseif map.walkable and map.walkable[t] then
       shapes[t] = shapes.classes.ground
@@ -389,7 +404,29 @@ function TileShape.at(map, shapes, tile, tx, ty)
   if not s or s.authored then return s end
   local cx = math.floor(tx / 2)
   local cy = math.floor(ty / 2)
-  if map:isWaterCell(cx, cy) then return shapes.classes.water end
+  -- WATER, and the cell is the wrong granularity for it. Collision judges a
+  -- cell by its bottom-left tile, which is why this rule is a cell rule --
+  -- but water is the one class whose ART is authored per TILE. Gen 1 draws
+  -- a shore cell with the BANK in its top half over the water in its bottom
+  -- ($33 over $14 the length of Cerulean's channel, $54 and $31 elsewhere:
+  -- 1488 tiles across 21 maps). Painting the whole cell sank the bank to
+  -- the water plane and the shoreline lost its lip -- the "water is a
+  -- block" the seams were reported for.
+  --
+  -- So: the CELL says there is water here (WaterMap gates the engine's
+  -- over-broad answer, see lib/WaterMap.lua), and the TILE says whether
+  -- this eighth of it is the water or the bank. A bank falls through to the
+  -- rules below and keeps its own height.
+  if WaterMap.surfaceCell(map, cx, cy) then
+    if WaterMap.isSurfaceTile(map, tile) then return shapes.classes.water end
+    -- Only a FLAT answer may take a tile off the water: the bank tiles are
+    -- walkable ground, and anything else that happens to sit in a water
+    -- cell (an unpinned solid) would otherwise raise a 16px wall out of the
+    -- middle of a lake, which is worse than the block this rule fixes.
+    if not (map:isWalkableCell(cx, cy) or (s and s.flat)) then
+      return shapes.classes.water
+    end
+  end
   -- Gold names tall grass in the COLLISION byte rather than on the
   -- tileset (there is no tileset.grassTile to pin above), so on a map
   -- without that pin the cell is the only place grass exists at all.

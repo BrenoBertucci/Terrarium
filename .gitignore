@@ -61,6 +61,10 @@ graphify-out/
 !assets/ground/grass/grass.mesh.bin
 !assets/ground/lamppost/lamppost.mesh.bin
 !assets/ground/tree/tree_willow.mesh.bin
+!assets/ground/tree/oak.mesh.bin
+!assets/ground/tree/pine.mesh.bin
+!assets/ground/tree/birch.mesh.bin
+!assets/ground/tree/willow.mesh.bin
 *.bps
 *.ips
 *.ups
@@ -188,19 +192,15 @@ gh_token*
 #
 #   Pokemon X/Y 5X GUI -- https://gamebanana.com/mods/578206
 #
-# They are NOT in this repository, and the reason is the same one written at
-# the top of the GAME DATA block: crediting an author is not the same as
-# holding a licence from them, and the underlying art is Nintendo's and Game
-# Freak's either way. A clone gets the loader and the measurements; the
-# player downloads the pack themselves.
+# They were kept out of the repository for the same reason as GAME DATA:
+# crediting an author is not a licence, and the underlying art is Nintendo's.
+# **1.31.0-beta ships the cuts anyway**, at the author's request, so testers
+# get the Clair Obscur staged fight without installing the 5X pack themselves.
+# tools/extract_xy_assets.py is still how they were cut.
 #
-# tools/extract_xy_assets.py cuts and names everything from that download.
-# The measurements it uses -- glyph grids, trough boxes, button bounds -- are
-# in this repository, because those are ours: they were measured off the
-# pixels, and they are the part that took the work.
-assets/battlexy/
-assets/hudxy/
-assets/menuxy/
+# assets/battlexy/
+# assets/hudxy/
+# assets/menuxy/
 
 
 # ------------------------------------------------ OVERWORLD ROAMER SPRITES
@@ -242,3 +242,7 @@ assets/ground/piso vermelho/
 # name, their name. It belongs to whoever is playing, not to the project.
 options.lua
 LastPlayed.txt
+
+# Downloaded CC0 bark/leaf photographs (PolyHaven, ambientCG) that the tree
+# baker borrows luminance and leaf cutouts from. Bakes ship; photos stay here.
+tools/_tree_src/
