@@ -1030,6 +1030,21 @@ local function emit(m, sp, atlasW, atlasH)
     return shade * tintOf(y, i, dir, shade)
   end
 
+  -- A model may also bake a CONTACT field: `m.contact(x, y, z)` -> a factor
+  -- at one CORNER of a face, in the model's own voxel coordinates. It is
+  -- what lets a fixture drop a shadow on the floor it stands on, and it has
+  -- to be per-corner rather than per-face because the greedy merge hands
+  -- the floor back as long runs -- a per-face factor steps the shadow in
+  -- blocks the size of the run, which is the artefact it exists to avoid.
+  -- Applied only to UP faces: the floor and the tops of fixtures are the
+  -- two surfaces this camera sees a shadow land on, and a flank's own
+  -- shading is already the tint's `FOOT`/`SIDE` business.
+  local contactOf = m.contact
+  local function cf(x, y, z)
+    if not contactOf then return 1 end
+    return contactOf(x, y, z)
+  end
+
   -- u/v of a run: `n` texels starting at sprite pixel `i`, stepping along
   -- the atlas when the run is a strip and standing still when it is flat.
   local function uvOf(i, strip, n)
@@ -1143,7 +1158,9 @@ local function emit(m, sp, atlasW, atlasH)
                 put({ x, yf, z }, { x + n, yf, z },
                     { x + n, yf, z + 1 }, { x, yf, z + 1 },
                     { { u0, v0 }, { u1, v0 }, { u1, v1 }, { u0, v1 } },
-                    shades(lit(shade, y, i, "up"), f1, f2, f3, f4))
+                    shades(lit(shade, y, i, "up"),
+                           f1 * cf(x, yf, z), f2 * cf(x + n, yf, z),
+                           f3 * cf(x + n, yf, z + 1), f4 * cf(x, yf, z + 1)))
               else
                 put({ x, yf, z + 1 }, { x + n, yf, z + 1 },
                     { x + n, yf, z }, { x, yf, z },
@@ -1236,6 +1253,17 @@ local function cryptOn()
   if not (ok and CryptKit and CryptKit.enabled) then return false end
   local okE, on = pcall(CryptKit.enabled)
   return okE and on ~= false
+end
+
+-- The SHOP row (lib/Shop.lua, read through lib/ShopKit.lua): whether a
+-- `shop` template stands as the modelled room or is skipped so the
+-- per-fixture templates below it -- the old lib/RoomKit.lua Mart -- claim
+-- those same cells instead. Same contract as towerOn.
+local function shopOn()
+  local ok, ShopKit = pcall(V.require, "ShopKit")
+  if not (ok and ShopKit and ShopKit.enabled) then return false end
+  local okE, on = pcall(ShopKit.enabled)
+  return okE and on or false
 end
 
 -- The LEDGES row (lib/LedgeKit.lua): whether a `bank` template stands as
@@ -1449,6 +1477,68 @@ function Buildings.build(S, map, data, perRow)
                   built = models[key]
                 end
               end
+            elseif t.shop and shopOn() then
+              -- The Poke Mart, inside (lib/ShopKit.lua). Two things are
+              -- unlike every other interior here. The room is built against
+              -- an AUTHORED SHEET rather than the tileset -- the MART atlas
+              -- is four greys under one flat palette, which is the whole
+              -- reason the fixtures below could only ever be a grey box --
+              -- so the quads carry that sheet's path and go to spriteQuads,
+              -- exactly as the Center's facade does. And the three
+              -- templates are BANDS of one room rather than three pieces,
+              -- so each is built once and cached by its own name.
+              --
+              -- On failure the model is empty: it stamps nothing and claims
+              -- nothing, and the tiles are left to the per-fixture
+              -- templates further down the list, which is the same place
+              -- SHOP=CLASSIC leaves them.
+              built = {}
+              local okS, ShopKit = pcall(V.require, "ShopKit")
+              if okS and ShopKit and ShopKit.model then
+                local key = tileset.id .. ":" .. index .. "@shop"
+                if not models[key] then
+                  local rel = spriteRel(ShopKit.SHEET)
+                  Buildings.progress.step = "shop:read"
+                  local sheet = readSprite(rel)
+                  Buildings.progress.step = "shop:image"
+                  local tex = sheet and loadSpriteImage(rel) or nil
+                  local q = nil
+                  local why = nil
+                  if sheet and tex then
+                    Buildings.progress.step = "shop:model"
+                    local okM, m, err = pcall(ShopKit.model, sheet, t)
+                    if okM and m then
+                      Buildings.progress.step = "shop:emit"
+                      q = emit(m, sheet, sheet.W, sheet.H)
+                      q.tex = rel
+                      q.standH = m.standH
+                      -- the model's own flags travel on the QUADS, which is
+                      -- what `stamp` is handed. Setting `noFigure` on the
+                      -- model alone left the till's drawn figure standing
+                      -- inside the modelled one, with every check green.
+                      q.noFigure = m.noFigure
+                      -- claim only the cells the room actually stands in.
+                      -- Claiming the open floor too made `stamp` paint it
+                      -- from `groundVote`, which has no vote to take at the
+                      -- map's south edge, and the shop's whole entrance
+                      -- came out black.
+                      q.claimMask = m.claimMask
+                    else
+                      why = tostring(okM and err or m)
+                    end
+                  else
+                    why = "sheet " .. rel .. " unreadable"
+                  end
+                  if q and #q > 0 then
+                    models[key] = q
+                  else
+                    Buildings.lastError = "shop " .. tostring(t.id) .. ": "
+                                          .. tostring(why or "no quads")
+                    models[key] = {}
+                  end
+                end
+                built = models[key]
+              end
             elseif not built then
               local key = tileset.id .. ":" .. index
               if not models[key] then
@@ -1459,6 +1549,49 @@ function Buildings.build(S, map, data, perRow)
                   -- placement composites them via topRows). Left to the
                   -- detector they stood as a second half-building.
                   models[key] = { claim = true }
+                elseif t.spriteBand then
+                  -- BAND TABLE OVER A CUSTOM PNG. The Gen1 atlas is four
+                  -- greys recoloured by one flat palette, so a
+                  -- tile-extruded shop can never be more than four values
+                  -- of one hue -- which is the whole reason B06 read as a
+                  -- grey box. `readSprite` already returns the same
+                  -- {W,H,col,ax,ay,inside} struct `read` does, so the band
+                  -- pipeline runs on an authored sheet unchanged and the
+                  -- building keeps everything the sprite path gives up:
+                  -- a roof drawn from ABOVE (roofSy), pane recesses, the
+                  -- ledge, sills, the chimney, and chunked draw order.
+                  -- What it gains over `read` is arbitrary RGB per voxel.
+                  --
+                  -- The sheet is one texel per voxel: `model` walks sprite
+                  -- pixels, and `stamp` puts one voxel per world pixel. A
+                  -- sheet wider than the footprint would not scale, it
+                  -- would overhang -- unlike modelFrontSprite, which fits
+                  -- by width. Height is free (the sheet stacks its roof
+                  -- plan over its facade, so H > D is the normal case).
+                  --
+                  -- Same fallback contract as t.sprite: an unreadable or
+                  -- unbindable sheet drops to the classic kit WITHOUT
+                  -- .tex, so the lot still holds a building.
+                  local rel = spriteRel(t.spriteBand)
+                  Buildings.progress.step = "band:read"
+                  local sp = readSprite(rel)
+                  Buildings.progress.step = "band:image"
+                  local tex = sp and loadSpriteImage(rel) or nil
+                  local q = nil
+                  if sp and tex then
+                    Buildings.progress.step = "band:model"
+                    local pr = measure(sp, t)
+                    q = emit(model(sp, pr, t), sp, sp.W, sp.H)
+                  end
+                  if q and #q > 0 then
+                    q.tex = rel
+                    models[key] = q
+                  else
+                    Buildings.progress.step = "band:fallback"
+                    local sp2 = read(t, data, perRow)
+                    local pr = measure(sp2, t)
+                    models[key] = emit(model(sp2, pr, t), sp2, atlasW, atlasH)
+                  end
                 elseif t.sprite then
                   -- front-facing custom PNG (UlithiumDragon Center+Mart)
                   -- q.tex is the TEMPLATE relative path, never a resolved
@@ -1627,6 +1760,11 @@ function Buildings.stamp(S, map, quads, tx, ty, bw, bh)
         S.shapeAt[k] = shape
         S.skip[k] = true
         S.ground[k] = best or false
+        -- `noFigure`: this model draws the furniture the tileset has a
+        -- FIGURE for, so the figure pass must not stand its own copy in
+        -- the same cell (Structures.buildFigures). Opt-in per model --
+        -- RoomKit's couch claims its cell and still wants its man.
+        if quads.noFigure and S.noFigure then S.noFigure[k] = true end
       end
     end
   end

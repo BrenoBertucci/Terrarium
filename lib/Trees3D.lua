@@ -1,14 +1,23 @@
--- Voxel world mode: authored 3D trees.
+-- Voxel world mode: the authored forest -- two sets of trees, one row.
 --
--- The classic path carves a round tree from its own tileset art -- an
--- outline-hulled voxel ball, one hull template per distinct drawing,
--- stamped per cell (Structures.buildCylinders). That reads as Gen 1 and it
--- is free, but it is the same ball everywhere and it has no real canopy.
+-- Every round-tree site of a map (Structures.buildCylinders records them)
+-- gets one tree stamped from a TTR2 bake, four species mixed by the site's
+-- own coordinates, built as one mesh per species per map over a few frames.
+-- The TREES row picks WHICH set of bakes (see Trees3D.SETS):
 --
--- Drop a bake under assets/ground/tree/ (<name>.mesh.bin + <name>.png, from
--- tools/optimize_tree_glb.py) and this file stamps a real triangle tree on
--- every round-tree site instead. If no bake is present, available() is
--- false and Structures/ChunkMesher keep the hulls -- this file never throws
+--   VOXEL  assets/ground/tree/voxel/ -- blocky trees grown by
+--          tools/grow_voxel_tree.py: 2.5 px cubes, a visible bole, lobed
+--          crowns with tufts, and NO colour of their own: their leaf faces
+--          point at a palette strip this file paints per map with the
+--          greens the map's own tree tile got (TerrainAtlas.tileShades).
+--   3D     assets/ground/tree/ -- tools/bake_tree.py's finer voxel bake
+--          under photo leaf cards, shipping its own colours.
+--
+-- The carved hull -- the outline-hulled ball cut from the tileset art that
+-- was the whole forest before either bake existed -- is no longer a row
+-- option. It is the FALLBACK: if the chosen set does not load (a missing
+-- bake, an over-budget one, a map past MAX_TREES), available() answers
+-- false and Structures/ChunkMesher keep the hulls. This file never throws
 -- into the mesh build.
 --
 -- WHY ONE COMBINED MESH AND NOT ONE DRAW PER TREE
@@ -54,34 +63,31 @@ local ModSetting = V.require("ModSetting")
 
 local Trees3D = {}
 
--- The TREES options row picks the path:
---   VOXEL    the authored bake on every round-tree site (default)
---   CLASSIC  the outline-hulled ball carved from the tileset's own art
+-- The TREES options row picks the set:
+--   VOXEL  the blocky trees in the map's own palette (default)
+--   3D     the finer bake with photo leaf cards
 --
--- THE LABELS SWAPPED MEANING, and that was the point rather than an
--- accident. The authored path used to be a decimated photogrammetry GLB, so
--- "3D" against "VOXEL" named the real difference: a scanned mesh or a hull.
--- It is now tools/bake_voxel_tree.py's grown voxel tree, which makes "3D"
--- the wrong word for it and "VOXEL" the right one -- and it left the row
--- saying the opposite of what it did, offering a player who wants voxels
--- the one option that is not.
+-- THE NAMES HAVE BEEN THROUGH THREE ROUNDS, and this is the one that says
+-- what each thing IS rather than how it was made. Round one was 3D / VOXEL
+-- with VOXEL meaning the carved hull; round two swapped to VOXEL / CLASSIC
+-- with VOXEL meaning the card bake, on the argument that the bake was
+-- built of voxels -- true of its lattice and false of its look. A player
+-- reading VOXEL wants cubes; a player reading 3D wants leaves. So: VOXEL is
+-- the set that looks like cubes, 3D is the set that looks like leaves, and
+-- the hull is nobody's option.
 --
 -- ModSetting.indexOf falls back to values[1] for anything it does not
--- recognise, so a save left on the old "voxel" AND one left on the old "3d"
--- both land on the bake. Nobody has to re-pick, and nobody who asked for
--- voxels keeps getting hulls.
+-- recognise, so a save left on round two's "classic" lands on VOXEL (the
+-- cubes are what the hull was standing in for), one left on either
+-- round's "voxel" lands on VOXEL, and one left on round one's "3d" keeps
+-- its 3D. Nobody has to re-pick.
 --
--- available() answers false on CLASSIC, which is the single gate the mesher
--- consults -- so the row decides at chunk-build time, and flipping it has
--- to drop the built meshes (remesh below) or the forest keeps the shape it
--- was built with.
+-- The set is chosen at chunk-build time -- Structures records sites when
+-- available() is true -- so flipping the row has to drop the built meshes
+-- (remesh below) or the forest keeps the shape it was built with.
 Trees3D.setting = ModSetting.new("trees3d", "TREES",
-                                 { "voxel", "classic" },
-                                 { "VOXEL", "CLASSIC" })
-
-function Trees3D.wants3D()
-  return Trees3D.setting:get() ~= "classic"
-end
+                                 { "voxel", "3d" },
+                                 { "VOXEL", "3D" })
 
 -- Remesh every map when the row flips: hull quads vs recorded sites are
 -- chosen at Structures build time (treesAuthored), so a live toggle has to
@@ -116,12 +122,51 @@ function Trees3D.onOptionsChanged(value)
   remesh()
 end
 
-Trees3D.ASSET_DIR = "assets/ground/tree/"
+-- The two sets. Species ship as sibling bakes under the set's directory;
+-- each species is its own mesh and its own draw call (the 3D set because
+-- each carries its own texture, the VOXEL set for symmetry -- four calls
+-- for the whole forest is nothing next to the hulls' one).
+--
+-- windShare is per set because the number was never about the wind: it is
+-- how far a crown may move before it looks detached from its bole, and a
+-- blocky crown shows a sliding cube sooner than a photo leaf shows a
+-- sliding lobe (see the note at Trees3D.WIND_SHARE).
+--
+-- palette = true means the set's leaf faces sample the strip this file
+-- paints per map (see paletteTexture); the shipped .png is then only the
+-- fallback for a map whose palette cannot be read.
+Trees3D.SETS = {
+  voxel = { dir = "assets/ground/tree/voxel/",
+            species = { "round", "tiered", "broad", "tall" },
+            windShare = 2.9, palette = true },
+  ["3d"] = { dir = "assets/ground/tree/",
+             species = { "oak", "pine", "birch", "willow" },
+             windShare = 3.4, palette = false },
+}
 
--- Species ship as sibling bakes. Each carries its own texture, so each is
--- its own mesh and its own draw call -- four species is four calls for the
--- whole forest, which is still nothing next to the hulls' one.
-Trees3D.SPECIES = { "oak", "pine", "birch", "willow" }
+-- The set the row currently names.
+function Trees3D.set()
+  return Trees3D.SETS[Trees3D.setting:get()] or Trees3D.SETS.voxel
+end
+
+-- The ACTIVE set's directory and species list, as fields rather than
+-- through set() because the probes read and even overwrite them
+-- (tests/trees_probe.lua empties SPECIES to force the hull fallback).
+-- applyMode below refreshes them whenever the row's value changes, and
+-- leaves them alone otherwise, so a probe's override survives its round.
+Trees3D.ASSET_DIR = Trees3D.SETS.voxel.dir
+Trees3D.SPECIES = Trees3D.SETS.voxel.species
+local appliedMode = nil
+
+local function applyMode()
+  local mode = Trees3D.setting:get()
+  if mode == appliedMode then return end
+  appliedMode = mode
+  local set = Trees3D.set()
+  Trees3D.ASSET_DIR = set.dir
+  Trees3D.SPECIES = set.species
+  Trees3D.WIND_SHARE = set.windShare
+end
 
 -- Per-tree ceiling, checked against what the bake actually contains. The
 -- number is not a preference: this template is stamped on EVERY round-tree
@@ -265,9 +310,21 @@ Trees3D.SHADOW_PROXY = true
 -- from survives to the next map.
 Trees3D.RETIRE_AFTER = 64
 
-local templates = {}   -- name -> template | false
+local templates = {}   -- dir..name -> template | false
 local pending = {}     -- map id -> resumable build state
-local textures = {}    -- name -> Image | false
+local textures = {}    -- dir..name -> Image | false
+local paletteTex = {}  -- palette key -> Image | false (the VOXEL strip per map)
+
+-- A bake's cache key: its set's directory plus its name, so "round" of the
+-- VOXEL set and a future "round" of another never collide, and flipping
+-- the row finds the other set's templates still decoded.
+local function cacheKey(name)
+  return Trees3D.ASSET_DIR .. name
+end
+
+local function template(name)
+  return templates[cacheKey(name)]
+end
 local meshes = {}      -- map id -> { {mesh=, tex=}, ... } | false
 local builtSites = {}  -- map id -> site count, for ready()'s progress
 local advances = 0     -- monotonic count of build advances, for retiring
@@ -356,7 +413,8 @@ local function readBinary(name)
 end
 
 local function loadTexture(name)
-  if textures[name] ~= nil then return textures[name] or nil end
+  local key = cacheKey(name)
+  if textures[key] ~= nil then return textures[key] or nil end
   local file = name .. ".png"
   local okA, Assets = pcall(require, "src.render.Assets")
   for _, path in ipairs(candidatePaths(file)) do
@@ -366,7 +424,7 @@ local function loadTexture(name)
         local ok, img = pcall(Assets.image, path)
         if ok and img then
           pcall(img.setFilter, img, "nearest", "nearest")
-          textures[name] = img
+          textures[key] = img
           return img
         end
       end
@@ -375,13 +433,119 @@ local function loadTexture(name)
       local ok, img = pcall(love.graphics.newImage, path)
       if ok and img then
         pcall(img.setFilter, img, "nearest", "nearest")
-        textures[name] = img
+        textures[key] = img
         return img
       end
     end
   end
-  textures[name] = false
+  textures[key] = false
   return nil
+end
+
+-- ------- THE VOXEL SET'S COLOURS, painted per map
+--
+-- A VOXEL bake ships no greens. Its leaf faces all point into row 0 of a
+-- 64x64 strip of 8x8 slots -- six leaf tones -- and its bark faces into
+-- row 1 -- four fixed browns (Gen 1 draws no trunk, so there is no brown
+-- to learn). tools/grow_voxel_tree.py writes the mesh against this layout
+-- and it MUST NOT DRIFT: the uv of every leaf face is the centre of its
+-- slot, so a slot moved here paints the crown with whatever moved into it.
+--
+-- Row 0 is painted from what the map's palette made of its own tree tile
+-- (TerrainAtlas.tileShades): the tile's light shade is `lit`, its dark is
+-- `dark`, and the rest are mixes -- `hi` leans the light shade toward the
+-- tile's white rather than using the white itself, because that white is
+-- the pale ground the sprite is drawn against and a crown wearing it reads
+-- as snow (the offline preview did). One strip per distinct palette, so a
+-- whole region shares one texture and a map with a palette of its own
+-- (the forest) gets its own.
+Trees3D.VOXEL_PALETTE = {
+  tex = 64, tile = 8,
+  bark = { { 74, 48, 28 }, { 104, 70, 40 }, { 134, 94, 54 }, { 60, 40, 24 } },
+}
+
+-- What the last finished build painted with, for the probe: the palette
+-- key, or "shipped" when the map's colours could not be read.
+Trees3D.lastPaint = nil
+
+-- The tiles the map's tree is drawn with, off the same profile Structures
+-- carves the hull from: the 2x2 group's anchor first, then the per-cell
+-- round tiles. Shades missing from one are filled from the next.
+local function treeTiles(map)
+  local okP, prof = pcall(V.data, "voxel_heights")
+  local entry = okP and type(prof) == "table" and prof.tilesets
+                and map and map.tileset and prof.tilesets[map.tileset.id]
+  if type(entry) ~= "table" then return nil end
+  local list = {}
+  for _, t in ipairs(entry.canopy or {}) do list[#list + 1] = t end
+  for _, t in ipairs(entry.cylinder or {}) do list[#list + 1] = t end
+  return #list > 0 and list or nil
+end
+
+local function paletteTexture(name, map)
+  local shades, why = nil, "no-tiles"
+  local ok, err = pcall(function()
+    local tiles = treeTiles(map)
+    if tiles then
+      shades, why = V.require("TerrainAtlas").tileShades(map, tiles)
+    end
+  end)
+  if not ok then why = "threw: " .. tostring(err) end
+  if not shades then
+    Trees3D.lastPaint = "shipped (" .. tostring(why) .. ")"
+    return loadTexture(name)
+  end
+
+  local function mix(a, b, t)
+    return { a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t,
+             a[3] + (b[3] - a[3]) * t }
+  end
+  local light = shades[2] or shades[3] or shades[1]
+  local dark = shades[3] or light
+  local white = shades[1] or light
+  local black = shades[4] or dark
+  if not light then
+    Trees3D.lastPaint = "shipped"
+    return loadTexture(name)
+  end
+  local tones = {
+    mix(light, white, 0.40),           -- hi
+    light,                             -- lit
+    mix(light, dark, 0.50),            -- mid
+    dark,                              -- dark
+    mix(dark, black, 0.40),            -- deep
+    black,                             -- outline
+  }
+  local parts = {}
+  for i, c in ipairs(tones) do
+    parts[i] = string.format("%.3f,%.3f,%.3f", c[1], c[2], c[3])
+  end
+  local key = table.concat(parts, ";")
+  Trees3D.lastPaint = key
+  if paletteTex[key] ~= nil then return paletteTex[key] or loadTexture(name) end
+
+  local P = Trees3D.VOXEL_PALETTE
+  local ok, img = pcall(function()
+    if not (love and love.image and love.image.newImageData) then return nil end
+    local data = love.image.newImageData(P.tex, P.tex)
+    local function fill(x0, y0, c)
+      for y = y0, y0 + P.tile - 1 do
+        for x = x0, x0 + P.tile - 1 do
+          data:setPixel(x, y, c[1], c[2], c[3], 1)
+        end
+      end
+    end
+    for i, c in ipairs(tones) do fill((i - 1) * P.tile, 0, c) end
+    for i, c in ipairs(P.bark) do
+      fill((i - 1) * P.tile, P.tile, { c[1] / 255, c[2] / 255, c[3] / 255 })
+    end
+    local image = love.graphics.newImage(data)
+    pcall(image.setFilter, image, "nearest", "nearest")
+    return image
+  end)
+  paletteTex[key] = (ok and img) or false
+  if not paletteTex[key] then Trees3D.lastPaint = "shipped" end
+  return paletteTex[key] or loadTexture(name)
 end
 
 -- ------- WHAT THE SUN ACTUALLY NEEDS
@@ -574,10 +738,11 @@ end
 -- moss painted on its trunk. Bakes in v1 are refused rather than read
 -- with a guessed weight.
 local function loadTemplate(name)
-  if templates[name] ~= nil then return templates[name] or nil end
+  local key = cacheKey(name)
+  if templates[key] ~= nil then return templates[key] or nil end
   local blob = readBinary(name .. ".mesh.bin")
   if type(blob) ~= "string" or #blob < 32 or blob:sub(1, 4) ~= "TTR2" then
-    templates[name] = false
+    templates[key] = false
     return nil
   end
   local nv, ni, nTrunk = u32(blob, 4), u32(blob, 8), u32(blob, 12)
@@ -585,13 +750,13 @@ local function loadTemplate(name)
   local canopyY, canopyR = f32(blob, 24), f32(blob, 28)
   if nv < 3 or ni < 3 or nv > 20000 or ni > 60000
      or ni % 3 ~= 0 or nTrunk > ni or not (height > 0) then
-    templates[name] = false
+    templates[key] = false
     return nil
   end
 
   local tris = math.floor(ni / 3)
   if tris > Trees3D.MAX_TRIS then
-    templates[name] = false
+    templates[key] = false
     if V.mod and V.mod.log then
       pcall(V.mod.log.warn, V.mod.log,
             "tree bake '%s' refused: %d tris, budget is %d. This mesh is "
@@ -603,7 +768,7 @@ local function loadTemplate(name)
     return nil
   end
   if #blob < 32 + nv * 28 + ni * 2 then
-    templates[name] = false
+    templates[key] = false
     return nil
   end
 
@@ -622,7 +787,7 @@ local function loadTemplate(name)
   for i = 1, ni do
     local vi = u16(blob, o) + 1          -- LOVE vertex maps are 1-based
     if vi > nv then
-      templates[name] = false            -- corrupt file, not a mesh to guess at
+      templates[key] = false             -- corrupt file, not a mesh to guess at
       return nil
     end
     indices[i] = vi
@@ -663,23 +828,28 @@ local function loadTemplate(name)
     end
   end
 
-  templates[name] = {
+  templates[key] = {
     verts = verts, weights = weights, indices = indices,
     solidIndices = solid,
     height = height, radius = radius,
     canopyY = canopyY, canopyR = canopyR,
     trunkIndices = nTrunk,
   }
-  buildShadowProxy(templates[name])
-  return templates[name]
+  buildShadowProxy(templates[key])
+  return templates[key]
 end
 
--- Which species ship and load. Empty means the hulls stay.
--- Exposed so a probe can measure the packed channel against the real
--- template rather than a synthetic value.
-Trees3D.templates = templates
+-- The ACTIVE set's decoded templates by species name, read-only. Exposed so
+-- a probe can measure the packed channel against the real template rather
+-- than a synthetic value; a proxy rather than the table because the cache
+-- behind it is keyed by set directory.
+Trees3D.templates = setmetatable({}, {
+  __index = function(_, name) return templates[cacheKey(name)] end,
+})
 
+-- Which species of the row's set ship and load. Empty means the hulls stay.
 function Trees3D.loaded()
+  applyMode()
   local out = {}
   for _, name in ipairs(Trees3D.SPECIES) do
     if loadTemplate(name) and loadTexture(name) then out[#out + 1] = name end
@@ -687,10 +857,9 @@ function Trees3D.loaded()
   return out
 end
 
+-- The single gate the mesher consults: true when the row's set loads, and
+-- the hull is the answer to false whichever row is picked.
 function Trees3D.available()
-  -- the row first: VOXEL means the hulls whatever is on disk, and it costs
-  -- nothing here -- the bake loaders never run
-  if not Trees3D.wants3D() then return false end
   return #Trees3D.loaded() > 0
 end
 
@@ -780,15 +949,23 @@ local function placement(site, nNames)
   local pick = 1 + math.floor(unit(mx, mz, 3) * nNames)
   if pick > nNames then pick = nNames end
   local siteScale = (site.r or 8) / 16
+  -- A 2x2 site (the forest's 32 px drawings, site.r = 16) is twice the
+  -- cell but not twice the tree: the bakes are authored against a 16 px
+  -- cell at 0.78-1.05x, and carrying the same band through a doubled
+  -- siteScale would stand 65-100 px trees on 32 px spacing. The big site
+  -- takes a tighter band of its own radius, 1.25-1.60x.
+  local big = siteScale >= 1
+  local lo, ylo, span = 1.55, 1.50, 0.55
+  if big then lo, ylo, span = 1.25, 1.20, 0.35 end
   return {
     pick = pick,
     yaw = unit(mx, mz, 1) * math.pi * 2,
-    scale = siteScale * (1.55 + unit(mx, mz, 2) * 0.55),
+    scale = siteScale * (lo + unit(mx, mz, 2) * span),
     -- WAS 1.05-1.80 against a 1.55-2.10 width scale, which squashed every
     -- bake into a bush: a 52 px oak landed 27-47 px tall next to a 16 px
     -- cell.  Matching the width range stands the forest up without moving
     -- the canopy-cover discs (those use `scale`, not yscale).
-    yscale = siteScale * (1.50 + unit(mx, mz, 4) * 0.55),
+    yscale = siteScale * (ylo + unit(mx, mz, 4) * span),
     -- Wider canopies close the gaps but make the 16px GRID louder, not
     -- quieter: bigger discs on exact lattice points read as a pattern. A
     -- few pixels of offset per site breaks the rows without moving a tree
@@ -811,7 +988,7 @@ function Trees3D.stampRange(st, from, to)
     local b = buckets[pick]
     local yaw, scale, yscale = pl.yaw, pl.scale, pl.yscale
     local jx, jz = pl.jx, pl.jz
-    local tpl = templates[names[pick]]
+    local tpl = template(names[pick])
     stamp(b.verts, b.indices, tpl.verts, tpl.indices, mx + jx, mz + jz,
           yaw, scale, yscale, tpl.weights)
     -- The caster is the HULL when there is one (buildShadowProxy above),
@@ -833,12 +1010,14 @@ end
 -- carries its own texture, so they cannot share).
 function Trees3D.finishBuild(st)
   local out = {}
+  local paint = st.map and Trees3D.set().palette
   for i = 1, #st.names do
     local b = st.buckets[i]
     if #b.verts > 0 then
       local mesh = Voxel3D.newMesh(b.verts, b.indices)
       if mesh then
-        local tex = loadTexture(st.names[i])
+        local tex = paint and paletteTexture(st.names[i], st.map)
+                    or loadTexture(st.names[i])
         if tex then pcall(mesh.setTexture, mesh, tex) end
         local shadowMesh = nil
         local sb = st.shadow and st.shadow[i]
@@ -917,7 +1096,7 @@ function Trees3D.eachCanopyCell(map, fn)
     local site = sites[i]
     local mx, mz = site.mx or 0, site.mz or 0
     local pl = placement(site, #names)
-    local tpl = templates[names[pl.pick]]
+    local tpl = template(names[pl.pick])
     if tpl then
       -- The crown's reach on the ground, in world pixels: the bake's own
       -- canopy radius carried through the same scale the mesh is stamped
@@ -1032,7 +1211,7 @@ local function meshesFor(map)
       return nil
     end
     st = { sites = sites, names = names, i = 1, buckets = {}, shadow = {},
-           frames = 0, seen = advances }
+           frames = 0, seen = advances, map = map }
     for k = 1, #names do
       st.buckets[k] = { verts = {}, indices = {} }
       st.shadow[k] = { verts = {}, indices = {} }
@@ -1163,7 +1342,30 @@ end
 -- 2.9 -> 3.4: photo leaf cards give the eye a lobe to follow, so the same
 -- shear that looked like a sliding voxel now reads as leaves in the wind.
 -- Still short of the old 4.4 that turned the crown into a blur.
-Trees3D.WIND_SHARE = 3.4
+--
+-- NOW PER SET (Trees3D.SETS[..].windShare): 3.4 for the 3D cards, 2.9 for
+-- the VOXEL cubes -- the number that was measured for a blocky crown before
+-- the cards arrived. This field is the LIVE value applyMode copies in when
+-- the row changes; the probes still zero and restore it per round.
+Trees3D.WIND_SHARE = Trees3D.SETS.voxel.windShare
+
+-- Whether a map gets the authored forest at all: outdoor maps, plus the
+-- tilesets the profile flags with `authored_trees` (Viridian Forest -- not
+-- "outdoor" to the engine, no door SFX and no sky, but a wood).
+--
+-- Read by Structures at build time and by draw() every frame, and it has
+-- to be the SAME answer in both. It was not: sites were recorded under
+-- "the bake loads" and drawn under "the map is outdoor", so the forest's
+-- 430 sites had their hulls skipped for a mesh draw() then refused, and the
+-- forest stood with no trees at all. (Celadon Gym's round hedges went the
+-- same way, in the other direction: they keep their hulls now.)
+function Trees3D.wantsMap(map, outdoor)
+  if outdoor then return true end
+  local okP, prof = pcall(V.data, "voxel_heights")
+  local entry = okP and type(prof) == "table" and prof.tilesets
+                and map and map.tileset and prof.tilesets[map.tileset.id]
+  return type(entry) == "table" and entry.authored_trees == true
+end
 
 -- Draw this map's forest. One call per species, under the hour's own light
 -- exactly like the terrain -- no flatten pass, a tree is not a lamp.
@@ -1172,7 +1374,7 @@ Trees3D.WIND_SHARE = 3.4
 -- being stood on); sites are stored in the map's own coordinates, so the
 -- offset rides the transform rather than the mesh.
 function Trees3D.draw(map, outdoor, ox, oz)
-  if not outdoor then return end
+  if not Trees3D.wantsMap(map, outdoor) then return end
   if not Voxel3D.available() then return end
   local built = meshesFor(map)
   if not built then return end
@@ -1201,6 +1403,7 @@ function Trees3D.draw(map, outdoor, ox, oz)
   local okW, Wind = pcall(V.require, "Wind")
   if okW and Wind and Wind.amount then
     local okA, amount = pcall(Wind.amount)
+    applyMode()
     if okA then sway = (tonumber(amount) or 0) * Trees3D.WIND_SHARE end
     local okL, wet, snow, gust = pcall(Wind.load)
     if okL then
@@ -1279,6 +1482,7 @@ end
 -- Drop everything, including the decoded templates and their textures.
 function Trees3D.reload()
   templates, textures, meshes, pending, builtSites = {}, {}, {}, {}, {}
+  paletteTex = {}
 end
 
 return Trees3D

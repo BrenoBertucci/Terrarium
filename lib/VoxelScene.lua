@@ -30,6 +30,7 @@ local WaterBody = V.require("WaterBody")
 local FloorArt = V.require("FloorArt")
 local Underpass = V.require("Underpass")
 local Crypt = V.require("Crypt")
+local Shop = V.require("Shop")
 local Anime = V.require("Anime")
 local VoxelGrid = V.require("VoxelGrid")
 local RayFX = V.require("RayFX")
@@ -1099,12 +1100,15 @@ local function castShadows(state, terrain, nbMesh, posed, cx, cy, vw, vh,
                         Mat4.translate(nb.ox, 0, nb.oy),
                         shifted(box, nb.ox, nb.oy))
   end
-  ShadowMap.draw(ChunkMesher.sprites(state.map),
-                 ChunkMesher.spriteTex(state.map), nil)
+  -- one draw per sheet: a map with a Center AND a Mart holds two, and
+  -- their UVs are normalised against different PNGs (ChunkMesher).
+  for _, g in ipairs(ChunkMesher.spriteGroups(state.map) or {}) do
+    ShadowMap.draw(g.mesh, g.tex, nil)
+  end
   for _, nb in ipairs(casters) do
-    ShadowMap.draw(ChunkMesher.sprites(nb.map),
-                   ChunkMesher.spriteTex(nb.map),
-                   Mat4.translate(nb.ox, 0, nb.oy))
+    for _, g in ipairs(ChunkMesher.spriteGroups(nb.map) or {}) do
+      ShadowMap.draw(g.mesh, g.tex, Mat4.translate(nb.ox, 0, nb.oy))
+    end
   end
   -- flower billboards live outside the terrain mesh (they draw after the
   -- characters, pulled -- see render), but the sun still sees them: a
@@ -1254,14 +1258,78 @@ function VoxelScene.render(state, w, h, vw, vh, paletteFor)
     -- the occlusion own this room's dark
     Voxel3D.SHADOW_ALPHA = (Voxel3D.SHADOW_ALPHA or 0) * Crypt.SHADOW_SCALE
   end
+  -- The Poke Mart, inside (lib/Shop.lua): the same lesson pointed the
+  -- other way. A shop is the brightest room in any of these towns, so the
+  -- ambient is held down only far enough that a fluorescent tube can be
+  -- BRIGHTER than the room it is in -- without that a lit diffuser is a
+  -- pale rectangle and the eight tubes below do nothing at all.
+  local shop = (not outdoor) and Shop.matches(state.map)
+  if shop then
+    Voxel3D.tint = Shop.ambient(state.map, Voxel3D.tint)
+    -- and the noon rig's shadow, held down to a third rather than off. Off
+    -- is what left the room with no occluder at all -- see Shop.SHADOW_SCALE
+    Voxel3D.SHADOW_ALPHA = (Voxel3D.SHADOW_ALPHA or 0) * Shop.SHADOW_SCALE
+  end
+  -- The sun's SHEAR, held nearly vertical while the shop is the map.
+  --
+  -- ONLY while the shop is the map. DayNight.applyRig ran a few lines up
+  -- and has already set both pairs for whatever this frame is: the hour's
+  -- own shear outdoors, noon indoors. So there is nothing to restore, and
+  -- an unconditional `else` branch here would have pinned the OUTDOOR sun
+  -- to the noon this happened to cache first -- the shadows in every town
+  -- would have stopped following the clock.
+  --
+  -- shadowSignature hashes KX and KZ, so the cached depth map invalidates
+  -- itself on the way into the shop and on the way out.
+  -- The sun frustum's FOOTPRINT, capped to the room. Measured in the Mart:
+  -- fitted to the camera alone the box came out 664 x 585 world px on a
+  -- floor 128 across, which at the low rung's 512-px map is 1.30 world px
+  -- per texel and 4.52 px of depth slack -- so a ten-voxel fixture's
+  -- shadow was displaced nearly half its own height and read as a haze
+  -- rather than as a shadow. The room plus a caster margin is a fifth of
+  -- that area. See ShadowMap.clamp.
+  --
+  -- The room is ShopKit's 128 x 128 at origin (0, 0) -- Shop.origin -- and
+  -- the margin covers both the perimeter wall (5 deep) and the throw of
+  -- the tallest thing in it: 26 voxels at a shear of 0.52 is 14 px, north
+  -- and west, which is the way this sun leans.
+  ShadowMap.clamp = shop and { -40, -40, 144, 144 } or nil
+  if shop and Shop.SUN then
+    local kx, kz = Shop.SUN.kx, Shop.SUN.kz
+    -- BOTH PAIRS, and this is not belt and braces. DayNight.applyRig sets
+    -- ShadowMap.KX/KZ -- the shear the depth map is RENDERED with -- and
+    -- Voxel3D.SHADOW_KX/KZ -- the shear the scene shader LOOKS IT UP with.
+    -- Setting only the first shifted every lookup off its own texel and the
+    -- room came back with no shadow at all rather than with a wrong one,
+    -- which is the failure that looks exactly like the feature being off.
+    ShadowMap.KX, ShadowMap.KZ = kx, kz
+    Voxel3D.SHADOW_KX, Voxel3D.SHADOW_KZ = kx, kz
+  end
   Crypt.setMap(crypt and state.map or nil)
   -- and RayFX's ambient occlusion, asked for at least at its own rung and
   -- harder than the streets' while the materials are on (a crypt is
   -- corners); nothing asked for anywhere else
   local cryptFx = crypt and Crypt.fxOn()
-  RayFX.floor = cryptFx and "ao" or nil
-  Voxel3D.aoPower = cryptFx and Crypt.AO.power or nil
-  Voxel3D.aoRange = cryptFx and Crypt.AO.range or nil
+  local shopFx = shop and Shop.fxOn()
+  -- BOTH rooms ask for the occlusion rung now.
+  --
+  -- The shop used not to, and the note that said why is worth quoting
+  -- because it was a correct observation with the wrong cause attached:
+  -- "forcing it put a contact band of shadow along the foot of everything
+  -- standing on the floor, and in a bounce-lit room with a pale polished
+  -- floor that band is exactly what does not happen." The band was real.
+  -- What made it wrong was that the room was clipping at 27.8 % -- so the
+  -- ONLY shading anywhere was that band, and a room with a dark line at
+  -- the foot of every fixture and flat white everywhere else does look
+  -- broken. With the exposure fixed the band is the contact shadow the
+  -- room was otherwise missing entirely.
+  RayFX.floor = (cryptFx or shopFx) and "ao" or nil
+  -- the shop's occlusion is softer than the crypt's: this room is shelves,
+  -- and at the crypt's 1.75 every shelf lip drew a black line under itself
+  Voxel3D.aoPower = cryptFx and Crypt.AO.power
+                    or (shopFx and Shop.AO.power) or nil
+  Voxel3D.aoRange = cryptFx and Crypt.AO.range
+                    or (shopFx and Shop.AO.range) or nil
   -- The voxel wireframe is the diorama's own signature, and it is the one
   -- thing the crypt's materials (the CRYPT-FX row) cannot share a surface
   -- with: graph paper ruled over weathered stone. So the frame is drawn
@@ -1270,7 +1338,11 @@ function VoxelScene.render(state, w, h, vw, vh, paletteFor)
   -- else is holding it.
   -- The cel step (the ANIME row) is held off the same way: four bands of
   -- light dithered over photographed stone is neither look.
-  if crypt and Crypt.fxOn() then
+  -- ...and the shop's, for the same reason and more so: a konbini is white
+  -- surfaces edge to edge, and a grid ruled over white surfaces is not a
+  -- signature, it is tiling. The first in-game frames of the Mart were a
+  -- room made of graph paper (probe_out_shop/shop_room.png).
+  if (crypt and Crypt.fxOn()) or (shop and Shop.fxOn()) then
     if VoxelGrid.override == nil then
       VoxelGrid.override = false
       gridHeld = true
@@ -1346,6 +1418,34 @@ function VoxelScene.render(state, w, h, vw, vh, paletteFor)
     -- flat zero: a tube on a ballast does not wander, and the uniform being
     -- constant is also what folds the flicker's sin() away
     Voxel3D.lampFlicker = Underpass.FLICKER
+  elseif shop then
+    -- A SHOP IS LIT BY TUBES. Eight fluorescent battens (their sites are
+    -- lib/Shop.lua's table, shared with the geometry so a pool always has
+    -- a diffuser over it -- the crypt's rule): cool, wide, and overlapping
+    -- into an even wash with soft pools under the fixtures rather than the
+    -- separate candle pools of the tower.
+    local okL, lamps = pcall(Shop.lights, state.map, cx, cy)
+    Voxel3D.lampLights = okL and lamps or nil
+    Voxel3D.lampHeight = Shop.HEIGHT
+    Voxel3D.lampColor = Shop.COLOR
+    Voxel3D.lampCore = Shop.CORE
+    -- near-flat: a tube on a ballast does not breathe, and anything
+    -- readable here reads as a fault rather than as a shop
+    Voxel3D.lampFlicker = Shop.FLICKER_RATE > 0
+      and ((love.timer and love.timer.getTime and love.timer.getTime() or 0)
+           * Shop.FLICKER_RATE) % 6283.185
+      or 0
+    local fx = Shop.fxOn()
+    Voxel3D.lampNormals = fx and 1 or 0
+    Voxel3D.lampSpec = fx and Shop.SPEC or 0
+    Voxel3D.mist = nil
+    Voxel3D.mistColor = nil
+    -- the shop's two surfaces ride in the crypt's own uniform block: the
+    -- wall's plaster in stoneArt, every hard surface in graniteArt. Which
+    -- one a fragment reads is decided by the sheet band it wears (`shopOn`
+    -- in lib/Voxel3D.lua), not by its luminance.
+    local okM, mats = pcall(Shop.matsFor)
+    Voxel3D.stone = (okM and mats) or nil
   elseif crypt then
     -- A CRYPT IS LIT BY CANDLES. The lanterns the kit hangs on the walls
     -- (their sites are lib/Crypt.lua's table, shared with the geometry so
@@ -1452,13 +1552,27 @@ function VoxelScene.render(state, w, h, vw, vh, paletteFor)
   -- glass mask is off for this draw (same reason character sheets turn it
   -- off). They still sit in the terrain pass -- no lean, they cast below.
   do
+    local shopSheet = nil
+    if shopFx then
+      local okK, ShopKit = pcall(V.require, "ShopKit")
+      shopSheet = okK and ShopKit and ShopKit.SHEET or nil
+    end
     Voxel3D.glass(false)
-    Voxel3D.draw(ChunkMesher.sprites(state.map),
-                 ChunkMesher.spriteTex(state.map), nil, nil, nil, 0)
+    for _, g in ipairs(ChunkMesher.spriteGroups(state.map) or {}) do
+      -- the Mart's interior is one of these groups, and it is the only one
+      -- whose sheet is banded by material: its rows say plaster, steel,
+      -- laminate, glass. Told so for the length of its own draw and no
+      -- longer, exactly as glass() is (lib/Voxel3D.lua's shopMats).
+      local isShop = shopFx and g.path == shopSheet
+      if isShop then Voxel3D.shopMats(true) end
+      Voxel3D.draw(g.mesh, g.tex, nil, nil, nil, 0)
+      if isShop then Voxel3D.shopMats(false) end
+    end
     for _, nb in ipairs(state.neighbors or {}) do
-      Voxel3D.draw(ChunkMesher.sprites(nb.map),
-                   ChunkMesher.spriteTex(nb.map),
-                   Mat4.translate(nb.ox, 0, nb.oy), nil, nil, 0)
+      for _, g in ipairs(ChunkMesher.spriteGroups(nb.map) or {}) do
+        Voxel3D.draw(g.mesh, g.tex,
+                     Mat4.translate(nb.ox, 0, nb.oy), nil, nil, 0)
+      end
     end
     Voxel3D.glass(true)
   end
@@ -1909,6 +2023,18 @@ function VoxelScene.render(state, w, h, vw, vh, paletteFor)
       local ow, oh = out:getDimensions()
       local okO, opts = pcall(Crypt.bloomOpts, state.map, ow, oh)
       pcall(Bloom.apply, out, (okO and opts) or Crypt.BLOOM)
+    end
+  end
+  -- and the shop's, on the same canvas and for the same reason. Weaker and
+  -- with a higher threshold than the crypt's: only the diffusers and the
+  -- cooler's back panel are over it, so the room does not haze -- a
+  -- fluorescent tube has a hard edge where a candle has none.
+  if out and Shop.matches(state.map) and Shop.fxOn() then
+    local okB, Bloom = pcall(V.require, "Bloom")
+    if okB and Bloom then
+      local ow, oh = out:getDimensions()
+      local okO, opts = pcall(Shop.bloomOpts, state.map, ow, oh)
+      pcall(Bloom.apply, out, (okO and opts) or Shop.BLOOM)
     end
   end
   return out

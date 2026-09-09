@@ -123,6 +123,89 @@ return {
   -- small planet, and entry is always a map cut so the seam never shows.
   -- 6F drops lower and tighter (the Marowak floor should press in); 7F
   -- reads the corridor to Mr. Fuji as the procession it is.
+  -- ------- the Poke Mart, inside (lib/ShopKit.lua, lib/Shop.lua)
+  --
+  -- The dollhouse cut only means anything under an authored fixed shot:
+  -- under the player-driven orbit these maps got by default, a room cut
+  -- away toward the south is a sawn-off wall as soon as the camera swings
+  -- north of it. So the shot comes first and the geometry is built to it.
+  --
+  -- MEASURED AGAIN at fov 30: the content ran from 23.5 % of the height
+  -- down to the very bottom edge -- a quarter of the frame dead at the top
+  -- and the entrance sliced off at the bottom. 33 gives the height back and
+  -- focY drops from 10 to -4. Measured after the first try at 4: still
+  -- 22 % of the height was dead sky above the room, so the eye tips down a
+  -- further two degrees. focY is the point the camera LOOKS AT, in the same
+  -- world y as everything else, and below the floor is a legal place to
+  -- aim it -- the room fills the frame, not the void over it.
+  --
+  -- MEASURED: at fov 38 the room filled about half the frame's width and
+  -- 61 % of the screen was the black surround -- the largest single share
+  -- of any pixel in the shot, and a diorama sitting in a void reads as a
+  -- model on a table rather than as a place. The lens is 30 instead: same
+  -- eye, same pitch, same cut -- only the field narrows, by 38/30 = 1.27x,
+  -- which puts the room at about three quarters of the width and still
+  -- leaves a sixth of the height as margin for the walls' coping.
+  --
+  -- The room is 128x128 world px, centre (64, 64). Framing eight cells
+  -- plus a margin in a 38-degree lens needs 72 / tan(19) = 209 px of
+  -- distance; held at the Tower's own pitch that puts the eye at
+  -- z = 64 + 209*cos(27) = 248 and y = 10 + 209*sin(27) = 104. Eye to
+  -- focus is then dy 94 over dz 184, so the pitch is atan(94/184) = 27.1
+  -- degrees -- the same family as the Tower's floors, and the number the
+  -- cut is derived from (k = tan 27.1 = 0.511: one voxel of height hides
+  -- 1.96 world px of floor behind it). See
+  -- assets/docs/shop/ART_DIRECTION.md.
+  --
+  -- All eight town Marts are the same room, tile for tile, so they share
+  -- one shot. Celadon's ground floor is a different plan on a different
+  -- tileset and gets the same camera only because the framing suits it.
+  VIRIDIAN_MART = {
+    { x = 64, z = 64, bx = 64, bz = 64, mode = "fixed",
+      camX = 64, camY = 104, camZ = 248, focY = -4,
+      fov = 33, frames = 12, flat = true },
+  },
+  PEWTER_MART = {
+    { x = 64, z = 64, bx = 64, bz = 64, mode = "fixed",
+      camX = 64, camY = 104, camZ = 248, focY = -4,
+      fov = 33, frames = 12, flat = true },
+  },
+  CERULEAN_MART = {
+    { x = 64, z = 64, bx = 64, bz = 64, mode = "fixed",
+      camX = 64, camY = 104, camZ = 248, focY = -4,
+      fov = 33, frames = 12, flat = true },
+  },
+  LAVENDER_MART = {
+    { x = 64, z = 64, bx = 64, bz = 64, mode = "fixed",
+      camX = 64, camY = 104, camZ = 248, focY = -4,
+      fov = 33, frames = 12, flat = true },
+  },
+  VERMILION_MART = {
+    { x = 64, z = 64, bx = 64, bz = 64, mode = "fixed",
+      camX = 64, camY = 104, camZ = 248, focY = -4,
+      fov = 33, frames = 12, flat = true },
+  },
+  CELADON_MART_1F = {
+    { x = 64, z = 64, bx = 64, bz = 64, mode = "fixed",
+      camX = 64, camY = 104, camZ = 248, focY = -4,
+      fov = 33, frames = 12, flat = true },
+  },
+  FUCHSIA_MART = {
+    { x = 64, z = 64, bx = 64, bz = 64, mode = "fixed",
+      camX = 64, camY = 104, camZ = 248, focY = -4,
+      fov = 33, frames = 12, flat = true },
+  },
+  SAFFRON_MART = {
+    { x = 64, z = 64, bx = 64, bz = 64, mode = "fixed",
+      camX = 64, camY = 104, camZ = 248, focY = -4,
+      fov = 33, frames = 12, flat = true },
+  },
+  CINNABAR_MART = {
+    { x = 64, z = 64, bx = 64, bz = 64, mode = "fixed",
+      camX = 64, camY = 104, camZ = 248, focY = -4,
+      fov = 33, frames = 12, flat = true },
+  },
+
   POKEMON_TOWER_1F = {
     { x = 160, z = 144, bx = 160, bz = 144, mode = "fixed",
       camX = 160, camY = 150, camZ = 420, focY = 8,
@@ -151,7 +234,7 @@ return {
   POKEMON_TOWER_6F = {
     { x = 160, z = 144, bx = 160, bz = 144, mode = "fixed",
       camX = 160, camY = 90, camZ = 380, focY = 8,
-      fov = 30, frames = 12, flat = true },
+      fov = 38, frames = 12, flat = true },
   },
   POKEMON_TOWER_7F = {
     { x = 160, z = 144, bx = 160, bz = 144, mode = "fixed",

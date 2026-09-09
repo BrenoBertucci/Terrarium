@@ -20,11 +20,495 @@ The old `-mobile` channel is retired. Historical tags keep it (`v1.28.0-mobile` 
 
 Tags and packages:
 
-- Git tag: `v1.31.0-beta`
-- Zip asset: `TERRARIUM-1.31.0-beta.zip`
-- `manifest.json` / catalog `version` field: `1.31.0-beta`
+- Git tag: `v1.32.0-beta`
+- Zip asset: `TERRARIUM-1.32.0-beta.zip`
+- `manifest.json` / catalog `version` field: `1.32.0-beta`
 
 ## Unreleased
+
+## 1.32.0-beta
+
+**Beta para testes e nada mais.**
+
+### The 3D mode never came up on Mali (`lib/Voxel3D.lua`, `tests/gpu_compat_probe.lua`)
+
+1.30.1 gave the shader a rung ladder so a driver that refuses one construct
+loses one feature instead of the whole diorama, and that fixed the Adreno
+reports. Mali kept refusing, and the ladder could not help, because what Mali
+objects to is not in any rung:
+
+```
+Precisions of uniform 'swellPhase' differ between VERTEX and FRAGMENT shaders.
+```
+
+GLSL ES 1.00 links a uniform by **name and precision qualifier**. A vertex
+shader defaults `float` to `highp`; LOVE gives the fragment stage
+`precision mediump float;`. So a bare `uniform float swellPhase;` in a region
+both stages compile -- which is the whole water block, because the vertex
+displaces the sheet and the fragment repaints it -- was `highp` on one side and
+`mediump` on the other. **36 uniforms**, all of them in every rung, so all four
+rungs failed identically and there was nothing left to fall to.
+
+Nothing local ever said so: desktop GL is `#version 120`, where the precision
+qualifiers are `#define`d away entirely, and Adreno tolerates the mismatch.
+
+- **The 36 declarations now carry `VXHP`**, and Lua substitutes it. It has to
+  be decided outside the shader: the vertex stage cannot see
+  `GL_FRAGMENT_PRECISION_HIGH`, so any `#if` that asks resolves per stage,
+  which is the bug again. `Voxel3D.shader()` reads
+  `getSupported().pixelshaderhighp` and injects `highp` or `mediump` --
+  one value, both stages, matching by construction.
+- **Precision is a walk of its own, outside the rungs**, and the outer one:
+  it is a link rule rather than a feature, so a driver that refuses it refuses
+  it on every rung. `highp` first -- `eye` runs to thousands of world pixels
+  and `swellPhase` climbs all session, and mediump on a Mali is fp16.
+- **There is deliberately no `#ifndef VXHP` default in the shader.** A default
+  would have to pick its value from an `#if`, and a per-stage value is the
+  defect; the safety net would restore what it was catching.
+- **`Voxel3D.report()` prints the precision** beside the rung, and each
+  refusal is tagged with it.
+- **The probe walks all four rungs at both precisions** (16 builds, up from 8)
+  and stands up a driver that refuses `highp` uniforms, checking the mode
+  still comes up and lands on mediump with every feature intact. The desktop
+  GPU takes rung 1 at highp, so without that nothing below it is ever built.
+
+Verified by compiling all 32 variants under a conformant ESSL1 front end
+(ANGLE, via WebGL 1), which reproduced the refusal before the change and
+links clean after it.
+
+### The Mart's inside was over-exposed, not flat (`lib/Shop.lua`, `lib/ShopKit.lua`, `lib/Voxel3D.lua`, `data/camera_shots.lua`)
+
+The room read as a white plastic box, and the first rebuild answered that by
+cutting better models. Measuring the frame instead found the real cause:
+**27.8 % of its pixels had a channel pinned at 255 and 14.0 % were pure
+white**, and the correlation between "this patch is clipped" and "this patch
+has no shading ramp left" was **-0.944** -- 30.9 levels of shading where it
+was not clipped, 4.7 where it was. The engine was computing all of it and
+the exposure was erasing it, so every model-side fix was landing inside a
+white that could not get whiter.
+
+- **Exposure.** `Shop.AMBIENT` 0.90 -> 0.74, `GRADE.exposure` 1.0 -> 0.94.
+  Clipping 27.8 % -> 3.1 %, pure white 14.0 % -> 0.0 %.
+- **Surfaces are chosen on relative sd** (`sd/mean`), which is the only
+  thing that survives the shader normalising each albedo's mean away. The
+  wall was `wall_paint` at **0.014** -- plus or minus three levels. Now
+  `ceiling_tile` (0.079) and `steel_brushed` (0.088), with the shader's
+  reciprocals re-derived (1.335 -> 1.668, 1.725 -> 1.666) and `mix`
+  0.80 -> 0.52. Five new CC0 grades in `assets/shop/`.
+- **The room casts a shadow.** `Shop.SHADOW_SCALE` was 0: the eight tubes
+  are point lights, which light a surface without occluding one, so nothing
+  in the room touched the floor. The sun pass is the only occluder indoors
+  and its cost was already being paid. Now 0.60, on a shear held at
+  (-0.52, -0.34) -- a vertical sun hides a fixture's shadow under itself.
+- **The palette is split**: shell warm and pale, fixtures cool and a stop
+  darker. Nine surfaces that were one 46 % mass now separate.
+- **The floor tile was 1.9 m across.** `FloorArt`'s `shop` profile
+  `scale` 96 -> 32, so a tile is 64 cm. A floor whose grid is coarser than
+  the furniture on it tells the eye the furniture is small.
+- **Stock has stature.** Each SKU carries its own height and, where it is a
+  bottle, a neck; the top voxel of every facing wears the package's LID,
+  which is the face this camera actually looks at. The flat skyline along
+  each tier was 20.6 % of the frame's width.
+- **The cooler is stocked at the glass**, not seven voxels behind it, where
+  the widest fixture in the room had been measuring as flat `#AAC0C8`.
+- **The room has a brand**: a POKE MART fascia over the drinks bay, in the
+  wall's own plane. `sign_shop` had been drawn into the sheet since the
+  first build and never placed.
+- **A pallet of stock and a counter impulse unit**, in the two largest
+  empty faces -- bare floor was 22-29 % of every pixel.
+- **Framing.** fov 38 -> 33 and `focY` 10 -> -4 on the nine Mart shots: the
+  room filled 39 % of the screen and 61 % was the black surround.
+- New: `.claude/agents/voxel-silhouette-critic`, `assets/docs/shop/DRESSING.md`,
+  `SILHOUETTE_AUDIT.md`, `tools/surface_pick.py`, and step 0 / step 8 of
+  `assets/docs/shop/WORKFLOW.md`. The probe now asserts the sun pass's alpha
+  and that its two shears agree, and pins `LIGHT`/`SHADOWS` -- three of the
+  four gates that silently take an indoor shadow away.
+
+Then a second pass, because the shadow was still invisible with all of the
+above landed. The probe was made to print the sun map's own numbers and the
+cause came out at once: `res 512`, `extent 664 x 585` world px on a floor
+128 across -- **1.30 world px per texel**, and `BIAS + SLOPE*max(w,h)/res`
+= **4.52 px of slack**. `ShadowMap.fit` sizes the frustum from the CAMERA's
+reach, which is a number for open country. A ten-voxel fixture was having
+its shadow pushed nearly half its own height off its own foot.
+
+- **`ShadowMap.clamp`** (new, nil by default) caps the sun frustum's ground
+  footprint; the shop passes the room plus a caster margin. Extent
+  664x585 -> 289x270, **1.30 -> 0.56 px/texel**, slack 4.52 -> 2.25, and
+  the A/B against `SHADOW_SCALE = 0` went from 10.3 % of the frame to
+  **25.6 %**. The probe now fails over 0.75 px/texel.
+- **Occlusion given its weight back.** `Shop.AO.power` 0.55 -> 0.95 and the
+  shop now asks for the occlusion rung. Both had been dialled down because
+  "the goods on an overhung shelf went to black" and "it put a contact band
+  along the foot of everything" -- true observations made while the room
+  was clipping at 27.8 %, when that band was the only shading in the frame.
+- **The hour reaches the shop**, through the one wall of it that is glass.
+  `DayNight` is outdoor-only by design, so `Shop.ambient` fetches the hour
+  itself: the room dims a seventh by night and its cast walks to the tubes'
+  own green. NOTE: `DayNight.bodyAt` swaps to the MOON past `DAY_LEN`, so
+  `strengthAt` alone reads 1 at midnight -- the first version made 2 a.m.
+  as bright as noon. The third return says which body it is.
+- **A ceiling bulkhead**, and it is a beam rather than a ceiling because at
+  this camera a slab shows only its upper face. Sited by the cut's own
+  arithmetic so it overlaps the cooler wall by one voxel.
+- **Product is card with a brand band on it**, not a saturated field. A
+  shelf of pure hue read as moulded plastic tiles.
+- **A planter**, which is the only organic form and the only green in the
+  room -- the boxiness index (82 % of coherent contours within 4 degrees of
+  the three voxel axes) did not move for exposure or material, and nothing
+  in a room of cabinets can move it.
+- **A waste bin and an extinguisher**: 2 % of the room sat below value 0.20
+  against a healthy 8, and a frame with no dark gives its lights nothing to
+  be brighter than.
+- A queue mat at the counter, and `Shop.AMBIENT` rebalanced 0.74 -> 0.80.
+
+And then the perimeter, which is what a convenience store actually is:
+
+- **`eastShelf`** -- two runs against the east wall, at z 33..46 and
+  z 81..94, either side of the gondola end that already stood between them.
+  Both numbers that matter are occlusion, not taste. The tall run is built
+  to **17**, not to cy 2's cap of 26 and not to the gondola's 14: at 14 the
+  gondola in front of it (14 tall at z 57, hiding everything above z 30 on
+  screen) left nothing showing but its top course, and the fixture read as
+  a grey cabinet; at 26 it would have swallowed the SALE cases behind it.
+- **`westShelf`** -- a back-bar over the counter's north cap. The west wall
+  has no bare stretch to shelve: the counter's L owns z 32..47 and 96..111,
+  `backFixture` stands at 48..79, and 80..95 is the clerk's own cell, which
+  must stay clear above ankle height. What it has is the sixteen voxels of
+  air between CTOP 10 and the cap at 26, which is where a konbini puts the
+  shelf behind the till.
+- Both runs put the **carcass against the wall and the boards into the
+  room**. Mirroring `backFixture` literally -- which faces its carcass
+  inward -- put a solid two-voxel panel down the east run's whole face and
+  hid the shelving behind it. The west run gets away with that only because
+  it stands at x 0..9 against a camera at x 64.
+- And **no cap over the top tier**, which is the rule the gondola already
+  carried in this file and which both new runs had to learn twice.
+- The queue mat added a moment earlier was **removed**: `tread` is
+  rgb(32,34,36), drawn for a doorway sill, and at 1.4 x 2.8 m it was a
+  black rectangle on the floor.
+
+Then the counter, the cooler and the stock itself:
+
+- **The counter is joinery, not a slab.** A run of modules 14 voxels wide,
+  measured along `x + z` -- which is the distance ALONG the run whichever
+  way the L is pointing, since on one leg x is fixed and on the caps z is.
+  Stiles between modules, a pull rail over each panel, and a seam across
+  the worktop every two modules. The panel is DRAWN rather than carved:
+  set back one voxel it went far enough into shadow at this room's
+  occlusion to read as a hole, and the counter came back as a worktop on
+  legs with daylight under it.
+- **The cooler's door handle has never existed.** It was written under
+  `z > CAB_Z1`, and CAB_Z1 is 31 while `room` only calls the cooler for
+  z 20..31 -- unreachable from the first build, which is why adding to it
+  did not move the face count by one. Moved into the door opening, where
+  z 30 and 31 were otherwise air, and given a boss at each end.
+- The panes now carry **the ceiling battens reflected** -- one bright
+  horizontal band per tube, which is what makes glass read as glass and
+  not as pale blue plastic -- and a price strip along the bottom of each
+  door.
+- **POKE BALLS, voxelised from the sprites the game already ships.** The
+  palette is sampled out of `assets/battlexy/items/*_BALL.png` rather than
+  invented, so the shelf and the battle bag agree about what a Great Ball
+  looks like. `ball()` picks its texel by which course of the sphere a
+  voxel sits in -- lid, belt, base -- because at three voxels across what
+  reads as a Poke Ball is the BANDING, not the roundness. Every fixture
+  asks one shared `ballSku()`, so a line that is a ball on the gondola is
+  a ball on the wall run too. The SALE niche is now balls throughout: its
+  slot was already 3 x 3 x 3, and showing one thing off is that case's
+  whole job.
+
+And the floor, plus the balls back in two dimensions:
+
+- **`tools/shop_floor.py`** builds the floor rather than picking it.
+  Neither graded photograph is a shop floor: `floor_tiles_08` has the grid
+  and gives every tile a different tone, which at `scale = 32` reads as
+  staining and made the room look like weathered pavement; the graded
+  `linoleum_brown` is the right surface and has no seam anywhere, so the
+  floor loses the one grid that says how big the room is. So: the vinyl
+  for the material, a drawn grout grid at the tile photograph's own pitch,
+  and the joint pressed into the normal as a groove. Same mean, so nothing
+  downstream re-derives.
+- **The floor's highlight was a blur, not a reflection.** gloss 175 -> 330
+  and specK 4.2 -> 2.5: a lobe that wide spreads one tube over a couple of
+  metres and a coefficient that high blows the middle of it, which is why
+  the frame carried a soft white smear. A polished floor's highlight is
+  tight and not especially strong.
+- **The balls are 2D again.** The voxel sphere is gone: at three voxels
+  across a sphere is a lumpy cube. They are product cells now -- but NOT
+  the bag sprite boxed down, which was tried and fails on the sampling.
+  `prodFit` maps a three-voxel facing onto art rows 0, 2 and 4, and row 0
+  of a reduced sprite is its own black outline, so every ball wore a dark
+  cap -- the one face this camera always sees. `draw_ball` authors the
+  rows instead, in the sprite's own sampled palette: lid, belt+button,
+  base, each on two courses, so any three-row sampling comes out as a
+  Poke Ball.
+
+Last, the back wall and the ceiling:
+
+- **The coping is laid, not sawn.** The dollhouse cut leaves a five-voxel
+  top face running the wall's whole 128, and this camera looks down on it,
+  so most of what reads as "the back wall" is that. A joint every 15 and a
+  nosing on the outermost course turn a cut slab into laid capping.
+- **A return-air grille either side of the fascia**, and a **bandeau** --
+  one course of the Mart's blue along the wall at the height the product
+  run tops out, tying the fascia to the counter. Six-voxel `aisle_sign`
+  plaques were tried in the gaps first and read as loose blue squares: at
+  this distance a sign is either legible or continuous, and six voxels is
+  neither.
+- **The bulkhead is built in bays** -- a joint every 32, an air grille in
+  every second bay, and `ceiling` on its top face, which is the one
+  surface in the room that is genuinely a ceiling panel.
+- `vent`, `ceiling` and `counter_fr`-as-bandeau put three more swatches to
+  work that had been drawn into the sheet since the first build and never
+  placed once.
+
+Measured before deciding NOT to do more: the coping reads as though it
+dominates the top of the frame and is **1.61 % of it**. The wall stays
+five thick.
+
+And the gondolas:
+
+- **An upright at every BAY.** A 3.2 m gondola is not two posts and a
+  span: it is a run of bays about 90 cm wide, each with its own slotted
+  upright. Ours had posts at the four corners and nothing between them,
+  and that is most of why a tier read as one continuous ribbon of
+  packaging 64 voxels long. The bay posts only ADD -- unlike the corner
+  posts they never return nil, because rounding a corner off in the middle
+  of a run would notch a bite out of the shelf either side of it.
+- **The price rail carries tickets**, and sparsely: one narrow mark every
+  eight rather than a two-wide block every four. The dense version made
+  the busiest edge in the room read as a keyboard. At the shelf's scale a
+  rail is mostly blank strip with the odd label on it. Plus a shadow line
+  along its bottom, so the lip has an edge.
+
+And the checkout, which is more than a till:
+
+- **A cash drawer** across the till's south face -- the face the player
+  actually stands at -- a **pinpad on the CUSTOMER's side** tipped toward
+  them, and a **coin tray** sunk into the worktop.
+- **`backFixture` lost its cap**, and this is what actually changed that
+  corner of the frame. The run standing directly behind the till closed
+  with two courses of `cabinet`: a pale slab ten voxels deep and
+  thirty-two long, lying flat under a camera that looks down, reading as
+  the lid of a chest freezer. It is the same rule the gondola has carried
+  in this file all along and that both wall runs had to learn separately.
+  Four fixtures have now made the same mistake; at 27 degrees a board
+  across a fixture's top hides the fixture.
+- A **bag stack was built and cut**: five voxels square by three tall came
+  out as a pale cube most of a metre across, outweighing the till it was
+  meant to sit beside. A bag stack is soft, low and shapeless and there is
+  no honest way to say that in a 50 cm voxel.
+
+Fixed: **the tileset's drawn till stood inside the modelled one.**
+
+`Structures.buildFigures` matches authored figures by TILE PATTERN and
+knows nothing about what `Buildings` put on the cell. The MART tileset
+authors one over tiles 14/15 + 30/31 -- the till `lib/RoomKit` relied on,
+where the figure WAS the register and the template only built the worktop
+under it. `lib/ShopKit` models its own till on the same cells, so both were
+built, one standing in the other, and every check in the probe stayed
+green.
+
+- **`m.noFigure`**, opt-in per model: `Buildings.stamp` records it into
+  `S.noFigure`, and the figure pass -- which runs after it -- skips any
+  pattern touching a marked cell. NOT keyed on `S.skip`: the Centre's couch
+  is claimed by RoomKit and still wants its man, which is the entire point
+  of the figure pass. Only a model that says it has done the job itself
+  turns it off.
+- The flag has to travel on the QUADS, which is what `stamp` is handed.
+  Setting it on the model alone changed nothing and the probe still read
+  `figures=1` -- the same shape of miss as the two sun shears.
+- The probe now asserts `figures == 0` in this room.
+
+And the cooler, where **the glass was opaque and hiding all of it.**
+
+`glass_cool` is an ordinary albedo with a Fresnel term laid over it -- this
+shader has no transparency path, and the sheet's alpha is 255 everywhere.
+So the full pane was a wall, and the drinks that had been moved forward to
+the shelf lip precisely so they could be seen were sitting two voxels
+behind solid blue. The widest fixture in the room measured as flat
+`#AAC0C8` twice, for two entirely different reasons.
+
+The pane now keeps only what carries light and drops the rest: the door's
+top and bottom rail, the two ceiling battens reflected in it, and the
+shelf-edge price strip. Everything between is open, and what shows through
+is the cabinet the fixture exists to display.
+
+Also on the cooler: a full-height pull with a boss at each end, on the door
+opening rather than in the branch it had been written into (`z > CAB_Z1`,
+which `room` never hands it).
+
+And the entrance:
+
+- **The mat was a hole in the floor.** `#3A3D42` over 44 x 15 voxels was
+  the largest dark mass in the room by a wide margin, and at that value it
+  stopped reading as a mat. Lifted to a wet-slate grey where the ribs can
+  actually be seen, with the ribs running ACROSS the doorway -- the way a
+  scraper mat is laid and the way the camera crosses it -- and a bound lip
+  round the edge, which is what stops it reading as a painted rectangle.
+- **The jambs are turned.** A square post beside a doorway is a bollard, a
+  round one is a pipe, and a round one with a plinth, a steel shaft, a
+  collar and a cap is a jamb. Four radii is the whole difference, and this
+  is the one fixture in the room the player passes within a voxel of every
+  single time.
+- **A threshold plate** on the door line where the mat ends, because that
+  is where the floor finish changes and something has to cover the joint.
+
+And the perimeter wall, which is also the dollhouse cut:
+
+- **Pilasters every 24** (2.4 m, a structural bay). The wall was one
+  recessed face from end to end, and the cut saws it into steps -- so each
+  of the five steps down each side showed the same blank panel with a
+  capping on it. A pier brings the wall forward to full depth and gives
+  the run a rhythm that the steps then cut ACROSS rather than repeat.
+- **A band course at mid height**, which sits below every step but the
+  lowest, so it reads as one continuous line behind all of them. That is
+  what ties five separated panels back into one wall.
+
+Measured, for the record: the cut's side walls are **3.18 % of the frame**.
+This one is polish, not a fix -- unlike the exposure, the opaque glass or
+the duplicated till, nothing here was broken.
+
+Cost in the room: mean 3.24 ms, p95 13.2 ms (budget 6.0 / 20.0);
+34,602 faces at the start of this work, 38,000 now.
+
+
+### The trees standing in the doorway (`lib/Structures.lua`, `tests/treepath_probe.lua`)
+
+A map's border ring is a wall of trees, and where two maps connect it ran
+straight across the walkable strip of the map next door: from Route 1's north
+gate the whole way to Viridian was a hedge, and Pallet's path to Route 1 was
+buried whole. The mesher already knew about this -- VoxelScene hands it the
+neighbour BODY rects and every ring quad inside one is dropped, ground, hull
+and prop alike. Authored trees were the hole in the rule: `Structures` records
+a SITE instead of a hull, `Trees3D` builds its mesh straight off `S.treeSites`,
+and that list had never been near a mask -- so the ring's MODELLED trees
+survived exactly where its hulls had been deleted.
+
+`buildCylinders` now asks the question at bake time, where the site list is
+made. `neighbourBodies` places the directly connected maps with the engine's
+own walk over `def.connections` at ONE hop, which loads no map (width, height
+and connections all live on the resident def -- the same reason `WorldAtlas`
+can place the region for a table), and a ring site whose cell falls inside one
+is not recorded. One hop is a ceiling, not a guess: `computeNeighbors` admits
+every direct connection unconditionally and the scene renders two, so a rect
+here is always a mask there -- reaching further would drop trees the runtime
+mask KEEPS and open a hole in the wall instead of closing one. Body cells are
+never asked (bodies abut, they do not overlap) and the bounds are strict, so
+the real tree line on all four map edges is untouched.
+
+**No hole**: a dropped site still claims its cell (`S.skip`, ground falling to
+the commonest-ground pass), and the ring ground it would have stood on is the
+ground the mask deletes under the neighbour anyway.
+
+Probe: `tests/treepath_probe.lua` (`run_treepath.cmd`) walks six seams, finds
+each gate by scanning the edge row for walkable cells rather than hardcoding a
+column, and counts the sites standing under a neighbour body. Across
+Viridian/Route 1/Route 2/Pallet that census went **584 -> 0**, with the drop
+landing entirely on ring sites -- Viridian keeps all 340 of its body trees.
+
+### The forest is cubes, and the row says so (`tools/grow_voxel_tree.py`, `lib/Trees3D.lua`, `lib/TerrainAtlas.lua`, `lib/Structures.lua`, `data/voxel_heights.lua`, `main.lua`)
+
+The **TREES** row is **VOXEL / 3D** now, and each name says what the thing
+IS rather than how it was made. This is the third round: round one was
+3D / VOXEL with VOXEL meaning the carved hull; round two swapped to
+VOXEL / CLASSIC with VOXEL meaning the card bake, on the argument that the
+bake was built of voxels -- true of its lattice, false of its look. A player
+reading VOXEL wants cubes and a player reading 3D wants leaves, so VOXEL is
+the set that looks like cubes and 3D is the set that looks like leaves. The
+hull -- the outline-hulled ball carved from the tileset art -- is nobody's
+option any more; it stands in only where a set fails to load. Saves migrate
+by `ModSetting.indexOf`'s fallback: a save on round two's `classic` lands on
+VOXEL, either round's `voxel` lands on VOXEL, round one's `3d` keeps 3D.
+Probe: `tests/voxeltree_probe.lua` (`run_voxeltree.cmd`) checks all three,
+and that each value loads ITS four species -- a wrong cache key would have
+loaded one set under both names and looked fine on screen.
+
+**The VOXEL set is grown, and it is proud of its cubes** --
+`tools/grow_voxel_tree.py`, a baker of its own next to `bake_tree.py`, same
+TTR2 out. 2.5 px cubes (2.0 was tried: finer, and 35% more triangles, over
+the loader's budget on two species). A bole you can see with a flared foot
+and root nubs, a crown of overlapping lobes with low-frequency noise eating
+the rims, two or three NOTCHES bitten out of the upper rim so the sky shows
+through, and TUFTS -- single cubes stuck to the upper shell -- which are
+what makes a crown read as many leaves instead of one green ball at this
+size. Tones are dithered by height band plus low-frequency BLOTCHES; the
+first cut dithered per voxel off a hash and it cost the whole budget,
+because a face only merges with a neighbour of the same tone (1568 tris on
+the round against the 1200 the loader admits). Four shapes:
+
+    round    1816 verts   908 tris   h 42 px  crown r 16
+    tiered   1980         990        h 45     r 14
+    broad    1592         796        h 38     r 17
+    tall     1504         752        h 48     r 12
+
+which is the 3D set's range (1272-1900 verts), so the forest should cost
+what it cost -- SHOULD: the frame-time probe was not re-run this session,
+and the 3D set's numbers are the only ones on file.
+
+**It ships no colour.** Every leaf face points at the centre of a slot in a
+64x64 palette strip (row 0: six leaf tones; row 1: four fixed browns -- Gen
+1 draws no trunk, so there is no brown to learn), and `Trees3D` paints row 0
+at forest-finish from what the map's palette made of the map's OWN tree tile
+(`TerrainAtlas.tileShades`, learned raw-against-baked the way the animated
+tiles already learn theirs). Route 2's trees wear Route 2's greens; Viridian
+Forest's wear the forest's -- measured: the two palette keys differ, the
+forest's a yellow-green the routes never show. The tile's white shade is NOT
+used as-is: it is the pale ground the sprite is drawn against, and a crown
+wearing it read as snow in the offline preview; `hi` leans the light shade
+40% toward it instead. The shades are learned PER TILE and a grey tile is
+dropped, because the OVERWORLD profile pins two round drawings as
+`cylinder` -- the tree wall (64/65/80/81) and the grey pot (42/43/58/59) --
+and the pot comes first: a merge that let the first tile win learned the
+pot's greys and called every Kanto route grey while the wall beside it was
+green (measured off the dumped atlas: pot 173/107/58, wall 99,206,8 over
+41,115,0). Two rounds were spent blaming the atlas readback for that; the
+readback WAS also broken -- it ran from the draw path under Voxel3D's scene
+shader and came back grey -- and now copies under `push("all")` with the
+shader, scissor and transform cleared, which the animation's fallback gets
+for free. `Trees3D.lastPaint` says which happened ("shipped (reason)").
+
+**Viridian Forest had no trees at all, and had not since the first bake.**
+Sites were recorded under one rule ("the bake loads") and drawn under
+another ("the map is outdoor"), and the forest is neither outdoor
+(`Map.isOutdoor` is OVERWORLD only) nor outside (`OUTSIDE_TILESETS` is
+OVERWORLD and PLATEAU) -- so its 430 sites had their hulls skipped for a
+mesh `draw()` then refused. `Trees3D.wantsMap` is now the one question,
+asked by `Structures` at build time and by `draw()` every frame, and the
+FOREST profile carries `authored_trees = true`. The same rule sends
+Celadon Gym's round hedges back to their hulls (they were vanishing the
+same way). The forest's sites are 2x2 drawings (`site.r = 16`), and they
+take a tighter scale band, 1.25-1.60x of their own radius, where the
+routes' band would have stood 65-100 px trees on 32 px spacing.
+
+**Wind is per set**: `Trees3D.SETS[..].windShare`, 2.9 for the cubes (the
+number measured for a blocky crown before the cards arrived) and 3.4 for
+the cards. Measured on ROUTE_2 under a gale with the weather pinned OFF,
+paired and downward: full share moved the crowns in 10 of 10 rounds and
+half share in 9 of 10, delta 1.80 against 0.71. Two earlier rounds read
+worse for reasons that were not the trees -- one inverted (half above
+full: crowns 16 px across on 16 px spacing blurring into each other, the
+trap the canopy-wind note names) and one drowned (65 on both halves of a
+pair: a shower crossing the route), which is why the probe now pins the
+weather before it measures.
+
+**MagicaVoxel in**: `grow_voxel_tree.py --vox <file>` imports a `.vox`
+through the same pipeline, colours classified into leaf tones by luminance
+and bark by hue, height bands on top so a one-colour model does not land
+every cube in the darkest tone. CC0 and CC-BY reference models, Kenney and
+OpenGameArt block textures, and the format spec live in
+`tools/_tree_src/vox/` (gitignored) with `NOTES.md` naming every source and
+licence.
+
+Also: `--preview` renders each species and a 6x4 wood with the game's
+camera into `probe_out_voxeltree/` (the same rasteriser the 3D preview
+uses, with the stamp arithmetic of `Trees3D.placement`); the offline
+harness `tests/trees_ready_offline.lua` runs again (it had needed a
+`ModSetting` stub since the row was added, and its caster checks were the
+GLB's); `tools/bake_voxel_tree.py`, the superseded first 3D baker whose
+name now said the wrong set, is removed; `FEATURES.md` and the row's help
+text describe the two sets.
 
 ## 1.31.0-beta
 

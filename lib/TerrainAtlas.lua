@@ -331,9 +331,22 @@ local function readback(image)
     return nil
   end
   local prev = love.graphics.getCanvas()
+  -- THE WHOLE STATE, not just the canvas. This runs from inside the draw
+  -- path -- forest-finish is a draw-path event, and so is an animation
+  -- patch -- where Voxel3D's scene shader is the active shader, a scissor
+  -- may be set and the transform is the scene's. A straight `draw` under
+  -- that shader wrote the atlas through the voxel lighting with no
+  -- uniforms sent, and the readback came back grey (measured: the forest
+  -- palette that gbcPixels had got right went grey the moment this ran
+  -- first). push("all") saves shader, blend, colour, scissor, transform
+  -- and canvas; the copy is made under none of them.
+  pcall(love.graphics.push, "all")
   local ok, data = pcall(function()
     local w, h = image:getDimensions()
     local canvas = love.graphics.newCanvas(w, h)
+    love.graphics.origin()
+    love.graphics.setScissor()
+    love.graphics.setShader()
     love.graphics.setCanvas(canvas)
     love.graphics.clear(0, 0, 0, 0)
     -- straight copy: no blending against the cleared target, no tint from
@@ -350,6 +363,7 @@ local function readback(image)
     return out
   end)
   pcall(love.graphics.setCanvas, prev)
+  pcall(love.graphics.pop)
   return ok and data or nil
 end
 
@@ -640,10 +654,95 @@ function TerrainAtlas.animate(map, colors, base, baked)
   return entry.image
 end
 
+-- The palette each map was last asked for, so tileShades below can read off
+-- the same bake the terrain samples. `false` records "asked with no
+-- palette" (RED++, trueColor) apart from "never asked".
+local lastColors = {}
+
 function TerrainAtlas.forMap(map, colors)
+  if map and map.id then lastColors[map.id] = colors or false end
   local base, baked = staticAtlas(map, colors)
   if not base then return nil end
   return TerrainAtlas.animate(map, colors, base, baked) or base
+end
+
+-- What the map's palette made of one drawing: for each of the four DMG
+-- shades as the RAW art carries them (1 white .. 4 black), the colour that
+-- shade became in the atlas the terrain is actually drawn with.
+--
+-- Trees3D paints the voxel trees' palette strip from the tree tile's answer.
+-- That is how a grown tree wears Route 2's greens on Route 2 and the
+-- forest's in Viridian Forest without shipping a colour of its own -- the
+-- one thing the old carved hull did right, kept without keeping the hull.
+--
+-- `tiles` is a list; a shade missing from one tile is filled from the next
+-- (an 8x8 quarter of a drawing rarely holds all four). Learned off the
+-- pixels, as learnShades does for the animated tiles, because the two
+-- recolour paths do not share a rule and this way neither has to be known.
+-- nil when the pixels are unreachable, or when the atlas turned out to be
+-- the raw grey art (no palette was ever asked for this map) -- either way
+-- the caller keeps its shipped colours rather than wearing grey.
+-- Returns the shades, or nil and a one-word reason -- the probe reads the
+-- reason, because "shipped" on a Kanto route is a bug and this is the
+-- only place that knows which step gave up.
+function TerrainAtlas.tileShades(map, tiles)
+  local tileset = map and map.tileset
+  if not (tileset and tileset.image and tiles and #tiles > 0) then
+    return nil, "no-tileset"
+  end
+  local colors = map.id and lastColors[map.id] or nil
+  local why = "ok"
+  local ok, out = pcall(function()
+    local _, baked = staticAtlas(map, colors or nil)
+    -- Under RED++ this is gbcPixels: the same arithmetic the engine's
+    -- getGbcAtlas ran (palette group per tile, recolorSample), so it IS the
+    -- texture, deterministically and with no driver in the loop. The
+    -- readback stays the fallback behind it, as it is for the animation.
+    local src = baked or rendererPixels(map)
+    if not src then why = "no-pixels"; return nil end
+    TerrainAtlas.lastShadeSource = src        -- for the probe's dump only
+    local raw = Assets.imageData(tileset.image)
+    local perRow = tileset.tilesPerRow or 16
+    local iw, ih = raw:getDimensions()
+    -- grey = the light and dark shades still equal on all three channels:
+    -- either nothing recoloured this atlas, or this drawing is grey
+    local function isGrey(m)
+      for k = 2, 3 do
+        local c = m[k]
+        if c and (math.abs(c[1] - c[2]) > 0.02 or math.abs(c[2] - c[3]) > 0.02) then
+          return false
+        end
+      end
+      return true
+    end
+    -- PER TILE, and a grey tile is dropped rather than merged. The
+    -- OVERWORLD profile pins two round drawings as `cylinder`: the tree
+    -- wall (64/65/80/81, green) and the grey pot (42/43/58/59), and the pot
+    -- comes first -- so a merge that let the first tile win learned the
+    -- pot's greys and called the whole atlas grey while the trees beside
+    -- it were green (measured off the dumped atlas: pot 173/107/58 grey,
+    -- wall 99,206,8 over 41,115,0).
+    local merged, any = {}, false
+    for _, t in ipairs(tiles) do
+      local sx, sy = (t % perRow) * 8, math.floor(t / perRow) * 8
+      if sx + 8 <= iw and sy + 8 <= ih then
+        local m = learnShades(raw, src, t, perRow)
+        any = any or (m[2] or m[3]) and true or false
+        if (m[2] or m[3]) and not isGrey(m) then
+          for k = 1, 4 do merged[k] = merged[k] or m[k] end
+        end
+      end
+    end
+    if not any then why = "no-shades"; return nil end
+    if not (merged[2] or merged[3]) then
+      why = (colors == nil) and "grey-no-palette" or "grey"
+      return nil
+    end
+    return merged
+  end)
+  if not ok then return nil, "threw: " .. tostring(out) end
+  if not out then return nil, why end
+  return out
 end
 
 -- The image a character model should texture from under an SGB palette.
