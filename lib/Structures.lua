@@ -242,7 +242,7 @@ function Structures.forMap(map)
         hideBareRing = hullRingOnly or nil,
         runs = {}, skip = {}, ground = {}, doorFold = {}, objectQuads = {},
         grassQuads = {}, grassInstances = {}, flowerQuads = {}, spriteQuads = {},
-        roundStamps = {}, treeSites = {}, figures = {} }
+        roundStamps = {}, treeSites = {}, figures = {}, noFigure = {} }
   Structures.stage = { map = map.id, pass = "buildings" }
   Buildings.build(S, map, pixels(tileset), perRow)
 
@@ -1011,6 +1011,51 @@ end
 -- heap growth on a cross-region trek).
 local roundCache = {}
 
+-- ------- WHERE THE NEIGHBOUR'S GROUND ALREADY IS
+--
+-- A map's border ring is a wall of trees, and at a seam it runs straight
+-- across the walkable strip of the map next door. The mesher already
+-- knows this: VoxelScene hands it the neighbour BODY rects and every ring
+-- quad inside one is dropped -- ground, hull and prop alike (ChunkMesher's
+-- `masked`). Authored trees were the hole in that rule. Structures records
+-- a SITE instead of a hull, Trees3D builds its mesh straight off
+-- S.treeSites, and that list had never been near a mask -- so the ring's
+-- MODELLED trees survived exactly where its hulls were deleted, and stood
+-- in the gate. Route 1's way north to Viridian was a hedge; Pallet's path
+-- to Route 1 was buried whole.
+--
+-- Answered HERE and not at mesh time because a site list is baked ONCE per
+-- map (Trees3D stamps one mesh per map id over ~145 frames) while the mask
+-- is a per-frame argument -- there is no frame to ask it on. Statically it
+-- costs nothing: the placement is the engine's own walk over
+-- def.connections, and it loads no map -- width, height and connections
+-- all live on the resident def, which is the same reason WorldAtlas can
+-- place the whole region for a table.
+--
+-- ONE hop, and that is a ceiling rather than a guess. computeNeighbors
+-- admits every direct connection unconditionally (`cur.hops + 1 <= hops`)
+-- and the scene renders two, so a rect answered here is always a mask
+-- there and a site dropped here is ground that was going to be dropped
+-- anyway. Reaching further would start dropping trees the runtime mask
+-- KEEPS, which opens a hole in the border wall instead of closing one.
+local function neighbourBodies(map)
+  local out = {}
+  pcall(function()
+    local Game = require("src.core.Game")
+    local maps = Game and Game.data and Game.data.maps
+    local OC = require("src.world.OverworldController")
+    if not (maps and OC and OC.computeNeighbors) then return end
+    for _, nb in ipairs(OC.computeNeighbors(maps, map.id, 1) or {}) do
+      local d = maps[nb.id]
+      if d and d.width and d.height then
+        out[#out + 1] = { nb.ox, nb.oy,
+                          nb.ox + d.width * 32, nb.oy + d.height * 32 }
+      end
+    end
+  end)
+  return out
+end
+
 function Structures.buildCylinders(S, map, x0, x1, y0, y1, groundTiles)
   local data = pixels(map.tileset)
   local tw, th = map.def.width * 4, map.def.height * 4
@@ -1041,9 +1086,38 @@ function Structures.buildCylinders(S, map, x0, x1, y0, y1, groundTiles)
   do
     local ok, yes = pcall(function()
       local M = V.require("Trees3D")
-      return M and M.available and M.available()
+      if not (M and M.available and M.available()) then return false end
+      -- and only where Trees3D will DRAW them -- draw() asks wantsMap the
+      -- same question, and the two answers have to agree: a round pin on a
+      -- map draw() refuses (Celadon Gym's hedges) keeps its hull here
+      -- rather than becoming a site nothing renders
+      if M.wantsMap then return M.wantsMap(map, S.outdoor) end
+      return true
     end)
     treesAuthored = (ok and yes) and true or false
+  end
+
+  -- Sites the neighbour next door already has ground for. Only asked when
+  -- there are sites at all, and only of RING cells: a cell of the body
+  -- cannot be under a neighbour (bodies abut, they do not overlap), and a
+  -- real map tree is never what is standing in the doorway.
+  local bodies = treesAuthored and neighbourBodies(map) or {}
+  local bw, bh = tw * 8, th * 8
+  -- A site's { mx, mz, r } IS its own cell footprint -- r is the half-cell,
+  -- 8 or 16 -- so this is the very test ChunkMesher's `masked` runs on a
+  -- ring tile, strict bounds and all. Strict matters: every cell of the
+  -- body's own last row ABUTS the neighbour rect, and a closed test would
+  -- shave the real tree line off all four map edges.
+  local function underNeighbour(mx, mz, r)
+    if #bodies == 0 then return false end
+    local x0, z0, x1, z1 = mx - r, mz - r, mx + r, mz + r
+    if x1 > 0 and x0 < bw and z1 > 0 and z0 < bh then return false end
+    for _, mk in ipairs(bodies) do
+      if x1 > mk[1] and x0 < mk[3] and z1 > mk[2] and z0 < mk[4] then
+        return true
+      end
+    end
+    return false
   end
 
   -- the stump class's drawn-ellipse height, hand-authored per tileset
@@ -1109,9 +1183,15 @@ function Structures.buildCylinders(S, map, x0, x1, y0, y1, groundTiles)
             -- instead, so the tree stands on the same grass as its
             -- neighbours.
             ground = (not treesAuthored) and (tpl.bg or false) or false
+            -- Dropping the site leaves NO HOLE: the cell is still
+            -- claimed below (skip, and ground falling to the commonest-
+            -- ground pass), and the ring ground it would stand on is the
+            -- ground the mesher's own mask deletes under the neighbour.
             if treesAuthored then
-              S.treeSites[#S.treeSites + 1] =
-                { mx = cx * 16 + 16, mz = cy * 16 + 16, r = 16 }
+              if not underNeighbour(cx * 16 + 16, cy * 16 + 16, 16) then
+                S.treeSites[#S.treeSites + 1] =
+                  { mx = cx * 16 + 16, mz = cy * 16 + 16, r = 16 }
+              end
             else
               S.roundStamps[#S.roundStamps + 1] =
                 { quads = tpl.quads, mx = cx * 16 + 16, mz = cy * 16 + 16,
@@ -1149,8 +1229,10 @@ function Structures.buildCylinders(S, map, x0, x1, y0, y1, groundTiles)
           end
           ground = (not treesAuthored) and (tpl.bg or false) or false
           if treesAuthored then
-            S.treeSites[#S.treeSites + 1] =
-              { mx = cx * 16 + 8, mz = cy * 16 + 8, r = 8 }
+            if not underNeighbour(cx * 16 + 8, cy * 16 + 8, 8) then
+              S.treeSites[#S.treeSites + 1] =
+                { mx = cx * 16 + 8, mz = cy * 16 + 8, r = 8 }
+            end
           else
             S.roundStamps[#S.roundStamps + 1] =
               { quads = tpl.quads, mx = cx * 16 + 8, mz = cy * 16 + 8 }
@@ -2450,7 +2532,20 @@ function Structures.buildFigures(S, map, x0, x1, y0, y1)
         local hit = true
         for i = 1, #fig.tiles do
           local dx, dy = (i - 1) % fig.w, math.floor((i - 1) / fig.w)
-          if S.tileAt[keyOf(tx + dx, ty + dy)] ~= fig.tiles[i] then
+          local k = keyOf(tx + dx, ty + dy)
+          -- A KIT THAT MODELS THE FURNITURE ITSELF suppresses the figure
+          -- drawn into it. Figures are matched by tile pattern and know
+          -- nothing about what Buildings put on the cell, so lib/ShopKit's
+          -- modelled till and the tileset's own drawn one both appeared,
+          -- one standing inside the other. `S.noFigure` is set by
+          -- Buildings.stamp from the model's own flag, and this pass runs
+          -- after it.
+          --
+          -- Not keyed on S.skip: the Centre's couch is claimed by
+          -- lib/RoomKit AND wants its man, which is the whole point of the
+          -- figure pass. Only a model that says it has done the job itself
+          -- turns it off.
+          if S.noFigure[k] or S.tileAt[k] ~= fig.tiles[i] then
             hit = false
             break
           end

@@ -84,9 +84,10 @@ return function(game)
   local derivs = select(2, pcall(love.graphics.getSupported))
   local hasDerivs = derivs and derivs.shaderderivatives == true
   for i = 1, (Voxel3D.rungCount or 0) do
+   for p = 1, (Voxel3D.precCount or 1) do
     for _, grid in ipairs({ false, true }) do
-      local ok, info = Voxel3D.buildRung(i, grid)
-      local tag = "rung " .. i .. (grid and " +grid" or "")
+      local ok, info = Voxel3D.buildRung(i, grid, p)
+      local tag = "rung " .. i .. "/prec " .. p .. (grid and " +grid" or "")
       if not ok and grid and not hasDerivs then
         -- The wireframe legitimately refuses where the driver has no shader
         -- derivatives. A device fact, not this probe's business.
@@ -95,6 +96,7 @@ return function(game)
         check(ok, tag .. " (" .. tostring(info):gsub("\n", " | ") .. ")")
       end
     end
+   end
   end
 
   -- ------- 3. the mode came up here, at the top rung
@@ -162,6 +164,33 @@ return function(game)
     end)
   end
 
+  -- ------- 4b. THE STRICT DRIVER (the Mali report)
+  --
+  -- The one the rung ladder could not catch. GLSL ES 1.00 links a uniform by
+  -- precision as well as by name; the vertex stage defaults to highp and LOVE
+  -- gives the fragment stage `precision mediump float;`, so every uniform the
+  -- water block declares -- and both stages declare them, because the vertex
+  -- displaces the sheet and the fragment repaints it -- was highp on one side
+  -- and mediump on the other. Desktop GL has no precision qualifiers at all
+  -- and Adreno waves it through; Mali reads the spec and refuses the LINK.
+  --
+  -- The refusal landed on all four rungs at once, which is why the ladder
+  -- built for the Adreno report did nothing for it: there was no rung left to
+  -- fall to. So precision is now a walk of its own, OUTSIDE the rungs, and
+  -- this case is the one that proves the fall works.
+  withDriverRefusing({ "#define VXHP highp" }, function()
+    local sh = Voxel3D.shader()
+    check(sh ~= nil, "[strict uniform precision] the mode still builds")
+    check(Voxel3D.precName() == "mediump",
+          "[strict uniform precision] fell to mediump uniforms (got "
+          .. tostring(Voxel3D.precName()) .. ")")
+    check(Voxel3D.rung == 1,
+          "[strict uniform precision] and kept every feature -- precision is "
+          .. "not a rung (got rung " .. Voxel3D.rung .. ")")
+    check(Voxel3D.available(),
+          "[strict uniform precision] available() stays true")
+  end)
+
   -- Blocked on a line the SHADER source ALWAYS carries, not on a define. The
   -- first version of this used "#define SUN_ONE_TAP", which the build only
   -- emits when soft shadows are off -- so on a machine with them on the fake
@@ -170,8 +199,11 @@ return function(game)
     local sh = Voxel3D.shader()
     check(sh == nil, "[nothing builds] shader() gives up rather than lying")
     check(not Voxel3D.available(), "[nothing builds] available() is false")
-    check(#Voxel3D.compileLog == 4,
-          "[nothing builds] all four refusals on record ("
+    -- Four rungs at each of two precisions: the ladder has to have tried
+    -- every square before it is allowed to give up, and a bug report written
+    -- from here should show all eight.
+    check(#Voxel3D.compileLog == 8,
+          "[nothing builds] all eight refusals on record ("
           .. #Voxel3D.compileLog .. ")")
     local rep = Voxel3D.report()
     check(rep:find("OFF", 1, true) ~= nil,

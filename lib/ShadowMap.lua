@@ -177,6 +177,10 @@ ShadowMap.clipVP = IDENTITY
 ShadowMap.uvVP = IDENTITY
 -- ShadowMap.BIAS expressed in the [0,1] depth the map stores
 ShadowMap.bias = 0
+-- Set by the caller to {x0, z0, x1, z1} in world px to cap the sun
+-- frustum's ground footprint; nil (the default) fits to the camera alone.
+-- See `fit`.
+ShadowMap.clamp = nil
 
 local function getShader()
   if shader == nil then
@@ -413,6 +417,30 @@ local function fit(cx, cy, vw, vh)
     corner(north, farW)
     xs = { x0, x1 + reach }
     zs = { z0, z1 + reach }
+  end
+
+  -- CLAMP TO THE MAP, when a caller says the world is only so big.
+  --
+  -- Everything above sizes the frustum from the CAMERA's reach, which is a
+  -- number for open country: on a route the sun has to cover ground the
+  -- eye can see to the horizon. Indoors it covers a room. Measured in the
+  -- Poke Mart, whose floor is 128 world px across: the box came out
+  -- 664 x 585, at the low rung's 512 that is 1.30 world px PER TEXEL, and
+  -- the slack that comes with it (BIAS + SLOPE * max(w,h) / res) was
+  -- 4.52 world px. A fixture is ten voxels tall, so its shadow was being
+  -- pushed nearly half its own height away from its own foot and read as a
+  -- vague darkening rather than as a shadow with a side to it.
+  --
+  -- `ShadowMap.clamp` is {x0, z0, x1, z1} in world px, nil by default, and
+  -- the caller is expected to have already added whatever caster margin it
+  -- wants. Everything outside is ground the pass would have spent texels
+  -- on and nothing can be standing on.
+  local cl = ShadowMap.clamp
+  if cl then
+    xs = { math.max(xs[1], cl[1]), math.min(xs[2], cl[3]) }
+    zs = { math.max(zs[1], cl[2]), math.min(zs[2], cl[4]) }
+    if xs[2] <= xs[1] then xs = { cl[1], cl[3] } end
+    if zs[2] <= zs[1] then zs = { cl[2], cl[4] } end
   end
 
   local l, r, b, t, zn, zf

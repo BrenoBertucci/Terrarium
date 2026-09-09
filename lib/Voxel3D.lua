@@ -84,6 +84,39 @@ Voxel3D.FACE_SHADE = {
 }
 
 local SHADER = [[
+  // ------- VXHP: the precision of a uniform BOTH stages declare
+  //
+  // GLSL ES 1.00 links a uniform by name AND by precision qualifier, and the
+  // two stages here do not start from the same default: a vertex shader
+  // defaults to highp, and LOVE emits `precision mediump float;` at the top
+  // of the fragment stage. So a bare `uniform float swellPhase;` sitting in a
+  // region both stages compile -- which is most of the water block below,
+  // because the vertex displaces the mesh and the fragment re-reads the same
+  // wave -- is highp in one and mediump in the other, and that is a LINK
+  // ERROR on any driver that reads the spec.
+  //
+  // Desktop GL never says so (`#version 120` has no precision qualifiers at
+  // all, they are #defined away) and neither does Adreno, which tolerates the
+  // mismatch. Mali does not: it refuses, and a refused link is
+  // Voxel3D.available() == false, which is the whole 3D mode gone with no
+  // message -- the same silent failure the rung ladder below was built for,
+  // arriving by a different door. The ladder could not catch this one: every
+  // rung declares these uniforms, so every rung failed identically.
+  //
+  // The fix has to make the qualifier textually the same in both stages, and
+  // no expression available INSIDE the shader can do that -- the vertex stage
+  // cannot see GL_FRAGMENT_PRECISION_HIGH, so any #if that asks about it
+  // resolves differently per stage, which is the bug again. So Lua decides,
+  // from love.graphics.getSupported().pixelshaderhighp, and injects the value
+  // (see PRECISIONS beside the LADDER).
+  //
+  // There is deliberately no `#ifndef VXHP` default here. A default would have
+  // to pick its value from an #if, every #if available resolves per-stage, and
+  // a per-stage value IS the bug -- so the safety net would quietly restore
+  // exactly what it was put there to catch. Without one, a builder that
+  // forgets the define gets an undeclared-identifier error naming VXHP, on
+  // every driver including the desktop one this is written on.
+
   varying float vShade;       // how dark this face draws, always positive
   // 1 on a face that points at the sky, 0 on every other one. It rides in
   // the SIGN of VertexShade rather than in an attribute of its own: the
@@ -122,7 +155,7 @@ local SHADER = [[
   // the decode below is global code on a shared vertex format, so an
   // unconditional change would corrupt the brightness of every mesh that
   // does not pack.
-  uniform float packedShade;
+  uniform VXHP float packedShade;
   varying float vGrassCap;
   varying float vWater;       // 1 when swell/ice paint runs, 0 otherwise
   varying float vWaterSurf;   // 1 on recessed water geometry always (y < -1)
@@ -136,24 +169,24 @@ local SHADER = [[
   // THREE crossing wave trains, as phase per world pixel: long, mid, short.
   // Their lengths are constants -- nothing in this shader may scale them by
   // anything that varies across the map. See waterShape.
-  uniform vec2 swellA;        // long swell   (Water.WAVE_A)
-  uniform vec2 swellB;        // mid cross    (Water.WAVE_B)
-  uniform vec2 swellC;        // short chop   (Water.WAVE_C)
-  uniform float swellPhase;
-  uniform float waterSteep;   // crest steepening (energy * STEEP), heightField twin
-  uniform vec2  waterCurrent; // unit XZ wind/current for advection + foam streaks
-  uniform float waterAdvect;  // phase drag along current
-  uniform float waterEnergy;  // lagged chop energy 0..1
-  uniform float waterTherm;   // 0 cold .. 1 warm
+  uniform VXHP vec2 swellA;        // long swell   (Water.WAVE_A)
+  uniform VXHP vec2 swellB;        // mid cross    (Water.WAVE_B)
+  uniform VXHP vec2 swellC;        // short chop   (Water.WAVE_C)
+  uniform VXHP float swellPhase;
+  uniform VXHP float waterSteep;   // crest steepening (energy * STEEP), heightField twin
+  uniform VXHP vec2  waterCurrent; // unit XZ wind/current for advection + foam streaks
+  uniform VXHP float waterAdvect;  // phase drag along current
+  uniform VXHP float waterEnergy;  // lagged chop energy 0..1
+  uniform VXHP float waterTherm;   // 0 cold .. 1 warm
   // Dispersion (Water.DISPERSE): how far toward `omega ~ sqrt(k)` each train's
   // own clock runs. 0 puts all three back on one tempo. Applied to the wave
   // phases ONLY and never to the advection term beside them -- that one grows
   // without bound with world position, so anything multiplying it has to be
   // the same number everywhere. See the note on Water.DISPERSE.
-  uniform float waterDisperse;
+  uniform VXHP float waterDisperse;
   // The row's own amplitude, in world pixels; 0 = flat. Shared rather than
   // vertex-only because the fragment's glint window is scaled by it.
-  uniform float swell;
+  uniform VXHP float swell;
   // ------- THE BASIN (see Water.BED)
   //
   // waterPass is 1 while a map's water SURFACE group is drawn
@@ -161,35 +194,35 @@ local SHADER = [[
   // TERRAIN group is drawn, the only pass that carries geometry below the
   // ground plane -- the bed and the banks. Both are per-draw switches, put
   // back to 0 by the draw that raised them, like glassOn and packedShade.
-  uniform float waterPass;
-  uniform float basinOn;
-  uniform float waterBase;    // Water.BASE: the sheet's rest height
-  uniform float iceLift;      // freeze raises the surface a little
-  uniform vec3 eye;           // the camera, for the sheet's Fresnel
-  uniform vec3 waterSand;     // the bed before the water takes its share
-  uniform vec3 waterAbsorb;   // per world pixel of depth, per channel
-  uniform vec3 waterDeepTint; // the sheet's own colour, far from the bank
-  uniform vec2 waterAlpha;    // sheet coverage at the bank / in the deep
-  uniform float waterReflect; // the sky's share of the Fresnel term
-  uniform float waterShoreMax;// tiles out where the deep saturates
-  uniform float waterShoreFoam;// tiles out the foam ring reaches
-  uniform vec3 waterFoam;     // what foam, glint and the waterline paint
-  uniform vec3 waterSky;      // the dome's colour, what the sheet mirrors
-  uniform vec2 waterTexel;    // 1 / the bound atlas, in texels
+  uniform VXHP float waterPass;
+  uniform VXHP float basinOn;
+  uniform VXHP float waterBase;    // Water.BASE: the sheet's rest height
+  uniform VXHP float iceLift;      // freeze raises the surface a little
+  uniform VXHP vec3 eye;           // the camera, for the sheet's Fresnel
+  uniform VXHP vec3 waterSand;     // the bed before the water takes its share
+  uniform VXHP vec3 waterAbsorb;   // per world pixel of depth, per channel
+  uniform VXHP vec3 waterDeepTint; // the sheet's own colour, far from the bank
+  uniform VXHP vec2 waterAlpha;    // sheet coverage at the bank / in the deep
+  uniform VXHP float waterReflect; // the sky's share of the Fresnel term
+  uniform VXHP float waterShoreMax;// tiles out where the deep saturates
+  uniform VXHP float waterShoreFoam;// tiles out the foam ring reaches
+  uniform VXHP vec3 waterFoam;     // what foam, glint and the waterline paint
+  uniform VXHP vec3 waterSky;      // the dome's colour, what the sheet mirrors
+  uniform VXHP vec2 waterTexel;    // 1 / the bound atlas, in texels
   // Tempo of each train relative to the long one (Water.RATE_LONG/MID/SHORT).
   // Constants, the same at every point on the map -- which is the property
   // that lets dispersion exist here without entering any gradient.
-  uniform vec3 waveRate;
+  uniform VXHP vec3 waveRate;
   // |k| of each live train, long / mid / short (Water.WAVE_K). The glint
   // window is sized against `dot(weights, waveK)`: every cosine allowed to
   // peak at once, which is the largest slope this particular water can make.
-  uniform vec3 waveK;
+  uniform VXHP vec3 waveK;
   // The spectrum's mix (Water.MIX_LONG / MID / SHORT) and its shape:
   // x = the long train's floor on a puddle, y = the short train's floor at
   // sea (zero on purpose -- see Water.MIX_FLOOR_SHORT), z = the crossfade
   // knee across the size ramp.
-  uniform vec3 waveMix;
-  uniform vec3 mixShape;
+  uniform VXHP vec3 waveMix;
+  uniform VXHP vec3 mixShape;
   // ------- HOW BIG THE WATER UNDER THIS POINT IS (lib/WaterBody.lua)
   //
   // One texel per 2D cell over the drawn neighbourhood, sampled in world XZ.
@@ -205,14 +238,14 @@ local SHADER = [[
   // unbound sampler is a driver-dependent crash, the same rule waterArt and
   // glassMask already follow. `waterFieldOn` is the real switch.
   uniform Image waterField;
-  uniform float waterFieldOn;
-  uniform vec2 waterFieldOrigin;  // world XZ of the field's corner
-  uniform vec2 waterFieldInv;     // 1 / its extent in world pixels
+  uniform VXHP float waterFieldOn;
+  uniform VXHP vec2 waterFieldOrigin;  // world XZ of the field's corner
+  uniform VXHP vec2 waterFieldInv;     // 1 / its extent in world pixels
   // (sizeFreqSmall / sizeFreqBig used to live here. They scaled the wave
   // VECTOR by the field and that is exactly what the spectrum removed -- the
   // size of the water now moves waveMix, not any wavelength.)
-  uniform float sizeAmpMin;       // amplitude share the smallest puddle keeps
-  uniform float sizeAmpGamma;
+  uniform VXHP float sizeAmpMin;       // amplitude share the smallest puddle keeps
+  uniform VXHP float sizeAmpGamma;
 
   // xyz = how loud the LONG, MID and SHORT trains are here, summing to 1.
   // w   = the share of the row's swell this body of water carries.
@@ -1313,6 +1346,22 @@ local SHADER = [[
   uniform float glassPhase;   // the glint's phase: advances with TRAVEL
   uniform float glassGlint;   // and its strength: 0 while standing still
   uniform float glassOn;      // 0 for sprite-sheet draws (see Voxel3D.glass)
+  // The SHOP's materials (lib/Shop.lua): 1 for the length of the Mart
+  // interior's own sprite-sheet draw, 0 everywhere else -- the sibling of
+  // glassOn and set the same way, per draw and reset per frame. It is a
+  // separate switch rather than a reuse of glassOn because the two mean
+  // opposite things on the same pass: glassOn says "these UVs address the
+  // tileset", and the shop's say "these UVs address a sheet whose ROWS are
+  // banded by material".
+  uniform float shopOn;
+  // ...and its sibling, which is a fact about the FRAME rather than about
+  // the draw: this map is a Mart, so its floor is polished ceramic. The two
+  // cannot be one uniform. The floor is drawn in the TERRAIN pass, before
+  // the sheet's group exists, so a per-draw switch is still 0 when the
+  // floor is shaded -- which is why the first cut of the anisotropic
+  // reflection did nothing at all. And the band lookup below must NOT run
+  // on the terrain, whose tc addresses the tileset atlas and not the sheet.
+  uniform float shopFloorOn;
   // HAUNTED GLASS (lib/TowerKit.lua): panes inside this world XZ box (x0,
   // z0, x1, z1) burn cold, sparse and breathing instead of lamp-warm, and
   // read as dark glass by day. hauntOn = 0 draws every pane as before.
@@ -1474,7 +1523,16 @@ local SHADER = [[
   // near-white at the core), .z the sheen (lampSpec), already attenuated.
   // `gloss` is the sheen's exponent (rough stone low, polished granite
   // high) and `specK` its strength, both the material block's to say.
-  vec3 localLamp(vec4 lamp, vec3 N, float gloss, float specK) {
+  // `aniso` (0 = round, the default everywhere but the shop's floor): how
+  // much of the half-vector's EAST-WEST deviation to throw away before the
+  // specular exponent. A fluorescent fixture is a tube lying east-west
+  // (lib/ShopKit.lua), and the reflection of a line light in a polished
+  // floor is a bar on the same bearing. Blinn-Phong cannot make one however
+  // hard the lobe is tightened -- it is round by construction -- so the
+  // lobe itself is stretched instead. See assets/docs/shop/ART_DIRECTION.md,
+  // technique T3, which is the one that needs no second pass and no
+  // geometry the room does not already have.
+  vec3 localLamp(vec4 lamp, vec3 N, float gloss, float specK, float aniso) {
     if (lamp.w <= 0.0 || lamp.z <= 0.0) return vec3(0.0);
     // How far the pool REACHES is a ground measurement, and how bright it is
     // at a point is a 3D one. Keeping them apart matters: run the cutoff off
@@ -1520,6 +1578,19 @@ local SHADER = [[
     if (specK > 0.0) {
       vec3 Vv = normalize(eyePos - vWorld);
       vec3 Hv = normalize(L + Vv);
+      if (aniso > 0.0) {
+        // The bar is the length of the tube and no longer. Past the
+        // fixture's own ends the stretch tapers back to round, so a streak
+        // stops where the thing casting it stops -- without this the
+        // highlight runs the full width of the room and reads as a smear
+        // on the lens rather than as a reflection. LAMP_HALF is the
+        // fixture's half-length in world px: the panels and the battens
+        // are both twelve long.
+        const float LAMP_HALF = 6.0;
+        float along = abs(ground.x) / LAMP_HALF;
+        float a = aniso * (1.0 - smoothstep(1.0, 3.2, along));
+        Hv = normalize(Hv - vec3(Hv.x * a, 0.0, 0.0));
+      }
       // Blinn-Phong, with a Fresnel lift: a wet floor seen at a grazing
       // angle is nearly a mirror, and that is most of what "wet" looks
       // like from a camera this low
@@ -1577,6 +1648,9 @@ local SHADER = [[
     // broad lobe at the row's strength; the materials below retune it
     float gloss = 30.0;
     float specK = lampSpec;
+    // round unless a material below asks otherwise; only the shop's floor
+    // does, and only while its own draw is up
+    float aniso = 0.0;
     // 1 once a material below has put a relief into N (the hemisphere
     // reads it; a sprite card keeps its flat fill)
     float matHit = 0.0;
@@ -1595,14 +1669,137 @@ local SHADER = [[
         // the flagstones' own relief -- bevels, joints, the slabs' tilt --
         // into the normal the lanterns light by, and a wet, glossy floor
         vec3 nm = Texel(floorNorm, fuv).rgb * 2.0 - 1.0;
-        N = normalize(vec3(nm.x * stoneBump, nm.z, nm.y * stoneBump));
-        gloss = 26.0;
-        specK = lampSpec * 1.1;
+        // a polished shop floor has almost no relief -- the grout is a
+        // groove, not a cobble -- so the bump is held back and the lobe is
+        // pulled tight. 180 against the crypt's 26 is the difference
+        // between a wet flagstone and eight tubes reflected in ceramic,
+        // and it is the strongest single cue in the room.
+        float shopFloor = step(0.5, shopFloorOn);
+        float fb = mix(stoneBump, stoneBump * 0.35, shopFloor);
+        N = normalize(vec3(nm.x * fb, nm.z, nm.y * fb));
+        // 140 rather than 180, and five times the sheen rather than twice.
+        // Worked out rather than dialled: at the mirror point -- 42 world px
+        // south of a tube, where the view and the light are symmetric about
+        // the floor's normal -- the lobe peaks at 1, the window and the
+        // inverse square leave atten at 0.17, the tube's power is 1.5 and
+        // the Fresnel at this camera's 27 degrees is 0.39. At the old
+        // multiplier that is a peak of 0.14 added to the pixel, which is a
+        // sheen nobody can see; at five it is 0.37, which is a bar. The
+        // slacker exponent is what gives that bar a thickness in z instead
+        // of a hairline.
+        // 175 and 4.2 after seeing it: at 140 the bars read as soft pools
+        // rather than as reflected tubes -- the exponent is what gives the
+        // streak its thinness across the aisle, and the anisotropy its
+        // length along one.
+        // 330, not 175, and 2.5 rather than 4.2. The old pair made a
+        // BLUR: a lobe that wide spreads one tube over a couple of metres
+        // of floor and then a coefficient that high blows the middle of
+        // it, so the frame carried a soft white smear instead of a
+        // reflection. A polished floor's highlight is TIGHT and not
+        // especially strong -- the shine is in how sharply it repeats the
+        // fixture, not in how bright the patch is.
+        gloss = mix(26.0, 330.0, shopFloor);
+        specK = lampSpec * mix(1.1, 2.5, shopFloor);
+        // and the tube's own shape: eight fixtures reflected as eight BARS
+        // running east-west down the aisles, which is what a shop floor
+        // actually looks like and what a round highlight never reads as
+        aniso = 0.90 * shopFloor;
         matHit = 1.0;
       }
 #endif
     }
 #ifdef CRYPT_MATS
+    else if (shopOn > 0.5 && stoneOn > 0.5) {
+      // ------- the shop's materials (lib/Shop.lua, lib/ShopKit.lua)
+      //
+      // The Mart's room is built against an authored sheet whose ROWS are
+      // banded by material -- sixteen rows to a band, assets/shop/ and
+      // tools/shop_sheet.py -- so what a fragment is MADE of is read
+      // straight off its v. One floor(), no branching on u, and no sixth
+      // sampler: the wall borrows the crypt's stoneArt pair and every hard
+      // surface borrows its graniteArt pair. (Five photographic samplers
+      // plus sunMap, waterArt, floorArt, glassMask and MainTex is already
+      // the eight GLES2 guarantees; a sixth refuses the link and takes the
+      // whole voxel mode with it. See the CRYPT_MATS note above.)
+      //
+      //   band 0  plaster   the walls, the cornice, the skirting
+      //   band 1  --        the ceiling panels and the lit diffusers: flat
+      //                     on purpose, a tube is not a surface
+      //   band 2  metal     shelf uprights, boards, cabinets, the kick
+      //   band 3  laminate  the counter
+      //   band 4  glass     the cooler doors and the case fronts
+      //   band 5+ --        products and signage: printed card, no grain
+      float band = floor(tc.y * 16.0);
+      if (band < 4.5 && (band < 0.5 || band > 1.5)) {
+        // the face's own axis picks the projection, exactly as the crypt's
+        // does: on voxel geometry every face is a plane, so this is not an
+        // approximation of triplanar, it IS the projection
+        vec3 an = abs(N);
+        vec2 uv;
+        vec3 T;
+        vec3 B;
+        if (an.y >= an.x && an.y >= an.z) {
+          uv = vWorld.xz; T = vec3(1.0, 0.0, 0.0); B = vec3(0.0, 0.0, 1.0);
+        } else if (an.x >= an.z) {
+          uv = vWorld.zy; T = vec3(0.0, 0.0, 1.0); B = vec3(0.0, 1.0, 0.0);
+        } else {
+          uv = vWorld.xy; T = vec3(1.0, 0.0, 0.0); B = vec3(0.0, 1.0, 0.0);
+        }
+        uv /= stoneScale;
+        if (band < 0.5) {
+          // painted plaster. The sheet's colour STAYS -- a shop wall is
+          // paint, and replacing it with a photograph would throw the one
+          // thing the sheet exists to carry away -- so the photograph is
+          // multiplied in as grain and read into the normal as relief.
+          // 1/mean of the graded albedo, and it MUST be re-derived whenever
+          // Shop.MATS is re-pointed: the photograph is multiplied in as
+          // grain, so a stale reciprocal darkens or blows the whole wall
+          // rather than changing its texture. ceiling_tile grades to a mean
+          // of 0.600 -> 1.668 (assets/shop/README.md; it was 1.335 for
+          // wall_paint, whose 1.4 % modulation is why it was replaced).
+          vec3 sA = Texel(stoneArt, uv).rgb * 1.668;
+          vec3 nm = Texel(stoneNorm, uv).rgb * 2.0 - 1.0;
+          N = normalize(T * (nm.x * stoneBump) + B * (nm.y * stoneBump)
+                        + N * nm.z);
+          albedo = mix(albedo, albedo * sA, stoneMix);
+          // and a slow drift on a scale no cycle of the photograph has, so
+          // a wall four cells long is never one value end to end
+          albedo *= 0.94 + 0.06 * mistNoise(uv * 2.1 + 5.0);
+          matHit = 1.0;
+          gloss = 12.0;
+          specK = lampSpec * 0.30;
+        } else if (band < 3.5) {
+          // steel and laminate: one photograph at a tighter cycle, and the
+          // two part company in how hard they shine. Powder-coated steel
+          // under a fluorescent tube is a narrow hot line; a laminate
+          // worktop is a broad soft one. 1.725 is 1/mean again.
+          vec2 huv = uv * 3.0;
+          // steel_brushed grades to a mean of 0.600 -> 1.666 (was 1.725 for
+          // metal_shelf). Same rule as the wall's, above.
+          vec3 sH = Texel(graniteArt, huv).rgb * 1.666;
+          vec3 nm = Texel(graniteNorm, huv).rgb * 2.0 - 1.0;
+          N = normalize(T * (nm.x * stoneBump * 0.7)
+                        + B * (nm.y * stoneBump * 0.7) + N * nm.z);
+          albedo = mix(albedo, albedo * sH, stoneMix * 0.80);
+          matHit = 1.0;
+          gloss = (band < 2.5) ? 54.0 : 34.0;
+          specK = lampSpec * ((band < 2.5) ? 1.35 : 0.90);
+        } else {
+          // glass. No photograph: a pane has no grain, and one borrowed
+          // from the steel would frost every cooler door. What says glass
+          // is the highlight -- the tightest in the room -- plus a Fresnel
+          // rim, because a pane seen at a grazing angle goes to white and
+          // a pane seen square goes to what is behind it. Four instructions
+          // and it is the difference between glass and pale blue paint.
+          vec3 Vd = normalize(eyePos - vWorld);
+          float fres = pow(1.0 - clamp(dot(N, Vd), 0.0, 1.0), 4.0);
+          albedo = mix(albedo, vec3(1.0), 0.34 * fres);
+          matHit = 1.0;
+          gloss = 96.0;
+          specK = lampSpec * (2.10 + 1.4 * fres);
+        }
+      }
+    }
     else if (stoneOn > 0.5 && glassOn > 0.5) {
       float plum = lum3(p.rgb);
       // the face's own axis picks the projection; T and B are the two
@@ -1678,10 +1875,14 @@ local SHADER = [[
       float up = clamp(N.y * 0.5 + 0.5, 0.0, 1.0);
       light *= 1.0 - stoneHemi * (1.0 - up) * 0.5;
     }
-    vec3 lamps = localLamp(lamp0, N, gloss, specK) + localLamp(lamp1, N, gloss, specK)
-               + localLamp(lamp2, N, gloss, specK) + localLamp(lamp3, N, gloss, specK)
-               + localLamp(lamp4, N, gloss, specK) + localLamp(lamp5, N, gloss, specK)
-               + localLamp(lamp6, N, gloss, specK) + localLamp(lamp7, N, gloss, specK);
+    vec3 lamps = localLamp(lamp0, N, gloss, specK, aniso)
+               + localLamp(lamp1, N, gloss, specK, aniso)
+               + localLamp(lamp2, N, gloss, specK, aniso)
+               + localLamp(lamp3, N, gloss, specK, aniso)
+               + localLamp(lamp4, N, gloss, specK, aniso)
+               + localLamp(lamp5, N, gloss, specK, aniso)
+               + localLamp(lamp6, N, gloss, specK, aniso)
+               + localLamp(lamp7, N, gloss, specK, aniso);
     // The lamp adds light BEFORE the material is shaded, so paving, walls and
     // foliage keep their own colour under the warm spill instead of becoming
     // a flat yellow overlay.
@@ -2619,6 +2820,36 @@ local LADDER = {
   { name = "minimal",  vtf = false, crypt = false },
 }
 
+-- ------- VXHP: what precision the shared uniforms are declared at
+--
+-- See the note at the top of SHADER. The uniforms the water block declares are
+-- compiled into BOTH stages, GLSL ES 1.00 links them by precision as well as
+-- by name, and the two stages do not default to the same one. The qualifier
+-- therefore has to be chosen HERE, where one value can be handed to both
+-- compiles, rather than by any #if inside the shader -- the vertex stage
+-- cannot see GL_FRAGMENT_PRECISION_HIGH, so every in-shader test resolves
+-- per-stage and reproduces the bug.
+--
+-- highp first because these are world coordinates and a phase that grows all
+-- session: `eye` runs to a few thousand world pixels and `swellPhase` climbs
+-- without bound, and mediump on a Mali is fp16 -- eleven bits of mantissa,
+-- which quantises the swell into visible steps within a minute of play. The
+-- mediump rung exists for the drivers that have no fragment highp at all
+-- (GLES2 does not require it), where the choice is that or no 3D.
+local PRECISIONS = { "highp", "mediump" }
+
+-- Which of those the device says it can take, as an index into PRECISIONS.
+-- LOVE reports GL_FRAGMENT_PRECISION_HIGH as `pixelshaderhighp`; a driver
+-- without it cannot compile `uniform highp float` in the fragment stage at
+-- all, so asking is cheaper than a refused compile -- and the ladder still
+-- walks past it if the answer turns out to be a lie.
+local function precisionFloor()
+  if not (love.graphics and love.graphics.getSupported) then return 1 end
+  local ok, caps = pcall(love.graphics.getSupported)
+  if ok and caps and caps.pixelshaderhighp == false then return 2 end
+  return 1
+end
+
 -- The rung the session settled on. Sticky and GLOBAL rather than per key:
 -- once a driver has refused the vertex taps, every later variant starts
 -- below them. Otherwise the arena and the overworld could land on different
@@ -2626,10 +2857,15 @@ local LADDER = {
 -- -- and it would cost a refused compile per variant to get there.
 Voxel3D.rung = 1
 
--- Every refusal, in order: { key, rung, name, err }. This is the only thing
--- that ever says WHY the mode is off, so it outlives the probes that used to
--- be its only readers: Voxel3D.report() prints it and main.lua puts it in
--- front of the player.
+-- The precision the shared uniforms settled on, as an index into PRECISIONS.
+-- Sticky and global for the same reason the rung is: two variants disagreeing
+-- about it would be two different link results for the same water.
+Voxel3D.prec = 1
+
+-- Every refusal, in order: { key, rung, name, prec, err }. This is the only
+-- thing that ever says WHY the mode is off, so it outlives the probes that
+-- used to be its only readers: Voxel3D.report() prints it and main.lua puts
+-- it in front of the player.
 Voxel3D.compileLog = {}
 
 function Voxel3D.shader(grid)
@@ -2658,24 +2894,35 @@ function Voxel3D.shader(grid)
                    .. (cel and "#define ANIME_CEL 1\n" or "")
                    .. (normals and "#define LAMP_NORMALS 1\n" or "")
       local built, err = nil, nil
-      for r = Voxel3D.rung, #LADDER do
-        local rung = LADDER[r]
-        local src = head
-                    .. (rung.vtf and "#define VERTEX_TEX 1\n" or "")
-                    .. (rung.crypt and "#define CRYPT_MATS 1\n" or "")
-                    .. SHADER
-        local ok, sh = pcall(love.graphics.newShader, src)
-        if ok then
-          built = sh
-          -- Only ever downward: a later variant that happens to build at
-          -- full must not drag the session back up past a rung something
-          -- else already proved this driver refuses.
-          if r > Voxel3D.rung then Voxel3D.rung = r end
-          break
+      -- Precision is the OUTER walk: it is a link rule rather than a feature,
+      -- so a driver that refuses highp uniforms refuses them on every rung,
+      -- and dropping the footprints first would only ever be four wasted
+      -- compiles on the way to the same answer.
+      local p0 = math.max(Voxel3D.prec, precisionFloor())
+      for p = p0, #PRECISIONS do
+        for r = Voxel3D.rung, #LADDER do
+          local rung = LADDER[r]
+          local src = "#define VXHP " .. PRECISIONS[p] .. "\n"
+                      .. head
+                      .. (rung.vtf and "#define VERTEX_TEX 1\n" or "")
+                      .. (rung.crypt and "#define CRYPT_MATS 1\n" or "")
+                      .. SHADER
+          local ok, sh = pcall(love.graphics.newShader, src)
+          if ok then
+            built = sh
+            -- Only ever downward: a later variant that happens to build at
+            -- full must not drag the session back up past a rung something
+            -- else already proved this driver refuses.
+            if r > Voxel3D.rung then Voxel3D.rung = r end
+            if p > Voxel3D.prec then Voxel3D.prec = p end
+            break
+          end
+          err = tostring(sh)
+          Voxel3D.compileLog[#Voxel3D.compileLog + 1] =
+            { key = key, rung = r, name = rung.name, prec = PRECISIONS[p],
+              err = err }
         end
-        err = tostring(sh)
-        Voxel3D.compileLog[#Voxel3D.compileLog + 1] =
-          { key = key, rung = r, name = rung.name, err = err }
+        if built then break end
       end
       shaders[key] = built or false
       -- Kept for the probes that read it, and for report() below.
@@ -2694,6 +2941,13 @@ end
 
 Voxel3D.rungCount = #LADDER
 
+-- The precision the shared uniforms settled on, for the report.
+function Voxel3D.precName()
+  return PRECISIONS[Voxel3D.prec]
+end
+
+Voxel3D.precCount = #PRECISIONS
+
 -- Test hook: forget every build and start the ladder over.
 --
 -- Only tests/gpu_compat_probe.lua calls this, and it exists for one question
@@ -2706,6 +2960,7 @@ function Voxel3D.resetShaders()
   for k in pairs(shaders) do shaders[k] = nil end
   activeShader = nil
   Voxel3D.rung = 1
+  Voxel3D.prec = 1
   Voxel3D.compileLog = {}
   Voxel3D.shaderError = nil
 end
@@ -2718,12 +2973,18 @@ end
 -- NEED the fallback is exactly the bug this whole change exists to stop
 -- shipping. tests/gpu_compat_probe.lua builds all four, every time.
 --
+-- `prec` picks the VXHP qualifier (1 = highp, 2 = mediump); it defaults to
+-- highp so the existing callers keep asking the same question they did.
+--
 -- Returns ok, err. Nothing here touches the cache or Voxel3D.rung.
-function Voxel3D.buildRung(i, grid)
+function Voxel3D.buildRung(i, grid, prec)
   local rung = LADDER[i]
   if not rung then return false, "no such rung: " .. tostring(i) end
+  local p = PRECISIONS[prec or 1]
+  if not p then return false, "no such precision: " .. tostring(prec) end
   local normals = derivativesOK()
-  local src = ((grid and true or false) and "#define VOXEL_GRID 1\n" or "")
+  local src = "#define VXHP " .. p .. "\n"
+              .. ((grid and true or false) and "#define VOXEL_GRID 1\n" or "")
               .. (Quality.softShadows() and "" or "#define SUN_ONE_TAP 1\n")
               .. (Anime.cel() and "#define ANIME_CEL 1\n" or "")
               .. (normals and "#define LAMP_NORMALS 1\n" or "")
@@ -2771,6 +3032,7 @@ function Voxel3D.report()
       rung and ("(vertex taps " .. (rung.vtf and "on" or "OFF")
                 .. ", crypt stone " .. (rung.crypt and "on" or "OFF") .. ")")
             or "")
+  add("uniforms:", PRECISIONS[Voxel3D.prec] or "?")
 
   if #Voxel3D.compileLog == 0 then
     add("refusals: none")
@@ -2781,8 +3043,8 @@ function Voxel3D.report()
       -- First line only. A driver log can run to hundreds of lines and the
       -- first one is the one that names the construct.
       local first = tostring(e.err):match("^[^\r\n]*") or ""
-      add("  [" .. e.rung .. " " .. e.name .. "] key=" .. e.key
-          .. ": " .. first)
+      add("  [" .. e.rung .. " " .. e.name .. "/" .. tostring(e.prec)
+          .. "] key=" .. e.key .. ": " .. first)
     end
   end
   return table.concat(out, "\n")
@@ -3250,6 +3512,9 @@ function Voxel3D.beginScene(w, h, cx, cy, vw, vh, sky, slot)
     if gn then pcall(sh.send, sh, "graniteNorm", gn) end
     if fn then pcall(sh.send, sh, "floorNorm", fn) end
     pcall(sh.send, sh, "stoneOn", (st and st.art) and 1 or 0)
+    -- the shop's floor: a fact about the map being drawn, so it rides with
+    -- the materials rather than with the draw (see shopFloorOn)
+    pcall(sh.send, sh, "shopFloorOn", (st and st.shop) and 1 or 0)
     pcall(sh.send, sh, "stoneScale", (st and st.scale) or 128)
     pcall(sh.send, sh, "stoneMix", (st and st.mix) or 0)
     pcall(sh.send, sh, "stoneBump", (st and st.bump) or 0)
@@ -3416,6 +3681,20 @@ function Voxel3D.beginScene(w, h, cx, cy, vw, vh, sky, slot)
   pcall(sh.send, sh, "glassGlint", Voxel3D.glassGlint or 0)
   -- on until a sprite pass says otherwise, reset per frame like `ghost`
   pcall(sh.send, sh, "glassOn", 1)
+  -- and the shop's materials OFF until its own sprite pass asks for them,
+  -- reset per frame for the same reason: a Mart's sheet bands are a fact
+  -- about one draw, and left on they would read the next mesh's v as a
+  -- material and plaster whatever came after
+  pcall(sh.send, sh, "shopOn", 0)
+  -- NOT shopFloorOn. That one is written from the materials block further
+  -- up this same setup (it is a fact about the map, not about a draw), and
+  -- resetting it here overwrote the 1 it had just been given -- so the
+  -- shop's floor was shaded with the crypt's gloss and no anisotropy at
+  -- all. Four probe runs and a numeric model of the highlight said the bar
+  -- should peak at 0.74 while the frame did not move by one level; the
+  -- bisect that found it forced the specular lobe to 1 and STILL nothing
+  -- changed, which is only possible if the branch never ran. Same class of
+  -- bug as glassOn's ordering, one line apart from it.
   -- the haunted glass box, sent every scene like the lamps so a map
   -- without a tower cannot keep the last one's cold
   local haunt = Voxel3D.haunt
@@ -3652,6 +3931,16 @@ end
 function Voxel3D.glass(on)
   if not (active and activeShader) then return end
   pcall(activeShader.send, activeShader, "glassOn", on and 1 or 0)
+end
+
+-- Whether what is drawn next is the Poke Mart's own sheet, whose rows are
+-- banded by material (lib/ShopKit.lua). Same shape as glass() and the same
+-- contract: true for the length of that one draw, false again after. The
+-- caller is VoxelScene's sprite-group loop, which is where the sheet a
+-- group was textured from is known.
+function Voxel3D.shopMats(on)
+  if not (active and activeShader) then return end
+  pcall(activeShader.send, activeShader, "shopOn", on and 1 or 0)
 end
 
 -- Does THIS DRAW's VertexShade carry a packed canopy weight? Off by

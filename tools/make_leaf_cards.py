@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Cut real leaves out of CC0 photo atlases and compose the card sprites.
 
-The tree baker (tools/bake_voxel_tree.py) scatters alpha CARDS over a
-crown's outer shell.  Each card samples one 32x32 slot of the bottom strip
+The 3D-set baker (tools/bake_tree.py -- the TREES row's 3D option; the
+VOXEL option, tools/grow_voxel_tree.py, uses no cards) scatters alpha
+CARDS over a crown's outer shell.  Each card samples one 32x32 slot of the bottom strip
 of the species atlas, and what that slot holds is the whole difference
 between "a green blob with a fringe" and "a tree with leaves": at ~70
 screen px a card is big enough for a leaf SHAPE to read, and a drawn lobe
@@ -51,7 +52,8 @@ from PIL import Image
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "tools" / "_tree_src"
 
-# Species palette, mirrored from bake_voxel_tree.SPECIES (leaf A, B, C).
+# Species palette, mirrored from bake_tree.py's species (leaf A, B, C); the
+# vox_ prefix is this tool's output naming and predates the row's rename.
 # Kept as a copy on purpose: this tool runs BEFORE the bake and must not
 # import the baker just to read four tuples.
 SPECIES = {

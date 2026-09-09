@@ -603,6 +603,14 @@ return {
       canopy = { 4 },
       cylinder = { 5, 6, 7, 21, 22, 23,
                    35, 36, 37, 38, 39, 53, 54 },
+      -- The forest is not "outdoor" to the engine (Map.isOutdoor: no door
+      -- SFX, no sky) and not "outside" either (OUTSIDE_TILESETS is
+      -- OVERWORLD and PLATEAU), but its trees are trees: this hands the
+      -- round sites to Trees3D like a route's. Trees3D.wantsMap reads it,
+      -- at build time AND at draw time -- without it the sites were
+      -- recorded, the hulls skipped, and draw() refused the map, so the
+      -- forest stood with no trees at all.
+      authored_trees = true,
       -- the stumps ($02/$03/$12/$13): a hull whose drawn top is a CUT
       -- FACE.  The body builds from the bark rows alone, and the drawn
       -- ellipse of growth rings projects onto the hull's round flat
@@ -2674,6 +2682,67 @@ return {
     -- corner, and the register cell is matched WITH the register (see
     -- the MART `figures` entry) and painted as the plain work surface.
     MART = {
+      -- ------- the SHOP row (lib/ShopKit.lua, lib/Shop.lua)
+      --
+      -- The eight town Marts are ONE room: their 16x16 tile plans hash
+      -- identically (tools/interior_plan.py). So the interior is not eight
+      -- rooms sharing a vocabulary of fixtures, it is one room, authored as
+      -- one function of position -- and these three templates are WINDOWS
+      -- into it, one per depth band, matched against the plan's own rows.
+      -- Each answers with the room's voxel inside its band and with a
+      -- PHANTOM outside it (Buildings.PHANTOM: occludes for the hidden-face
+      -- test and the corner AO, never drawn), so the bands cut no face at
+      -- their seams and the room emits as one piece. That is the crypt's
+      -- white-seam lesson (lib/CryptKit.lua) applied up front.
+      --
+      -- They stand FIRST in this list on purpose. Placement is
+      -- first-claim-wins (see Buildings.build), and the per-fixture
+      -- templates below -- the old lib/RoomKit.lua Mart -- match inside
+      -- these same rows. On SHOP=CLASSIC the shop branch is skipped, these
+      -- match nothing, and those fixtures stand again exactly as before.
+      --
+      -- `where` pins each band's top-left to the one cell it can be at, so
+      -- the scan short-circuits and a differently-shaped Mart elsewhere
+      -- (Celadon's floors are the LOBBY tileset, so not these) can never
+      -- take a partial match.
+      --
+      -- The colour comes from an AUTHORED SHEET, not the tileset: the MART
+      -- atlas is four greys under one flat palette, which is the whole
+      -- reason the old interior could only ever be a grey box. See
+      -- assets/shop/shop_sheet.png (tools/shop_sheet.py).
+
+      -- rows 0-3: the product wall -- two SALE cases, four drink coolers,
+      -- two more SALE cases, under a lit soffit
+      { id = "shop_band_north", shop = "north", where = { 0, 0, 0, 0 },
+        tiles = {
+          { 40, 40, 40, 40, 90, 91, 90, 91, 90, 91, 90, 91, 40, 40, 40, 40 },
+          { 78, 79, 78, 79, 44, 45, 44, 45, 44, 45, 44, 45, 78, 79, 78, 79 },
+          { 76, 77, 76, 77, 46, 47, 46, 47, 46, 47, 46, 47, 76, 77, 76, 77 },
+          { 23, 29, 23, 29, 62, 63, 62, 63, 62, 63, 62, 63, 23, 29, 23, 29 },
+        } },
+      -- rows 4-9: the service run down the west side, the clerk's own cell
+      -- left clear, and the two gondolas standing as one island in the east
+      { id = "shop_band_mid", shop = "mid", where = { 0, 4, 0, 4 },
+        tiles = {
+          { 90, 91, 90, 91,  1, 11,  1, 11,  1, 11,  1, 11,  1, 11,  1, 11 },
+          { 25, 24, 25, 24, 17, 27, 17, 27, 17, 27, 17, 27, 17, 27, 17, 27 },
+          { 64, 65, 65, 67,  1, 11,  1, 11, 64, 65, 65, 67, 64, 65, 65, 67 },
+          { 80, 81, 81, 83, 17, 27, 17, 27, 80, 81, 81, 83, 80, 81, 81, 83 },
+          { 40, 40, 40, 89, 54, 11,  1, 11, 68, 69, 69, 71, 68, 69, 69, 71 },
+          { 40, 40, 16, 41, 26, 27, 17, 27, 84, 85, 85, 87, 84, 85, 85, 87 },
+        } },
+      -- rows 10-15: the till, the counter's south arm, and the entrance
+      -- (the warp is cells 3 and 4 of the last row)
+      { id = "shop_band_south", shop = "south", where = { 0, 10, 0, 10 },
+        tiles = {
+          { 54, 11, 14, 15, 54, 11,  1, 11,  1, 11,  1, 11,  1, 11,  1, 11 },
+          { 26, 27, 30, 31, 26, 27, 17, 27, 17, 27, 17, 27, 17, 27, 17, 27 },
+          { 56,  8, 16, 41, 54, 11,  1, 11,  1, 11,  1, 11,  1, 11,  1, 11 },
+          { 25, 24, 25, 24, 26, 27, 17, 27, 17, 27, 17, 27, 17, 27, 17, 27 },
+          { 54, 11,  1, 11,  1, 11, 12, 12, 12, 12,  1, 11,  1, 11,  1, 11 },
+          { 26, 27, 17, 27, 17, 27, 28, 28, 28, 28, 17, 27, 17, 27, 17, 27 },
+        } },
+
       -- the back wall: SALE cases at the ends (trim, sign, black niche,
       -- base with goods) and the glass fridges between them
       { id = "mart_case_sale", room = "case", backWall = true,
@@ -2917,8 +2986,25 @@ return {
       -- assets/docs/buildings/B06: every Poke Mart (Cerulean,
       -- Cinnabar, Fuchsia, Lavender, Pewter, Saffron, Vermilion,
       -- Viridian). The Center's twin, MART on the sign.
+      --
+      -- Rebuilt on `spriteBand`: the band table run over an authored
+      -- RGBA sheet (tools/mart_facade.py) instead of the tileset
+      -- composite. The atlas is four greys under one flat palette, so
+      -- the old tile extrusion could only ever be a grey box; the sheet
+      -- carries real colour AND keeps everything the front-sprite path
+      -- gives up -- a roof drawn from above, pane recesses, the ledge,
+      -- the chimney. One texel per voxel: 64 wide is the 4-cell
+      -- footprint, and the extra height is the roof plan stacked over
+      -- the facade. `tiles` is untouched, so all 8 placements still
+      -- stamp and collision/warps are unchanged.
+      --
+      -- roofRows == roofBack == roofFront == depth on purpose: it
+      -- leaves no cycled middle, so every depth row maps to its own
+      -- drawn row and the rooftop plant is drawn once instead of
+      -- tiling across the deck like wallpaper.
       {
         id = "pokemart",
+        spriteBand = "assets/buildings/mart_facade.png",
         tiles = {
           { 76, 83, 83, 83, 83, 83, 83, 77 },
           { 90, 18, 18, 18, 18, 18, 18, 90 },
@@ -2929,8 +3015,16 @@ return {
           { 15, 75, 11, 12, 68, 69, 75, 31 },
           { 78, 26, 27, 28, 74, 74, 26, 79 },
         },
-        roofRows = 32, roofBack = 7, roofFront = 8, roofCycle = { 5, 12 },
-        slab = 4, frontEave = 4, ledge = nil,
+        roofRows = 64, roofBack = 64, roofFront = 64, roofCycle = { 0, 63 },
+        slab = 5, frontEave = 0, eaveOut = 1,
+        recessDepth = 3, sill = false,
+        -- the canopy over the glazing (rows Y_FAS0..Y_SOF1 of the sheet)
+        ledge = { 78, 81 },
+        -- the one piece of rooftop plant with real height; the plan art
+        -- under it is drawn to the same square (tools/mart_facade.py
+        -- PLANT_X/Z/W/H). ball = false: a metal box, not the Center's
+        -- roof pokeball.
+        chimney = { x = 44, z = 10, w = 10, h = 7 },
       },
 
       -- assets/docs/buildings/B02: the plain 4x4 block: one window

@@ -740,17 +740,16 @@ local SETTINGS = {
   -- Tree shape is not a camera preset either: both FULL and a light RES
   -- need to be able to hand the forest back to the free hulls.
   { Trees3D.setting,
-    "How trees are built in the diorama. VOXEL grows a real tree on every "
-    .. "round-tree site: a trunk you can see, branches that fork, a canopy "
-    .. "of leaf clumps with occlusion baked into it, a fringe of leaf cards "
-    .. "around the silhouette, four species mixed across the wood -- and "
-    .. "the crown bends in the wind while the bole stays planted. CLASSIC "
-    .. "is the Gen 1 ball: one outline-hulled sphere carved from the "
-    .. "tileset's own art, the same on every cell, free because it rides "
-    .. "in the chunk mesh -- and for that reason it cannot move in the "
-    .. "wind at all. If the bake is missing, the hulls are used either "
-    .. "way. Changing the row rebuilds the map's meshes on the next "
-    .. "frames.",
+    "Which trees stand on the round-tree sites. VOXEL is the blocky tree: "
+    .. "2.5-pixel cubes, a bole you can see with roots at its foot, a crown "
+    .. "of lobes with notches and tufts, four shapes mixed across the "
+    .. "wood, and every leaf cube painted in the greens the map's own tree "
+    .. "tile wears -- Route 2's greens on Route 2, the forest's in the "
+    .. "forest. 3D is the finer bake: a smoother canopy under a fringe of "
+    .. "photographed leaf cards, in its own colours. Both bend in the wind "
+    .. "while the trunk stays planted. If a set is missing, the old carved "
+    .. "ball from the tileset stands in. Changing the row rebuilds the "
+    .. "map's meshes on the next frames.",
     full = true },
   -- Not a diorama knob either: like 3D-BTL, this decides how a FIGHT is
   -- presented, so FULL sets nothing here and the row stays offered.
@@ -1893,6 +1892,19 @@ V.require("StartMenuMap").install()
 -- carries two menus; see lib/StartMenuXY.lua.
 StartMenuXY.install()
 
+-- ------- the town map, as the region it describes
+--
+-- The map the row above opens, drawn as a voxel Kanto: all 34 outdoor maps
+-- standing where the engine's own connection walk puts them, with the sea
+-- around them and the water moving.
+--
+-- Not a present hook, unlike everything else in this file. The town map is
+-- an OPAQUE screen and the world stage does not run behind one -- measured
+-- at zero present calls with the map open (tests/worldmap_probe4.lua) -- so
+-- there is nothing to paint from. It installs its own two wraps instead
+-- (src.ui.TownMap.new and Renderer.endFrame); see lib/WorldMap3D.lua.
+V.require("WorldMap3D").install()
+
 -- ------- the battle text box and its command buttons
 --
 -- One wrap (BattleState.drawTextArea) plus a draw inside snapHUDs, which is
@@ -2193,7 +2205,7 @@ end)
 -- first so this cannot drift again: this literal sat five minors behind the
 -- manifest, and in a feature-encoded form the versioning rules in CHANGELOG.md
 -- forbid outright (`.snow.1` -- features live in the changelog, not here).
-mod.exports.version = mod.version or "1.31.0-beta"
+mod.exports.version = mod.version or "1.32.0-beta"
 -- exposed so a companion mod can pin its own tiles' shapes or read the
 -- camera without reaching into this mod's file layout
 mod.exports.lib = V

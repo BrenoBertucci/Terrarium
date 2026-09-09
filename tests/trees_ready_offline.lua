@@ -33,6 +33,22 @@ stubs.Voxel3D = {
   end,
 }
 stubs.Mat4 = { translate = function() return {} end }
+-- the TREES row, as much of ModSetting as Trees3D touches headless: the
+-- default value (values[1]) and sync/get, so the harness can flip sets
+local Setting = {}
+Setting.__index = Setting
+function Setting:read() return self.index end
+function Setting:get() return self.values[self.index] end
+function Setting:sync(v)
+  self.index = 1
+  for i, x in ipairs(self.values) do if x == v then self.index = i end end
+end
+stubs.ModSetting = {
+  new = function(key, label, values, labels)
+    return setmetatable({ key = key, label = label, values = values,
+                          labels = labels, index = 1 }, Setting)
+  end,
+}
 stubs.ShadowMap = {
   snug = function(m) return m end,
   draw = function(mesh) drawn[#drawn + 1] = mesh end,
@@ -146,28 +162,47 @@ check(select(2, Trees3D.ready(huge)) == "hulls",
       "over MAX_TREES is terminal too")
 
 -- ---- the shadow caster is the CARD-LESS mesh, and the switch picks it
+-- One mesh per SPECIES: the forest is four draws, so the caster is the sum
+-- of what the pass drew, not drawn[1] (which is one species' share).
+local function sumDrawn()
+  if #drawn == 0 then return nil end
+  local t = { nv = 0, ni = 0 }
+  for _, m in ipairs(drawn) do t.nv = t.nv + m.nv; t.ni = t.ni + m.ni end
+  return t
+end
 drawn = {}
 Trees3D.SHADOW_SOLID_ONLY = true
 Trees3D.castShadows(map, 0, 0)
-local solid = drawn[1]
+local solid = sumDrawn()
 drawn = {}
 Trees3D.SHADOW_SOLID_ONLY = false
 Trees3D.castShadows(map, 0, 0)
-local full = drawn[1]
+local full = sumDrawn()
 check(solid and full, "both casters drew")
 if solid and full then
   check(solid.ni < full.ni, string.format(
         "card-less caster is smaller: %d indices vs %d (%.0f%% of the "
         .. "triangles)", solid.ni, full.ni, solid.ni / full.ni * 100))
-  check(solid.nv == full.nv,
-        "same vertex buffer, only the index list differs")
-  -- The number, not just the inequality. A boundary bug in the card
-  -- derivation left this at 100% while every count in the probe passed,
-  -- so pin it to the bake's own arithmetic: 420 tris of which 120 are
-  -- cards leaves 300 solid.
+  -- With SHADOW_PROXY the caster is the measured hull, its own small
+  -- buffer (buildShadowProxy): PROXY_SIDES x PROXY_BANDS rings, two caps
+  -- and a four-sided bole = 56 triangles at most per tree, 44 without a
+  -- bole. Without the proxy it is the card-less index list over the SAME
+  -- vertex buffer. Pin whichever is on, so a proxy that silently fell
+  -- back to the full mesh (or the reverse) shows here.
   local perTree = solid.ni / 3 / N
-  check(math.abs(perTree - 300) < 0.5, string.format(
-        "%.1f solid tris per tree (the bake says 300 of 420)", perTree))
+  if Trees3D.SHADOW_PROXY then
+    check(solid.nv < full.nv, string.format(
+          "proxy caster has its own small buffer: %d verts vs %d",
+          solid.nv, full.nv))
+    check(perTree >= 40 and perTree <= 56, string.format(
+          "%.1f caster tris per tree (a 6x3 barrel + caps + bole is 56)", perTree))
+  else
+    check(solid.nv == full.nv,
+          "same vertex buffer, only the index list differs")
+    local tris = full.ni / 3 / N
+    check(perTree < tris, string.format(
+          "%.1f solid tris per tree of %.1f", perTree, tris))
+  end
 end
 Trees3D.SHADOW_SOLID_ONLY = true
 

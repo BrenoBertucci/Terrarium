@@ -65,6 +65,8 @@ graphify-out/
 !assets/ground/tree/pine.mesh.bin
 !assets/ground/tree/birch.mesh.bin
 !assets/ground/tree/willow.mesh.bin
+# the VOXEL set (tools/grow_voxel_tree.py): same trap, same exception
+!assets/ground/tree/voxel/*.mesh.bin
 *.bps
 *.ips
 *.ups
@@ -246,3 +248,6 @@ LastPlayed.txt
 # Downloaded CC0 bark/leaf photographs (PolyHaven, ambientCG) that the tree
 # baker borrows luminance and leaf cutouts from. Bakes ship; photos stay here.
 tools/_tree_src/
+
+# tools/kit_headless.py renders and face dumps
+tools/_kit_out/

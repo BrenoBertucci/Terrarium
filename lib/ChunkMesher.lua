@@ -1238,24 +1238,52 @@ end
 -- never uploaded. The sink below is the one the terrain's own objectQuads
 -- go through: table shades, ffi buffers, uint32 indices past 65535
 -- vertices (a Center is ~130k).
+--
+-- ONE MESH PER TEXTURE, not per map. A quad's UVs are normalised against
+-- ITS OWN sheet, so quads from two different PNGs cannot share a draw: the
+-- second sheet's UVs would index the first sheet's texture and the building
+-- would come out wearing a crop of somebody else's art. This was invisible
+-- while the Center was the only custom-sprite building on a map -- `qs[1]`
+-- happened to be the right texture because it was the only one -- and it
+-- surfaced the moment the Mart became the second (both stand in every one
+-- of eight towns). Grouping is by sheet path, so the common case is still
+-- one group and one draw.
 local function buildSpriteMesh(map)
   local qs = Structures.forMap(map).spriteQuads
-  if not qs or #qs == 0 then return nil, nil end
-  local sink = newSink(math.max(64, #qs))
+  if not qs or #qs == 0 then return nil end
+  local order, byTex = {}, {}
   for _, q in ipairs(qs) do
     Budget.tick()
-    sink.push({ q[1], q[2], q[3], q[4] }, q.uv, q.shade, q.sky)
-  end
-  local mesh = sink.finish()
-  local path = qs[1] and qs[1].tex
-  local tex = nil
-  if path then
-    local okB, Buildings = pcall(V.require, "Buildings")
-    if okB and Buildings and Buildings.spriteImage then
-      tex = Buildings.spriteImage(path)
+    local path = q.tex
+    local g = byTex[path]
+    if not g then
+      g = { path = path, quads = {} }
+      byTex[path] = g
+      order[#order + 1] = g
     end
+    g.quads[#g.quads + 1] = q
   end
-  return mesh, tex
+  local okB, Buildings = pcall(V.require, "Buildings")
+  local groups = {}
+  for _, g in ipairs(order) do
+    local sink = newSink(math.max(64, #g.quads))
+    for _, q in ipairs(g.quads) do
+      Budget.tick()
+      sink.push({ q[1], q[2], q[3], q[4] }, q.uv, q.shade, q.sky)
+    end
+    local tex = nil
+    if g.path and okB and Buildings and Buildings.spriteImage then
+      tex = Buildings.spriteImage(g.path)
+    end
+    groups[#groups + 1] = { mesh = sink.finish(), tex = tex, path = g.path }
+  end
+  return groups
+end
+
+local function releaseSprites(list)
+  for _, g in ipairs(type(list) == "table" and list or {}) do
+    if g.mesh and g.mesh.release then pcall(g.mesh.release, g.mesh) end
+  end
 end
 
 -- Authored FIGURES (a person drawn into furniture) as one mesh each, in
@@ -1358,22 +1386,20 @@ local function runJob(job)
     ChunkMesher.stage = { map = job.id, pass = "figures" }
     local okX, figures = pcall(buildFigureMeshes, map)
     ChunkMesher.stage = { map = job.id, pass = "sprites" }
-    local okS, sprites, stex = pcall(buildSpriteMesh, map)
+    local okS, sprites = pcall(buildSpriteMesh, map)
     if (gen[job.id] or 0) ~= job.gen then
       if okG and grass and grass.release then pcall(grass.release, grass) end
       if okF and flowers and flowers.release then
         pcall(flowers.release, flowers)
       end
-      if okS and sprites and sprites.release then
-        pcall(sprites.release, sprites)
-      end
+      if okS then releaseSprites(sprites) end
       if okX then releaseFigures(figures) end
       return
     end
     swapSlot(c, "grass", (okG and grass) or false)
     swapSlot(c, "flowers", (okF and flowers) or false)
-    swapSlot(c, "sprites", (okS and sprites) or false)
-    c.spriteTex = (okS and stex) or nil
+    releaseSprites(c.sprites)
+    c.sprites = (okS and sprites) or false
     releaseFigures(c.figures)
     c.figures = (okX and figures) or false
     if c.stale then c.stale.aux = nil end
@@ -1543,11 +1569,11 @@ function ChunkMesher.get(map, bodyOnly, masks)
      or (c.stale and c.stale.aux) then
     local okG, grass = pcall(buildGrassMesh, map)
     local okF, flowers = pcall(buildFlowerMesh, map)
-    local okS, sprites, stex = pcall(buildSpriteMesh, map)
+    local okS, sprites = pcall(buildSpriteMesh, map)
     swapSlot(c, "grass", (okG and grass) or false)
     swapSlot(c, "flowers", (okF and flowers) or false)
-    swapSlot(c, "sprites", (okS and sprites) or false)
-    c.spriteTex = (okS and stex) or nil
+    releaseSprites(c.sprites)
+    c.sprites = (okS and sprites) or false
     if c.stale then c.stale.aux = nil end
   end
   if c[slot] == nil or (c.stale and c.stale[slot]) then
@@ -1587,14 +1613,24 @@ function ChunkMesher.flowers(map)
   return c and c.flowers or nil
 end
 
-function ChunkMesher.sprites(map)
+-- `{ mesh, tex, path }` per sheet -- see buildSpriteMesh on why a map can
+-- hold more than one.
+function ChunkMesher.spriteGroups(map)
   local c = cache[map.id]
-  return c and c.sprites or nil
+  local list = c and c.sprites
+  return (type(list) == "table") and list or nil
+end
+
+-- The first group, for callers that predate multi-sheet maps (the Center
+-- probe). Kept so a one-sheet map reads exactly as it used to.
+function ChunkMesher.sprites(map)
+  local g = ChunkMesher.spriteGroups(map)
+  return g and g[1] and g[1].mesh or nil
 end
 
 function ChunkMesher.spriteTex(map)
-  local c = cache[map.id]
-  return c and c.spriteTex or nil
+  local g = ChunkMesher.spriteGroups(map)
+  return g and g[1] and g[1].tex or nil
 end
 
 -- Authored figures as `{ mesh, wx, wz, y }` records -- each placed by its
