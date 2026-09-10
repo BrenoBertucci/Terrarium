@@ -229,6 +229,24 @@ tests/run_t0_pixels.cmd
 tests/run_turb.cmd
 tests/run_veg.cmd
 
+# 1.33+ phone/Mali probes and the packer that consumes the previous zip.
+tests/autoquality_offline.lua
+tests/diag_probe.lua
+tests/diag_row_probe.lua
+tests/geom_cull_probe.lua
+tests/mali_cost_probe.lua
+tests/phone_repro_probe.lua
+tests/run_diag.cmd
+tests/run_diag_row.cmd
+tests/run_gpu_compat.cmd
+tests/run_mali_cost.cmd
+tests/run_phone_repro.cmd
+tests/run_visual_ab.cmd
+tests/visual_ab_probe.lua
+tools/essl1_check.py
+tools/pack_release.py
+tools/run_autoquality_offline.py
+
 # NOTE: twenty older probes are still NOT listed here and therefore still
 # ship (ambient_beds, ambsound_cost, carry_headless, coexist, ds_z_anchor,
 # hidden_glint, ice_sprite, mesh_lod, minimap, puddle_rtx, qol_extras,

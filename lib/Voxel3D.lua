@@ -26,6 +26,7 @@
 local V = ...
 
 local Mat4 = V.require("Mat4")
+local RenderTarget = V.require("RenderTarget")
 local Voxel = V.require("VoxelState")
 local ShadowMap = V.require("ShadowMap")
 local VoxelGrid = V.require("VoxelGrid")
@@ -84,6 +85,93 @@ Voxel3D.FACE_SHADE = {
 }
 
 local SHADER = [[
+// ------- VXFP: fp32 WHERE A WORLD COORDINATE IS ACTUALLY CARRIED
+//
+// A GLES fragment stage defaults to mediump, which on a phone is fp16 --
+// eleven bits of mantissa and a resolution of ONE at a magnitude of 1024.
+// This shader works in WORLD PIXELS and a city is more than a thousand of
+// them across, so every position was quantised to about a whole world pixel
+// on Android and to nothing at all on desktop.  Everything downstream
+// inherits it -- the sun lookup, the swell, and above all the hashes, whose
+// entire job is to turn a small change of input into a large change of
+// output.  Quantisation that shifts as the camera moves, amplified on
+// purpose, is what a player reported as television interference.
+//
+// ------- WHY THIS IS A MACRO AS WELL AS `precision highp float;`
+//
+// Because raising the default was tried, twice, and both times it went
+// wrong in a way no machine here could see.  1.34.0-beta raised the
+// fragment stage's DEFAULT precision, and:
+//
+//   * on desktop it did not compile at all, because LOVE #defines `highp`
+//     to nothing under `#version 120`, so the statement became
+//     `precision  float;` (caught here by tests/gpu_compat_probe.lua);
+//   * and once that was guarded on GL_ES, it took the 3D mode off the phone
+//     entirely, because LOVE forward-declares
+//     `vec4 effect(vec4, Image, vec2, vec2);` BEFORE this file at its own
+//     mediump default, and a definition whose parameters disagree with its
+//     prototype does not compile on GLES;
+//   * and once THAT was pinned, a Mali-G615 still refused it -- eight
+//     refusals on record, every rung, both uniform precisions.  The ladder
+//     dropped it and the mode survived, which is the only reason that
+//     version was not a third outage.
+//
+// So VXFP names the declarations that carry a world coordinate and raises
+// those, one at a time.  `LOVE_HIGHP_OR_MEDIUMP` is LOVE's own macro --
+// highp where the fragment stage has it, mediump where it does not -- and
+// it is the construct `vWorld` and `vGrid` have used since the beginning,
+// which is to say the construct this exact driver is already compiling
+// today.  That is the whole argument for it being safe: it is not new here,
+// and the Mali that refused the statement above took every one of these
+// (`frag=fp32 refusals=0`, 1.34.2-beta, on the reporter's own screen).
+//
+// What that version also proved is that a NAMED LIST IS NOT ENOUGH -- see
+// the block under this one.  So VXFP is the rung BELOW a raised default
+// rather than a replacement for it, and FRAG_HIGHP gates both, because the
+// lesson from all three attempts is that a correctness fix which can take
+// the mode down is not a fix.  With it off, VXFP is nothing and every
+// declaration below reads exactly as it read before this existed.
+#ifdef FRAG_HIGHP
+  #define VXFP LOVE_HIGHP_OR_MEDIUMP
+#else
+  #define VXFP
+#endif
+
+// ------- AND THE SAME IDEA WITH THE VOLUME TURNED ALL THE WAY UP
+//
+// VXFP raises the declarations somebody NAMED, and a named list of the
+// precision-sensitive declarations in a fifteen-hundred-line fragment shader
+// is a list that is wrong.  1.34.2-beta shipped one, this exact Mali-G615
+// took it -- `frag=fp32 refusals=0` on the panel -- and the static was still
+// there, because the SHADOW LOOKUP was not on the list.  Every local inside
+// every function is still whatever the stage defaults to, and on GLES that
+// is fp16: `sunDepth` unpacks a sixteen-bit depth out of two bytes into a
+// value with about eleven bits of room, and then `step()` compares it
+// against a bias tuned for the other five.  The result is a coin flip
+// between lit and unlit, per pixel, everywhere the shadow map reaches --
+// which is a picture of television interference, and is what the phone was
+// showing all along.
+//
+// So there is a rung ABOVE the named list that simply raises the default,
+// and the ladder tries it first.  Both halves of the inner guard are
+// load-bearing: GL_FRAGMENT_PRECISION_HIGH is defined on DESKTOP too, where
+// LOVE #defines `highp` to nothing, so without `GL_ES` this compiles to
+// `precision  float;` and takes the whole shader down.  (It did, twice.)
+// And it stays a RUNG rather than becoming a fact, because a Mali refused
+// this statement once already and a correctness fix that can take the mode
+// down is not a fix -- below it sits the named list, and below that the fp16
+// stage every Android build has always run.
+#if defined(VX_GLOBAL_HP) && defined(PIXEL)
+#if defined(GL_ES) && defined(GL_FRAGMENT_PRECISION_HIGH)
+precision highp float;
+// Samplers carry their own default, and in GLSL ES 1.00 that default is
+// `lowp` -- eight bits over the range [-2,2], which is coarser than the
+// texture it is reading.  Raising `float` does not touch it, and the shadow
+// map is a two-byte pack whose low byte lives entirely inside that gap.
+precision highp sampler2D;
+#endif
+#endif
+
   // ------- VXHP: the precision of a uniform BOTH stages declare
   //
   // GLSL ES 1.00 links a uniform by name AND by precision qualifier, and the
@@ -131,7 +219,7 @@ local SHADER = [[
   // runs to a few thousand across a route, which a mediump varying would
   // quantise away into bands.
   varying LOVE_HIGHP_OR_MEDIUMP vec3 vWorld;
-  varying vec3 vSun;          // this fragment's place in the sun's view
+  varying VXFP vec3 vSun;     // this fragment's place in the sun's view
   // Snow SETTLED on a grass blade, 0..1, weighted by how far up the tuft
   // this fragment sits. Grass is the one thing in the world whose snow the
   // face normal cannot answer for: a blade is a SIDE by every honest
@@ -209,6 +297,22 @@ local SHADER = [[
   uniform VXHP vec3 waterFoam;     // what foam, glint and the waterline paint
   uniform VXHP vec3 waterSky;      // the dome's colour, what the sheet mirrors
   uniform VXHP vec2 waterTexel;    // 1 / the bound atlas, in texels
+  // ------- HOW MUCH ORDERED DITHER THE WATER IS ALLOWED
+  //
+  // The water's hard steps -- the waterline, the foam ring, the caustics, the
+  // ice bands -- are softened by an ordered checkerboard on a CELL OF THE
+  // RENDER BUFFER, which is the four-colour world's own idiom for "between
+  // two colours".  A checker is only a dither while its cell is about a
+  // display pixel.  The cell was a hardcoded 2, in CANVAS pixels, which is
+  // ~2 display pixels at RES FULL and EIGHT at RES 1/4 -- and 1/4 is what
+  // AUTO picks on a 3.31 Mpx phone panel.  A Poco X7 reported the water as
+  // the worst of it, and this is why: the dither had become the pattern.
+  //
+  // 1 keeps every existing rung exactly as it was; below that the checker
+  // relaxes toward its own average (0.5), which is the un-dithered value
+  // every consumer below already averages to.  A step with no dither is a
+  // step; a step with an eight-pixel checker on it is a chequerboard.
+  uniform VXHP float waterDither;
   // Tempo of each train relative to the long one (Water.RATE_LONG/MID/SHORT).
   // Constants, the same at every point on the map -- which is the property
   // that lets dispersion exist here without entering any gradient.
@@ -1089,10 +1193,14 @@ local SHADER = [[
   }
 #endif
 #ifdef PIXEL
-  uniform Image sunMap;
-  uniform float sunDark;      // >0 = there is a map to sample; see Light.lua
-  uniform float sunBias;
-  uniform vec2 sunTexel;
+  // VXFP on all five, and on every local below that touches them.  These
+  // are declared inside `#ifdef PIXEL`, so no link rule reaches them and
+  // raising them cannot cost the mode anything -- and they are the reason
+  // the static outlived 1.34.2: a sixteen-bit depth compared at fp16.
+  uniform VXFP Image sunMap;
+  uniform VXFP float sunDark; // >0 = there is a map to sample; see Light.lua
+  uniform VXFP float sunBias;
+  uniform VXFP vec2 sunTexel;
 
 #ifdef SUN_SOFT
   // How wide the blocker search looks, in shadow-map texels. It doubles as
@@ -1106,12 +1214,12 @@ local SHADER = [[
   // the frustum's own depth and the rung's texel -- none of which this
   // shader can see -- so what arrives is one number that turns a depth gap
   // straight into a filter width. See ShadowMap.softness.
-  uniform float sunSoft;
+  uniform VXFP float sunSoft;
 #endif
 
   // the two-channel pack ShadowMap writes: high byte, then low
-  float sunDepth(vec2 uv) {
-    vec4 c = Texel(sunMap, uv);
+  VXFP float sunDepth(VXFP vec2 uv) {
+    VXFP vec4 c = Texel(sunMap, uv);
     return c.r + c.g * (1.0 / 255.0);
   }
 
@@ -1123,8 +1231,8 @@ local SHADER = [[
   // A function rather than a macro because the shading language here is the
   // ES dialect, which does not take a backslash line continuation: a
   // multi-line macro will not compile at all.
-  vec2 blockerTap(vec2 base, vec2 off, float z) {
-    float t = sunDepth(base + off);
+  VXFP vec2 blockerTap(VXFP vec2 base, VXFP vec2 off, VXFP float z) {
+    VXFP float t = sunDepth(base + off);
     return t < z ? vec2(t, 1.0) : vec2(0.0);
   }
 #endif
@@ -1132,7 +1240,7 @@ local SHADER = [[
   // The LIT FRACTION: 1.0 in full sun, 0.0 in full shadow. Four taps half a texel
   // out on the diagonals: a 2x2 box filter, which is what turns the
   // shadow map's texel staircase into a one-pixel soft edge.
-  float sunlight(vec3 p) {
+  VXFP float sunlight(VXFP vec3 p) {
     if (sunDark <= 0.0) return 1.0;
     // outside the sun's frustum nothing was recorded, so nothing occludes
     if (p.x < 0.0 || p.x > 1.0 || p.y < 0.0 || p.y > 1.0 || p.z > 1.0) {
@@ -1147,14 +1255,14 @@ local SHADER = [[
     vec2 e = min(p.xy, 1.0 - p.xy);
     float edge = smoothstep(0.0, 0.06, min(e.x, e.y));
     if (edge <= 0.0) return 1.0;
-    float z = p.z - sunBias;
+    VXFP float z = p.z - sunBias;
 #ifdef SUN_ONE_TAP
     // SHADOWS LOW: one tap, so the shadow wears the map's own texel
     // staircase instead of a filtered edge. Four dependent texture fetches
     // per fragment is the single most expensive line in this shader on a
     // mobile part, and the edge they buy is landing inside one display
     // pixel once the render scale is anything but FULL.
-    float lit = step(z, sunDepth(p.xy)) * 4.0;
+    VXFP float lit = step(z, sunDepth(p.xy)) * 4.0;
 #elif defined(SUN_SOFT)
     // SHADOWS SOFT: the shadow's edge SOFTENS WITH DISTANCE from whatever
     // throws it. A sun is a disc rather than a point, so the further a
@@ -1181,13 +1289,13 @@ local SHADER = [[
     //
     // Twelve fetches against the four above. It is the top rung of the
     // SHADOWS row and it is meant to be.
-    vec2 s = sunTexel * SUN_SEARCH;
-    vec2 found = blockerTap(p.xy, s * vec2( 1.0,  0.4), z)
+    VXFP vec2 s = sunTexel * SUN_SEARCH;
+    VXFP vec2 found = blockerTap(p.xy, s * vec2( 1.0,  0.4), z)
                + blockerTap(p.xy, s * vec2(-0.4,  1.0), z)
                + blockerTap(p.xy, s * vec2(-1.0, -0.4), z)
                + blockerTap(p.xy, s * vec2( 0.4, -1.0), z);
-    float blocker = found.x, hits = found.y;
-    float lit;
+    VXFP float blocker = found.x, hits = found.y;
+    VXFP float lit;
     if (hits < 0.5) {
       // nothing between this fragment and the sun anywhere in the search
       // ring, which is most of a sunlit map
@@ -1202,8 +1310,8 @@ local SHADER = [[
       // narrow it at the far one, for no reason a viewer could name).
       // Clamped at one texel below, so a blocker sitting right on the
       // surface -- a contact point -- keeps a crisp edge.
-      float w = clamp((z - blocker) * sunSoft, 1.0, SUN_SEARCH);
-      vec2 f = sunTexel * w;
+      VXFP float w = clamp((z - blocker) * sunSoft, 1.0, SUN_SEARCH);
+      VXFP vec2 f = sunTexel * w;
       // eight on a disc -- four out at the rim and four halfway in, so a
       // wide penumbra fills rather than ringing. Halved at the end to put
       // eight taps back onto the four-tap scale the caller reads.
@@ -1217,7 +1325,7 @@ local SHADER = [[
            + step(z, sunDepth(p.xy + f * vec2(-0.50, -0.50)))) * 0.5;
     }
 #else
-    float lit = step(z, sunDepth(p.xy + sunTexel * vec2(-0.5, -0.5)))
+    VXFP float lit = step(z, sunDepth(p.xy + sunTexel * vec2(-0.5, -0.5)))
               + step(z, sunDepth(p.xy + sunTexel * vec2( 0.5, -0.5)))
               + step(z, sunDepth(p.xy + sunTexel * vec2(-0.5,  0.5)))
               + step(z, sunDepth(p.xy + sunTexel * vec2( 0.5,  0.5)));
@@ -1241,7 +1349,7 @@ local SHADER = [[
   // at large arguments -- exactly where world coordinates live by the far
   // side of a route -- so the same rock would hash differently on two
   // drivers. This is multiply-and-fract throughout.
-  float voxelHash(vec3 p) {
+  float voxelHash(VXFP vec3 p) {
     p = fract(p * vec3(0.1031, 0.1030, 0.0973));
     p += dot(p, p.yxz + 33.33);
     return fract((p.x + p.y) * p.z);
@@ -1504,10 +1612,10 @@ local SHADER = [[
   float lum3(vec3 c) { return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
 
   // Value noise for the mist: a hash on the lattice, smoothed between.
-  float mistHash(vec2 p) {
+  float mistHash(VXFP vec2 p) {
     return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
   }
-  float mistNoise(vec2 p) {
+  float mistNoise(VXFP vec2 p) {
     vec2 i = floor(p);
     vec2 f = fract(p);
     f = f * f * (3.0 - 2.0 * f);
@@ -1611,7 +1719,17 @@ local SHADER = [[
     return vec3(atten * ndl * lamp.w * flick, atten, sheen * flick);
   }
 
-  vec4 effect(vec4 color, Image tex, vec2 tc, vec2 sc) {
+  // mediump on all three floats, EXPLICITLY, and it stays even though the
+  // statement that made it necessary is gone.  LOVE forward-declares this
+  // function before this file is concatenated, at its own mediump default,
+  // and a prototype and a definition that disagree about precision do not
+  // compile on GLES -- which is how 1.34.0-beta took the 3D mode off the
+  // phone.  Writing the qualifier here means the pair agrees no matter what
+  // any future edit does to the default, and tools/essl1_check.py asserts it,
+  // so the trap is closed rather than merely avoided.  (On a desktop
+  // `#version 120` `mediump` is #defined to nothing and this reads exactly as
+  // it always did.)
+  vec4 effect(mediump vec4 color, Image tex, mediump vec2 tc, mediump vec2 sc) {
     vec4 p = Texel(tex, tc);
     // sprite sheets key GB OBJ color 0 to alpha 0; discarding rather than
     // blending keeps those texels out of the depth buffer, so a model never
@@ -2011,9 +2129,10 @@ local SHADER = [[
     // three trains the sheet is displaced by), so it climbs and falls on the
     // bank with the swell, and the foam rides it.
     if (basinOn > 0.5 && vWorld.y < -0.02) {
-      float bcell = 2.0;
+      // the basin's checker rides the same rule as the sheet's above
+      float bcell = (waterDither >= 0.999) ? 2.0 : 1.0;
       vec2 bgc = floor(sc / bcell);
-      float bcheck = mod(bgc.x + bgc.y, 2.0);
+      float bcheck = 0.5 + (mod(bgc.x + bgc.y, 2.0) - 0.5) * waterDither;
       // one evaluation of the swell serves the waterline and the caustics
       // both: a bed fragment used to pay for two, plus a second fetch of
       // the body field, on every water pixel in the frame
@@ -2068,9 +2187,12 @@ local SHADER = [[
     // is still a hard step softened by the checker -- the four-colour
     // world's own idiom for "between two colours".
     if (vWaterSurf > 0.5) {
-      float cell = 2.0;
+      // See the note over `waterDither`: the cell is 2 canvas pixels while
+      // there are display pixels to spare and 1 once there are not, and the
+      // checker's own amplitude relaxes to nothing below that.
+      float cell = (waterDither >= 0.999) ? 2.0 : 1.0;
       vec2 gc = floor(sc / cell);
-      float check = mod(gc.x + gc.y, 2.0);
+      float check = 0.5 + (mod(gc.x + gc.y, 2.0) - 0.5) * waterDither;
       // 0 at the bank, 1 in open water (the mesher's corner distance)
       float deep = clamp(vShore / max(waterShoreMax, 0.5), 0.0, 1.0);
       // Fresnel off the swell's own normal: looking straight down into
@@ -2101,7 +2223,7 @@ local SHADER = [[
         // world-XZ cell so band edges cannot crawl (sky floor idiom), the
         // geometry it is painted on being the continuous one.
         float wcell = max(mix(paintWCell, paintWCellIce, freeze), 1.0);
-        vec2 wz = floor(vWorld.xz / wcell) * wcell;
+        VXFP vec2 wz = floor(vWorld.xz / wcell) * wcell;
         vec4 shape; vec3 ang; float ahQ;
         float hQ = swellEval(wz, shape, ang, ahQ);
         vec3 wmix = shape.xyz;
@@ -2227,6 +2349,34 @@ local SHADER = [[
     // it -- a character samples its own sprite sheet, whose coordinates
     // land on the mask's pane rectangles by accident and would stripe the
     // cast with lamplight at night.
+    // ------- THIS FETCH IS NOT GATED, AND THAT IS A MEASUREMENT
+    //
+    // It should be.  Sampling a second full-size atlas on every fragment of
+    // every draw and then multiplying it away is a third of the shader's
+    // texture traffic on the common path, and a second atlas competing for
+    // the same cache lines as the one the colour came from.  glassOn is a
+    // uniform, so `if (glassOn > 0.0) glass = Texel(...)` is uniform control
+    // flow and the implicit-derivative rule does not forbid it.
+    //
+    // It was written, and then left out, and the REASON is the useful part.
+    //
+    // With it in, VIRIDIAN_CITY diffed 1.04% against the baseline, all of it
+    // on the FLOWERS -- which are tileset-atlas geometry and therefore land
+    // on the mask's pane rectangles by accident, exactly as the note above
+    // says.  Reverting the line put that pair at 0.000%, which looked like a
+    // clean bisect and was not: a later run of the same reverted build diffed
+    // 2.46% against ITSELF on that map.  The probe's noise floor on these
+    // maps is one to three percent and CANNOT RESOLVE a change this size, so
+    // the honest statement is not "this line breaks the flowers" -- it is
+    // "this line could not be shown harmless", which is a different and
+    // weaker claim and the one the evidence supports.
+    //
+    // So it stays out, on cost/benefit rather than on a verdict: after RES
+    // AUTO the phone's scene canvas is a fifth of a megapixel, where one
+    // fetch per fragment is a fifth of the saving the arithmetic above was
+    // reckoned against -- too little to buy an unresolvable question with.
+    // Somebody with the phone in hand, or a probe whose noise floor is under
+    // 0.1% on VIRIDIAN_CITY, should take it back up.
     float glass = Texel(glassMask, tc).a * glassOn;
     if (glass > 0.0) {
       // the sweep lives in the PANE's own space (atlas texels), not the
@@ -2600,12 +2750,11 @@ local function depthCanvas(name, w, h)
   local key = name .. "#depth"
   local held = slots[key]
   if held and held.w == w and held.h == h then return held.canvas end
-  local made = nil
-  for _, fmt in ipairs(DEPTH_FORMATS) do
-    local ok, c = pcall(love.graphics.newCanvas, w, h,
-                        { format = fmt, readable = true })
-    if ok and c then made = c; break end
-  end
+  -- RenderTarget, not love.graphics: on Android a plain newCanvas is
+  -- dpiscale (2.625) times bigger in each direction than the size asked for,
+  -- and a depth buffer seven times the frame is seven times the bandwidth a
+  -- tiler spends writing it back out.  See lib/RenderTarget.lua.
+  local made = RenderTarget.newFormat(w, h, DEPTH_FORMATS, { readable = true })
   if not made then
     depthOK = false
     return nil
@@ -2619,9 +2768,7 @@ local function depthCanvas(name, w, h)
   -- and read as a plain number rather than through a hardware compare,
   -- which is the other thing a depth texture can be bound as
   pcall(made.setDepthSampleMode, made)
-  if held and held.canvas and held.canvas.release then
-    pcall(held.canvas.release, held.canvas)
-  end
+  RenderTarget.release(held and held.canvas)
   slots[key] = { canvas = made, w = w, h = h }
   return made
 end
@@ -2629,12 +2776,10 @@ end
 local function slotCanvas(name, w, h)
   local held = slots[name]
   if held and held.w == w and held.h == h then return held.canvas end
-  local ok, c = pcall(love.graphics.newCanvas, w, h)
-  if not ok then return nil end
+  local c = RenderTarget.new(w, h)
+  if not c then return nil end
   c:setFilter("nearest", "nearest")
-  if held and held.canvas and held.canvas.release then
-    pcall(held.canvas.release, held.canvas)
-  end
+  RenderTarget.release(held and held.canvas)
   slots[name] = { canvas = c, w = w, h = h }
   return c
 end
@@ -2838,6 +2983,36 @@ local LADDER = {
 -- (GLES2 does not require it), where the choice is that or no 3D.
 local PRECISIONS = { "highp", "mediump" }
 
+-- The two answers to "may the fragment stage compute in fp32", tried in that
+-- order.  `true` is the one that fixes the static on a phone; `false` is the
+-- fp16 default GLES gives and what every Android build of this mod ran on
+-- until now.  See the FRAG_HIGHP note at the top of SHADER for why it has to
+-- be droppable and not merely correct.
+-- THREE answers, tried in that order:
+--   "global"    raise the fragment stage's DEFAULT precision, so every local
+--               in every function computes in fp32.  This is the one that
+--               fixes the static outright, and the one a Mali-G615 refused
+--               once, which is why it is first and droppable rather than
+--               unconditional.
+--   "targeted"  raise only the declarations named with VXFP.  1.34.2-beta
+--               shipped this alone; the driver took it and the static stayed,
+--               because a named list cannot cover a function's locals.  It is
+--               kept because it is strictly better than nothing and it is
+--               proven to compile on the device that refused the line above.
+--   false       the fp16 default GLES gives, which is what every Android
+--               build of this mod ran on until 1.34.2.  A picture with
+--               static in it is still a picture.
+local FRAG_HP = { "global", "targeted", false }
+
+-- What each of those puts in front of the source.
+local FRAG_DEFS = {
+  global   = "#define FRAG_HIGHP 1\n#define VX_GLOBAL_HP 1\n",
+  targeted = "#define FRAG_HIGHP 1\n",
+}
+
+-- and what to call it on the DIAG panel, in the width a phone screenshot has
+local FRAG_NAMES = { global = "fp32", targeted = "fp32-lite", [false] = "fp16" }
+
 -- Which of those the device says it can take, as an index into PRECISIONS.
 -- LOVE reports GL_FRAGMENT_PRECISION_HIGH as `pixelshaderhighp`; a driver
 -- without it cannot compile `uniform highp float` in the fragment stage at
@@ -2856,6 +3031,12 @@ end
 -- rungs -- the same meadow remembering footprints in one and not the other
 -- -- and it would cost a refused compile per variant to get there.
 Voxel3D.rung = 1
+
+-- Whether the fragment stage was allowed its own fp32 default, as an index
+-- into FRAG_HP.  Sticky and global for the same reason the rung and the
+-- uniform precision are: a driver that refuses it refuses it everywhere, and
+-- two variants disagreeing would be two different pictures of the same water.
+Voxel3D.fragHp = 1
 
 -- The precision the shared uniforms settled on, as an index into PRECISIONS.
 -- Sticky and global for the same reason the rung is: two variants disagreeing
@@ -2899,28 +3080,40 @@ function Voxel3D.shader(grid)
       -- and dropping the footprints first would only ever be four wasted
       -- compiles on the way to the same answer.
       local p0 = math.max(Voxel3D.prec, precisionFloor())
-      for p = p0, #PRECISIONS do
-        for r = Voxel3D.rung, #LADDER do
-          local rung = LADDER[r]
-          local src = "#define VXHP " .. PRECISIONS[p] .. "\n"
-                      .. head
-                      .. (rung.vtf and "#define VERTEX_TEX 1\n" or "")
-                      .. (rung.crypt and "#define CRYPT_MATS 1\n" or "")
-                      .. SHADER
-          local ok, sh = pcall(love.graphics.newShader, src)
-          if ok then
-            built = sh
-            -- Only ever downward: a later variant that happens to build at
-            -- full must not drag the session back up past a rung something
-            -- else already proved this driver refuses.
-            if r > Voxel3D.rung then Voxel3D.rung = r end
-            if p > Voxel3D.prec then Voxel3D.prec = p end
-            break
+      -- FRAG_HIGHP is the OUTERMOST walk, and outermost on purpose: it is the
+      -- only axis here that is not a feature.  Everything the rungs drop is
+      -- something the player can see going; this drops nothing but the
+      -- fragment stage's arithmetic precision, so it is worth trying against
+      -- every rung and every uniform precision before giving it up -- and
+      -- worth giving up rather than losing the mode.  See the note at the top
+      -- of SHADER for what it does and what it cost the first time.
+      for fh = Voxel3D.fragHp, #FRAG_HP do
+        for p = p0, #PRECISIONS do
+          for r = Voxel3D.rung, #LADDER do
+            local rung = LADDER[r]
+            local src = "#define VXHP " .. PRECISIONS[p] .. "\n"
+                        .. (FRAG_DEFS[FRAG_HP[fh]] or "")
+                        .. head
+                        .. (rung.vtf and "#define VERTEX_TEX 1\n" or "")
+                        .. (rung.crypt and "#define CRYPT_MATS 1\n" or "")
+                        .. SHADER
+            local ok, sh = pcall(love.graphics.newShader, src)
+            if ok then
+              built = sh
+              -- Only ever downward: a later variant that happens to build at
+              -- full must not drag the session back up past a rung something
+              -- else already proved this driver refuses.
+              if r > Voxel3D.rung then Voxel3D.rung = r end
+              if p > Voxel3D.prec then Voxel3D.prec = p end
+              if fh > Voxel3D.fragHp then Voxel3D.fragHp = fh end
+              break
+            end
+            err = tostring(sh)
+            Voxel3D.compileLog[#Voxel3D.compileLog + 1] =
+              { key = key, rung = r, name = rung.name, prec = PRECISIONS[p],
+                fragHp = FRAG_HP[fh], err = err }
           end
-          err = tostring(sh)
-          Voxel3D.compileLog[#Voxel3D.compileLog + 1] =
-            { key = key, rung = r, name = rung.name, prec = PRECISIONS[p],
-              err = err }
+          if built then break end
         end
         if built then break end
       end
@@ -2946,6 +3139,15 @@ function Voxel3D.precName()
   return PRECISIONS[Voxel3D.prec]
 end
 
+-- Whether this driver took the fp32 fragment stage, as a word for the report
+-- and the DIAG panel.  "fp32" here is the fix for the static; "fp16" is the
+-- GLES default and means the driver refused it and the mode is running the
+-- way every Android build did before -- which is worth being able to SEE
+-- rather than deduce from a picture.
+function Voxel3D.fragName()
+  return FRAG_NAMES[FRAG_HP[Voxel3D.fragHp]] or "?"
+end
+
 Voxel3D.precCount = #PRECISIONS
 
 -- Test hook: forget every build and start the ladder over.
@@ -2961,6 +3163,7 @@ function Voxel3D.resetShaders()
   activeShader = nil
   Voxel3D.rung = 1
   Voxel3D.prec = 1
+  Voxel3D.fragHp = 1
   Voxel3D.compileLog = {}
   Voxel3D.shaderError = nil
 end
@@ -3033,6 +3236,7 @@ function Voxel3D.report()
                 .. ", crypt stone " .. (rung.crypt and "on" or "OFF") .. ")")
             or "")
   add("uniforms:", PRECISIONS[Voxel3D.prec] or "?")
+  add("fragment:", Voxel3D.fragName())
 
   if #Voxel3D.compileLog == 0 then
     add("refusals: none")
@@ -3459,8 +3663,29 @@ function Voxel3D.beginScene(w, h, cx, cy, vw, vh, sky, slot)
   -- uniforms do not exist, the send fails, and the pcall is what makes that
   -- the intended outcome rather than a lost frame.
   pcall(sh.send, sh, "animeBands", Anime.BANDS)
-  pcall(sh.send, sh, "animeCell", Anime.CELL)
-  pcall(sh.send, sh, "animeDither", Anime.DITHER)
+  -- The cel step's checker rides the same rule as the water's -- see the long
+  -- note over `waterDither`.  It is the SAME defect and it was fixed in only
+  -- one of the two places: a cell measured in RENDER-BUFFER pixels is a dither
+  -- at RES FULL and a CHEQUERBOARD once the buffer is a fraction of the panel.
+  --
+  -- Measured on the reporter's Poco X7 at RES 1/8 (v1.34.3-beta): every run
+  -- length in a clean patch of grass was a multiple of 8 -- 8, 16, 24, 32, 64 --
+  -- which is a ONE-canvas-pixel pattern blown up by the 8x upscale, two
+  -- colours at 34% and 24% of the patch.  The water was reported as the worst
+  -- of it last time because water is where the eye goes; the cel step covers
+  -- the whole ground, and on a top-down camera the rim lights all of it.
+  --
+  -- 1 at FULL and 1/2 so nothing anybody has already seen moves; below that
+  -- the cell collapses to a single pixel and the checker's amplitude relaxes
+  -- toward its own average, which is the un-dithered value the bands already
+  -- average to.  A step with no dither is a step; a step with an eight-pixel
+  -- checker on it is a chequerboard.
+  do
+    local div = Quality.scale()
+    local relax = (div <= 2) and 1.0 or math.max(0.0, 2.0 / div)
+    pcall(sh.send, sh, "animeCell", (relax >= 0.999) and Anime.CELL or 1.0)
+    pcall(sh.send, sh, "animeDither", Anime.DITHER * relax)
+  end
   -- Local night lights. Every uniform is sent every scene so a day frame (or
   -- a map change) cannot retain a lamp from the previous city.
   local lamps = Voxel3D.lampLights or {}
@@ -3562,6 +3787,15 @@ function Voxel3D.beginScene(w, h, cx, cy, vw, vh, sky, slot)
   pcall(sh.send, sh, "waterShoreFoam", tonumber(Water.SHORE_FOAM) or 0.45)
   pcall(sh.send, sh, "waterFoam", Water.FOAM or { 0.93, 0.97, 1.0 })
   pcall(sh.send, sh, "waterTexel", { 1 / 128, 1 / 48 })
+  -- The ordered checker's licence, from the RES rung: 1 at FULL and 1/2 (so
+  -- nothing anybody has already seen moves), then 2/div, which is the
+  -- fraction of a display pixel one canvas pixel still covers.  See the note
+  -- over the `waterDither` uniform.
+  do
+    local div = Quality.scale()
+    pcall(sh.send, sh, "waterDither",
+          (div <= 2) and 1.0 or math.max(0.0, 2.0 / div))
+  end
   -- what the sheet mirrors: the sky this scene was cleared to. No sky
   -- (indoors, a rung that paints none) mirrors the tint of the hour.
   do
@@ -4295,7 +4529,15 @@ function Voxel3D.drawGroup(group, texture, model, pull, sunModel, b)
     -- stands on it -- see the note where ymax is measured
     if not b or (ch.x1 >= b[1] and ch.x0 <= b[3]
                  and ch.z1 + ch.ymax >= b[2] and ch.z0 <= b[4]) then
-      if texture then ch.mesh:setTexture(texture) end
+      -- Only when it CHANGED. The same atlas was being re-bound on every
+      -- chunk of every frame -- 66 to 86 redundant Mesh:setTexture calls per
+      -- pass on a route, each one a Lua call through the FFI and a texture
+      -- rebind the driver has to at least look at. The atlas object does
+      -- change (palette mode, a repaint), so it is cached per chunk rather
+      -- than set once at build time.
+      if texture and ch.tex ~= texture then
+        ch.mesh:setTexture(texture); ch.tex = texture
+      end
       love.graphics.draw(ch.mesh)
     end
   end
@@ -4335,7 +4577,15 @@ function Voxel3D.drawWater(group, texture, model, b)
     local ch = chunks[i]
     if not b or (ch.x1 >= b[1] and ch.x0 <= b[3]
                  and ch.z1 + math.max(ch.ymax, 0) >= b[2] and ch.z0 <= b[4]) then
-      if texture then ch.mesh:setTexture(texture) end
+      -- Only when it CHANGED. The same atlas was being re-bound on every
+      -- chunk of every frame -- 66 to 86 redundant Mesh:setTexture calls per
+      -- pass on a route, each one a Lua call through the FFI and a texture
+      -- rebind the driver has to at least look at. The atlas object does
+      -- change (palette mode, a repaint), so it is cached per chunk rather
+      -- than set once at build time.
+      if texture and ch.tex ~= texture then
+        ch.mesh:setTexture(texture); ch.tex = texture
+      end
       g.draw(ch.mesh)
     end
   end
@@ -4574,6 +4824,16 @@ function Voxel3D.endScene()
   local prevBlend, prevAlpha = love.graphics.getBlendMode()
   local ok = pcall(function()
     love.graphics.setCanvas(out)
+    -- ------- CLEAR BEFORE A BLIT THAT COVERS THE WHOLE TARGET
+    --
+    -- Free on a desktop and worth a full-screen read on a tiler.  Binding a
+    -- render target without clearing it tells the driver the old contents
+    -- still matter, so the tile buffer is LOADED from main memory before the
+    -- first fragment -- and then every one of those texels is overwritten by
+    -- this blit anyway.  A clear is the signal that says do not bother: the
+    -- tile starts at a constant and the load never happens.  At the panel's
+    -- own size that is 13 MB of reads per pass per frame on the Poco X7.
+    love.graphics.clear(0, 0, 0, 0, false, false)
     -- replace, not alpha blend: this is a copy, and the scene's own alpha
     -- is meaningful -- the void is transparent at every rung below the one
     -- that paints a sky, and blending would premultiply it away

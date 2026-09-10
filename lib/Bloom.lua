@@ -32,6 +32,8 @@
 -- the mod namespace (see main.lua): V.require loads a sibling module
 local V = ...
 
+local RenderTarget = V.require("RenderTarget")
+
 local Bloom = {}
 
 local BRIGHT = [[
@@ -114,8 +116,44 @@ local GRADE = [[
     vec3 over = max(x - 1.0, 0.0);
     return c + over / (1.0 + over);
   }
+  // ------- WHY THIS IS NOT `fract(sin(dot(p, k)) * 43758)`
+  //
+  // It was, and on a Mali-G615 it turned every interior BLACK while the
+  // overworld stayed perfect.  This shader is the only one in the file that
+  // touches `sc` -- BRIGHT, RAYS and BLUR all work in normalised `tc` -- and
+  // `sc` here is a pixel of the PRESENT canvas, which is the whole panel.
+  //
+  // LOVE emits `precision mediump float;` at the top of every GLES pixel
+  // shader, and mediump on this part is fp16, whose largest finite value is
+  // 65504.  On the reporter's 1220x2712 panel:
+  //
+  //     dot(sc, vec2(12.9898, 78.233)) = 1220*12.9898 + 2712*78.233
+  //                                    = 15848 + 212168 = 228016
+  //
+  // -- three and a half times the ceiling before the `time` offset is even
+  // added.  The argument saturates to +inf, `sin(+inf)` is NaN, and the NaN
+  // walks straight out through `rgb +=` into the frame.  `grain` cannot save
+  // it either: NaN * 0.0 is still NaN.
+  //
+  // The desktop never sees it -- there the shader is `#version 330`, `float`
+  // is fp32, and 228016 is an unremarkable number.  That is the whole of why
+  // these rooms are perfect on the PC and black on the phone.
+  //
+  // The replacement is the interleaved gradient noise from lib/RayFX.lua,
+  // which was written for this exact driver class and whose comment already
+  // spells out the same hazard -- the fix simply never reached this file.
+  // Its constants are small by construction: the same panel corner reaches
+  // 1220*0.06711 + 2712*0.00584 = 98, and every step after it is inside a
+  // fract().  Its blue-noise-ish spectrum is the better grain anyway.
+  //
+  // NOT fixed by raising the precision: `precision highp float;` in a LOVE
+  // pixel shader re-declares effect()'s parameters against the mediump
+  // forward declaration LOVE concatenates ahead of this source, and that is
+  // what took the 3D mode off the air in 1.34.0.  The arithmetic is what has
+  // to be safe.
   float hash(vec2 p) {
-    return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
+    p = floor(p);
+    return fract(52.9829189 * fract(dot(p, vec2(0.06711056, 0.00583715))));
   }
   vec4 effect(vec4 color, Image tex, vec2 tc, vec2 sc) {
     vec4 c = Texel(tex, tc);
@@ -166,10 +204,10 @@ end
 
 local function canvases(w, h)
   if not ping or cw ~= w or ch ~= h then
-    local okA, a = pcall(love.graphics.newCanvas, w, h)
-    if not okA then return nil end
-    local okB, b = pcall(love.graphics.newCanvas, w, h)
-    if not okB then return nil end
+    local a = RenderTarget.new(w, h)
+    if not a then return nil end
+    local b = RenderTarget.new(w, h)
+    if not b then return nil end
     a:setFilter("linear", "linear")
     b:setFilter("linear", "linear")
     a:setWrap("clamp", "clamp")
@@ -181,8 +219,8 @@ end
 
 local function fullCanvas(w, h)
   if full and fw == w and fh == h then return full end
-  local ok, c = pcall(love.graphics.newCanvas, w, h)
-  if not ok then return nil end
+  local c = RenderTarget.new(w, h)
+  if not c then return nil end
   c:setFilter("nearest", "nearest")
   full, fw, fh = c, w, h
   return c

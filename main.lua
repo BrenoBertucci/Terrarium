@@ -140,6 +140,8 @@ local BattleExit = V.require("BattleExit")
 local DayNight = V.require("DayNight")
 local DayTint = V.require("DayTint")
 local Quality = V.require("Quality")
+local Device = V.require("Device")
+local Diag = V.require("Diag")
 local Wind = V.require("Wind")
 local Trees3D = V.require("Trees3D")
 local BattleDynamic = V.require("BattleDynamic")
@@ -259,14 +261,30 @@ local function reportGPU()
   if gpuReported then return end
   gpuReported = true
   local avail = Voxel3D.available()
-  if avail and Voxel3D.rung == 1 then return end
+  -- The device block is written EVERY session, not only when something went
+  -- wrong.  It is three lines, it costs one file write once, and it is the
+  -- entire answer to "why is it slow on my phone": which GPU, how many
+  -- panel pixels, what dpi scale LOVE would have applied, and which RES rung
+  -- the governor settled on.  Before this existed the only way to find that
+  -- out was to have the phone in your hand.
+  local okQ, quality = pcall(Quality.report)
+  local device = (okQ and quality or "device: (unavailable)")
+  if avail and Voxel3D.rung == 1 then
+    pcall(function()
+      love.filesystem.write("TERRARIUM-gpu-report.txt",
+        "TERRARIUM " .. tostring(mod.version or "?") .. "\n" .. device .. "\n"
+        .. Voxel3D.report() .. "\n")
+    end)
+    print("TERRARIUM: " .. device)
+    return
+  end
   local head = avail
     and ("TERRARIUM: this driver refused part of the 3D shader. The mode is "
          .. "running on the '" .. tostring(Voxel3D.rungName()) .. "' build.")
      or ("TERRARIUM: the 3D pass could not be built on this driver, so the "
          .. "game is drawing flat. The report below is what a bug report "
          .. "needs -- please paste it whole.")
-  local text = head .. "\n" .. Voxel3D.report() .. "\n"
+  local text = head .. "\n" .. device .. "\n" .. Voxel3D.report() .. "\n"
   if love.filesystem and love.filesystem.write then
     if pcall(love.filesystem.write, "TERRARIUM-gpu-report.txt", text) then
       -- Named in the printed copy as well as written, because a phone has no
@@ -485,6 +503,14 @@ mod.content.render_pipelines:register(PIPE_VOXEL, {
     -- world-pixel units.
     local sw, sh = sceneSize(ctx)
     lastViewH = ctx.vh or lastViewH
+    -- which map the DIAG panel is reporting on; free while the row is off
+    Diag.note(ctx.state)
+    -- One tick of the RES governor, here rather than in update(): this runs
+    -- exactly once per frame the diorama is actually on screen, which is the
+    -- only kind of frame that is evidence about the rung.  update() ticks
+    -- while the mode is OFF and the engine may tick it more than once
+    -- between two frames.  A no-op unless the RES row is on AUTO.
+    Quality.frame()
     local canvas = VoxelScene.render(ctx.state, sw, sh,
                                      ctx.vw, ctx.vh, ctx.paletteFor)
     if not canvas then return nil end   -- fall back to the 2D path
@@ -539,20 +565,39 @@ mod.content.render_pipelines:register(PIPE_VOXEL, {
       Voxel3D.endOverlay()
     end
     -- Orientation radar on the finished (upscaled) world canvas. Screen-
-    -- space corner HUD -- not inside the RES-downsampled 3D pass. When
-    -- T-SHIFT is on, worldPresent re-paints it AFTER the blur so the
-    -- radar stays sharp (see tiltshift worldPresent below).
-    MiniMap.present(canvas)
-    -- and the start menu, when one is open. On the FINISHED world canvas for
-    -- the same reason the radar is: the engine's menu draws into the 160x144
-    -- UI canvas, and 5x interface art put through that comes out at Game Boy
-    -- resolution (see lib/StartMenuXY.lua). Last, so it is over the radar --
-    -- a menu is modal and nothing belongs on top of it.
-    StartMenuXY.present(canvas)
+    -- space corner HUD -- not inside the RES-downsampled 3D pass.
+    --
+    -- ONLY WHEN THE BLUR IS NOT GOING TO RUN. When T-SHIFT is on,
+    -- worldPresent paints both of these again after the blur so they stay
+    -- sharp -- so this paint was thrown away, and it was not free: each of
+    -- these binds the PANEL-SIZED canvas, and on a tile-based GPU a bind is
+    -- a resolve of the whole target out to memory and a reload back in. Two
+    -- of them, at 2712x1220, for a corner widget that is about to be
+    -- overwritten. The weather immediately above is already guarded exactly
+    -- this way and for exactly this reason; these two were the pair that
+    -- never got it.
+    if not TiltShift.blurring() then
+      MiniMap.present(canvas)
+      -- and the start menu, when one is open. On the FINISHED world canvas
+      -- for the same reason the radar is: the engine's menu draws into the
+      -- 160x144 UI canvas, and 5x interface art put through that comes out at
+      -- Game Boy resolution (see lib/StartMenuXY.lua). Last, so it is over
+      -- the radar -- a menu is modal and nothing belongs on top of it.
+      StartMenuXY.present(canvas)
+    end
+    -- Last of all, and outside the blur guard above: the DIAG panel is not
+    -- part of the picture, it is a readout ABOUT the picture, so it is drawn
+    -- whether or not the tilt-shift is going to repaint the frame -- and it
+    -- must never be the thing that is blurred.
+    Diag.present(canvas)
     return canvas
   end,
 
   invalidate = function()
+    -- the window changed size or the mod reloaded: the pixel budget's answer
+    -- is different now, and a rung that missed the target at the old size is
+    -- no evidence at the new one
+    Quality.invalidate()
     Voxel3D.invalidate()
     OverworldBattle.invalidate()
     ChunkMesher.invalidate()   -- no map id = every cached mesh
@@ -603,6 +648,7 @@ mod.content.render_pipelines:register(PIPE_TILT, {
       -- is unreadable in a way a landscape is not.
       canvas = StartMenuXY.present(canvas)
     end
+    canvas = Diag.present(canvas)
     return canvas
   end,
 
@@ -643,8 +689,17 @@ applyFull = function(level)
   if not opts then return end
 
   -- the miniature blur at its strongest: FULL is the diorama look, and the
-  -- tilt-shift is most of what makes it read as a model
-  Pipelines.setLevel(PIPE_TILT, Pipelines.maxLevel(PIPE_TILT))
+  -- tilt-shift is most of what makes it read as a model.
+  --
+  -- Except on a tiler, where the blur is not a look, it is two more passes
+  -- over the whole panel plus a third full-panel render target -- and FULL
+  -- also used to take the T-SHIFT row off the menu (see the rows hook), so a
+  -- phone player who cycled the VOXEL row to its top got the most expensive
+  -- post-process in the mod with no way to reach the switch. The preset sets
+  -- the cheapest blur rung there instead, and leaves the row where they can
+  -- find it.
+  Pipelines.setLevel(PIPE_TILT,
+                     Device.mobile() and 1 or Pipelines.maxLevel(PIPE_TILT))
   Pipelines.syncOptions(opts)
   -- the horizon flat. The curve bends the world away from a walking player,
   -- which fights a fixed diorama framing
@@ -701,6 +756,12 @@ local SETTINGS = {
   -- the performance rows off the menu would be a preset a player on a slow
   -- phone could not climb back out of -- FULL is the heaviest thing this
   -- mod does, so it is exactly when these two need to be reachable.
+  { Diag.setting,
+    "Prints what this build is -- version, GPU, which shader rung the driver "
+    .. "took, what the rows resolve to and how many models the map built -- "
+    .. "over the top left of the screen. It is there so a bug report from a "
+    .. "phone can be a screenshot instead of a guess.",
+    full = true },
   { Quality.setting,
     "How much of the panel's resolution the 3D pass renders at, before it "
     .. "is scaled back up. Lower is squarer and much faster -- this is the "
@@ -1660,7 +1721,9 @@ mod.hooks:wrap("ui.options.rows", function(next, game, rows)
     -- horizon bend, the blur, the hour -- so those come off the menu and
     -- DAYTIME is held at SYNC while its row is unreachable.
     DayNight.forceSync(game)
-    dropRow(out, "pipeline:" .. PIPE_TILT)
+    -- ...but not the blur, on a device where the blur is a performance row
+    -- rather than a look. See applyFull.
+    if not Device.mobile() then dropRow(out, "pipeline:" .. PIPE_TILT) end
   end
   local extra = {}
   for _, entry in ipairs(SETTINGS) do
@@ -2205,7 +2268,7 @@ end)
 -- first so this cannot drift again: this literal sat five minors behind the
 -- manifest, and in a feature-encoded form the versioning rules in CHANGELOG.md
 -- forbid outright (`.snow.1` -- features live in the changelog, not here).
-mod.exports.version = mod.version or "1.32.0-beta"
+mod.exports.version = mod.version or "1.34.5-beta"
 -- exposed so a companion mod can pin its own tiles' shapes or read the
 -- camera without reaching into this mod's file layout
 mod.exports.lib = V

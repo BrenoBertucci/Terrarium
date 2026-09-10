@@ -29,6 +29,7 @@
 local V = ...
 
 local Quality = V.require("Quality")
+local RenderTarget = V.require("RenderTarget")
 
 local TiltShift = {}
 
@@ -103,10 +104,10 @@ end
 
 local function getCanvases(w, h)
   if not ping or cw ~= w or ch ~= h then
-    local ok, a = pcall(love.graphics.newCanvas, w, h)
-    if not ok then return nil end
-    local okB, b = pcall(love.graphics.newCanvas, w, h)
-    if not okB then return nil end
+    local a = RenderTarget.new(w, h)
+    if not a then return nil end
+    local b = RenderTarget.new(w, h)
+    if not b then return nil end
     -- the gaussian's fractional tap offsets need linear filtering
     a:setFilter("linear", "linear")
     b:setFilter("linear", "linear")
@@ -125,8 +126,8 @@ end
 -- and come up smooth either way.
 local function getOut(w, h)
   if out and ow == w and oh == h then return out end
-  local ok, c = pcall(love.graphics.newCanvas, w, h)
-  if not ok then return nil end
+  local c = RenderTarget.new(w, h)
+  if not c then return nil end
   c:setFilter("nearest", "nearest")
   out, ow, oh = c, w, h
   return out
@@ -235,11 +236,13 @@ function TiltShift.apply(canvas)
     -- the kernel's reach is measured in the small canvas even though it is
     -- sampling the big one
     love.graphics.setCanvas(a)
+    love.graphics.clear(0, 0, 0, 0, false, false)
     pcall(sh.send, sh, "dir", { 1 / bw, 0 })
     pcall(sh.send, sh, "boost", 0)
     love.graphics.draw(canvas, 0, 0, 0, bw / w, bh / h)
     -- vertical, and the saturation lift on the way out
     love.graphics.setCanvas(b)
+    love.graphics.clear(0, 0, 0, 0, false, false)
     pcall(sh.send, sh, "dir", { 0, 1 / bh })
     pcall(sh.send, sh, "boost", 1)
     love.graphics.draw(a)
@@ -250,6 +253,9 @@ function TiltShift.apply(canvas)
     -- soften exactly the part that is supposed to be in focus.
     if final then
       love.graphics.setCanvas(final)
+      -- three full-coverage blits, three tile loads avoided: this is the
+      -- one that lands at the panel's own size.  See Voxel3D.endScene.
+      love.graphics.clear(0, 0, 0, 0, false, false)
       love.graphics.setShader()
       b:setFilter("nearest", "nearest")
       love.graphics.draw(b, 0, 0, 0, w / bw, h / bh)

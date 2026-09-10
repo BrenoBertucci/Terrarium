@@ -995,6 +995,41 @@ local function shifted(b, ox, oy)
   return { b[1] - ox, b[2] - oy, b[3] - ox, b[4] - oy }
 end
 
+-- ------- IS ANY OF THIS MAP IN FRAME AT ALL
+--
+-- The terrain is chunked and culled per chunk (drawGroup), but four things
+-- out here are still ONE whole-map mesh each -- the grass, the flowers, the
+-- street lamps and the authored trees -- and they were being submitted for
+-- the current map AND for every connected neighbour, in the scene pass and
+-- again in the sun pass, with no box at all.  A town has up to four
+-- neighbours; a forest map's tree mesh is hundreds of thousands of vertices.
+-- On a tiler every one of those vertices is written out to main memory
+-- during binning whether or not a single triangle survives the clip, so
+-- "the GPU throws them away" is not the same as free.
+--
+-- Chunking those four is the real fix and it is a bigger change than this
+-- one.  What is free today is the MAP level: a neighbour is connected on one
+-- side, the camera looks one way, and most of the time the neighbour is
+-- entirely behind you.  This answers exactly that, and answers `true`
+-- whenever it cannot tell -- an unculled draw is a frame cost, a wrongly
+-- culled one is a hole in the world.
+--
+-- The north side carries slack for the same reason drawGroup adds a chunk's
+-- ymax to its south edge: the camera looks north and down, so something
+-- standing past the far edge still projects into the sky above the horizon.
+-- 240 is ShadowMap.HEIGHT, the tallest thing the mod builds.
+local MAP_TALL = 240
+
+local function mapInBox(map, box, ox, oy)
+  if not (box and map and map.def) then return true end
+  local w = (tonumber(map.def.width) or 0) * 32
+  local h = (tonumber(map.def.height) or 0) * 32
+  if w <= 0 or h <= 0 then return true end
+  local b = shifted(box, ox or 0, oy or 0)
+  return b[3] >= 0 and b[1] <= w and (h + MAP_TALL) >= b[2] and b[4] >= 0
+end
+VoxelScene.mapInBox = mapInBox
+
 -- ------- the glint's drive
 --
 -- A reflection is something the VIEWPOINT does, so the window glint is fed
@@ -1092,6 +1127,26 @@ local function castShadows(state, terrain, nbMesh, posed, cx, cy, vw, vh,
   -- lost is a strip along the seam where a neighbour's border trees should
   -- be throwing onto this map's edge; what is bought is most of the pass.
   local casters = Quality.neighbourShadows() and (state.neighbors or {}) or {}
+  -- ------- WHY THIS IS STILL THE CAMERA'S BOX AND NOT THE LIGHT'S
+  --
+  -- ShadowMap.box (published by fit) is the light frustum's world FOOTPRINT,
+  -- and culling casters against it looks obviously right: nothing outside
+  -- the frustum can put a texel in the map.  It was tried, and it is wrong.
+  --
+  -- The ortho volume is fitted in LIGHT space -- fit projects the eight
+  -- corners of the world AABB through the light view and takes their extent
+  -- -- so the volume it ends up with is SHEARED, and reaches further in
+  -- world x/z at some heights than the AABB it was derived from.  A tall
+  -- caster whose foot is outside xs/zs can therefore still project into the
+  -- map.  Measured, not reasoned: swapping this line moved 4.0% of the
+  -- pixels on ROUTE_1 against a 0.0% run-to-run noise floor, and the diff
+  -- was tree shadows going missing (tests/visual_ab_probe.lua).
+  --
+  -- The camera box is generous on purpose (VoxelScene.FAR_CAP is twice the
+  -- scene's reach) and that generosity is what makes it safe here.  The
+  -- honest tightening is to fit the box to the sheared volume rather than to
+  -- the AABB, which is a change with a correctness proof behind it and not a
+  -- swap of one box for another.
   local box = VoxelScene.bounds(cx, cy, vw, vh, true)
 
   ShadowMap.drawGroup(terrain, atlasFor(state.map), nil, box)
@@ -1149,7 +1204,9 @@ local function castShadows(state, terrain, nbMesh, posed, cx, cy, vw, vh,
   pcall(StreetLamps.castShadows, state.map)
   if Quality.neighbourShadows() then
     for _, nb in ipairs(state.neighbors or {}) do
-      pcall(StreetLamps.castShadows, nb.map, nb.ox, nb.oy)
+      if mapInBox(nb.map, box, nb.ox, nb.oy) then
+        pcall(StreetLamps.castShadows, nb.map, nb.ox, nb.oy)
+      end
     end
   end
 
@@ -1161,7 +1218,9 @@ local function castShadows(state, terrain, nbMesh, posed, cx, cy, vw, vh,
       pcall(Trees3D.castShadows, state.map)
       if Quality.neighbourShadows() then
         for _, nb in ipairs(state.neighbors or {}) do
-          pcall(Trees3D.castShadows, nb.map, nb.ox, nb.oy)
+          if mapInBox(nb.map, box, nb.ox, nb.oy) then
+            pcall(Trees3D.castShadows, nb.map, nb.ox, nb.oy)
+          end
         end
       end
     end
@@ -1861,10 +1920,12 @@ function VoxelScene.render(state, w, h, vw, vh, paletteFor)
   -- fields to decorate the strip you are about to leave.
   Voxel3D.wearMap = nil
   for _, nb in ipairs(state.neighbors or {}) do
-    local ntex = grassTex
-    if not Grass3D then ntex = atlasFor(nb.map) end
-    Voxel3D.draw(ChunkMesher.grass(nb.map), ntex,
-                 Mat4.translate(nb.ox, 0, nb.oy), pull, nil, sway)
+    if mapInBox(nb.map, box, nb.ox, nb.oy) then
+      local ntex = grassTex
+      if not Grass3D then ntex = atlasFor(nb.map) end
+      Voxel3D.draw(ChunkMesher.grass(nb.map), ntex,
+                   Mat4.translate(nb.ox, 0, nb.oy), pull, nil, sway)
+    end
   end
   -- The crush stays ON through the flowers. They are the other thing out
   -- here with a base in the ground and a top free to give, they grow in
@@ -1894,9 +1955,11 @@ function VoxelScene.render(state, w, h, vw, vh, paletteFor)
   Voxel3D.draw(ChunkMesher.flowers(state.map), atlasFor(state.map), nil,
                fpull, ShadowMap.snug(nil), fsway)
   for _, nb in ipairs(state.neighbors or {}) do
-    Voxel3D.draw(ChunkMesher.flowers(nb.map), atlasFor(nb.map),
-                 Mat4.translate(nb.ox, 0, nb.oy), fpull,
-                 ShadowMap.snug(Mat4.translate(nb.ox, 0, nb.oy)), fsway)
+    if mapInBox(nb.map, box, nb.ox, nb.oy) then
+      Voxel3D.draw(ChunkMesher.flowers(nb.map), atlasFor(nb.map),
+                   Mat4.translate(nb.ox, 0, nb.oy), fpull,
+                   ShadowMap.snug(Mat4.translate(nb.ox, 0, nb.oy)), fsway)
+    end
   end
   Voxel3D.crush = nil
   Voxel3D.crushMap = nil
@@ -1911,8 +1974,10 @@ function VoxelScene.render(state, w, h, vw, vh, paletteFor)
   Voxel3D.glass(false)
   pcall(StreetLamps.draw, state.map, outdoor)
   for _, nb in ipairs(state.neighbors or {}) do
-    local nOut = nb.map and nb.map.def and Map.isOutdoor(nb.map.def)
-    pcall(StreetLamps.draw, nb.map, nOut, nb.ox, nb.oy)
+    if mapInBox(nb.map, box, nb.ox, nb.oy) then
+      local nOut = nb.map and nb.map.def and Map.isOutdoor(nb.map.def)
+      pcall(StreetLamps.draw, nb.map, nOut, nb.ox, nb.oy)
+    end
   end
   -- Authored trees ride the same pass for the same reason: their bake is
   -- its own texture, not the tileset atlas, so they need seams and the
@@ -1923,8 +1988,10 @@ function VoxelScene.render(state, w, h, vw, vh, paletteFor)
     if okT and Trees3D then
       pcall(Trees3D.draw, state.map, outdoor)
       for _, nb in ipairs(state.neighbors or {}) do
-        local nOut = nb.map and nb.map.def and Map.isOutdoor(nb.map.def)
-        pcall(Trees3D.draw, nb.map, nOut, nb.ox, nb.oy)
+        if mapInBox(nb.map, box, nb.ox, nb.oy) then
+          local nOut = nb.map and nb.map.def and Map.isOutdoor(nb.map.def)
+          pcall(Trees3D.draw, nb.map, nOut, nb.ox, nb.oy)
+        end
       end
     end
   end

@@ -18,6 +18,9 @@
 -- of 23,040 pixels, which is nothing, and it buys the one cue that stops a
 -- 3D backdrop reading as wallpaper.
 
+local V = ...
+local RenderTarget = V.require("RenderTarget")
+
 local BattleDOF = {}
 
 -- Switched off for now. The pass is kept whole -- band maths, shader,
@@ -98,10 +101,10 @@ end
 -- would reallocate both every time a battle started or ended.
 local function getCanvases(w, h)
   if not ping or cw ~= w or ch ~= h then
-    local ok, a = pcall(love.graphics.newCanvas, w, h)
-    if not ok then return nil end
-    local okB, b = pcall(love.graphics.newCanvas, w, h)
-    if not okB then return nil end
+    local a = RenderTarget.new(w, h)
+    if not a then return nil end
+    local b = RenderTarget.new(w, h)
+    if not b then return nil end
     -- the gaussian's fractional tap offsets need linear filtering
     a:setFilter("linear", "linear")
     b:setFilter("linear", "linear")

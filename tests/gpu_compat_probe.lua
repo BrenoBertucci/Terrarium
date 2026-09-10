@@ -191,6 +191,61 @@ return function(game)
           "[strict uniform precision] available() stays true")
   end)
 
+  -- ------- THE FRAGMENT STAGE'S fp32 DEFAULT, REFUSED
+  --
+  -- This is the case that matters most, because the thing it guards already
+  -- shipped broken once.  1.34.0-beta put `precision highp float;` into the
+  -- pixel stage unconditionally and the whole 3D mode stopped coming up on
+  -- the phone -- LOVE forward-declares `effect` at its own mediump default
+  -- BEFORE the mod's source, and a definition whose parameters disagree with
+  -- its prototype does not compile on GLES.  Desktop cannot see it: there the
+  -- qualifiers are #defined to nothing and the two agree trivially.
+  --
+  -- So FRAG_HIGHP became a rung of its own, and a rung is only worth having
+  -- if dropping it is TESTED.  A driver that refuses it must land on the fp16
+  -- fragment stage every Android build has always run, with the mode ON and
+  -- every feature intact -- a picture with static in it rather than no
+  -- picture.
+  withDriverRefusing({ "#define FRAG_HIGHP 1" }, function()
+    local sh = Voxel3D.shader()
+    check(sh ~= nil, "[no fragment highp] the mode still builds")
+    check(Voxel3D.fragName() == "fp16",
+          "[no fragment highp] fell to the fp16 fragment stage (got "
+          .. tostring(Voxel3D.fragName()) .. ")")
+    check(Voxel3D.rung == 1 and Voxel3D.precName() == "highp",
+          "[no fragment highp] and gave up NOTHING else (got rung "
+          .. Voxel3D.rung .. " / " .. tostring(Voxel3D.precName()) .. ")")
+    check(Voxel3D.available(), "[no fragment highp] available() stays true")
+    -- TWO fragment rungs carry that define now -- the raised default and
+    -- the named list -- so a driver that refuses the define refuses both:
+    -- two modes at each of two uniform precisions at each of four rungs.
+    check(#Voxel3D.compileLog == 16,
+          "[no fragment highp] all sixteen refused squares are on record ("
+          .. #Voxel3D.compileLog .. ")")
+  end)
+
+  -- ------- THE RAISED DEFAULT REFUSED, THE NAMED LIST KEPT
+  --
+  -- This is the Mali-G615 exactly: it refused `precision highp float;` on
+  -- every square in 1.34.1-beta, and then accepted every VXFP declaration in
+  -- 1.34.2-beta without a single refusal.  So the middle rung is not a
+  -- theoretical one -- it is the rung that device actually lands on, and the
+  -- only reason it still gets fp32 anywhere at all.
+  withDriverRefusing({ "#define VX_GLOBAL_HP 1" }, function()
+    local sh = Voxel3D.shader()
+    check(sh ~= nil, "[no raised default] the mode still builds")
+    check(Voxel3D.fragName() == "fp32-lite",
+          "[no raised default] fell to the NAMED declarations, not to fp16 "
+          .. "(got " .. tostring(Voxel3D.fragName()) .. ")")
+    check(Voxel3D.rung == 1 and Voxel3D.precName() == "highp",
+          "[no raised default] and gave up nothing else (got rung "
+          .. Voxel3D.rung .. " / " .. tostring(Voxel3D.precName()) .. ")")
+    check(Voxel3D.available(), "[no raised default] available() stays true")
+    check(#Voxel3D.compileLog == 8,
+          "[no raised default] the eight refused squares are on record ("
+          .. #Voxel3D.compileLog .. ")")
+  end)
+
   -- Blocked on a line the SHADER source ALWAYS carries, not on a define. The
   -- first version of this used "#define SUN_ONE_TAP", which the build only
   -- emits when soft shadows are off -- so on a machine with them on the fake
@@ -199,11 +254,16 @@ return function(game)
     local sh = Voxel3D.shader()
     check(sh == nil, "[nothing builds] shader() gives up rather than lying")
     check(not Voxel3D.available(), "[nothing builds] available() is false")
-    -- Four rungs at each of two precisions: the ladder has to have tried
-    -- every square before it is allowed to give up, and a bug report written
-    -- from here should show all eight.
-    check(#Voxel3D.compileLog == 8,
-          "[nothing builds] all eight refusals on record ("
+    -- Four rungs, at each of two uniform precisions, at each of THREE
+    -- answers to "how does the fragment stage get its fp32" -- raise the
+    -- default, raise the named declarations, or neither: twenty-four
+    -- squares.  The ladder has to have tried every one before it is allowed
+    -- to give up, and a bug report written from here should show all of
+    -- them.  (Eight, then sixteen, now twenty-four; the number is spelled
+    -- out rather than computed so that adding a rung and not thinking about
+    -- it fails this test.)
+    check(#Voxel3D.compileLog == 24,
+          "[nothing builds] all twenty-four refusals on record ("
           .. #Voxel3D.compileLog .. ")")
     local rep = Voxel3D.report()
     check(rep:find("OFF", 1, true) ~= nil,

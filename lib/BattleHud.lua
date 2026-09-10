@@ -25,6 +25,8 @@
 -- the mod namespace (see main.lua): V.require loads a sibling module
 local V = ...
 
+local RenderTarget = V.require("RenderTarget")
+
 local BattleHud = {}
 
 -- How solid the frost is over the world behind it, and how far the tint
@@ -79,8 +81,8 @@ local function getShader()
 end
 
 local function canvasOf(w, h, filter)
-  local ok, c = pcall(love.graphics.newCanvas, w, h)
-  if not ok then return nil end
+  local c = RenderTarget.new(w, h)
+  if not c then return nil end
   c:setFilter(filter or "linear", filter or "linear")
   return c
 end

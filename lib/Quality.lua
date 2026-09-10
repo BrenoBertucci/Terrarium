@@ -49,21 +49,63 @@
 -- blit, and at HIGH every constant below is the number it used to be. FULL
 -- is one step off the default rather than three, because on a desktop it is
 -- where most people are going.
+--
+-- ------- AND THEN A PHONE ACTUALLY RAN IT
+--
+-- Everything above was written blind, and the sentence it turns on -- "there
+-- is no benchmarking a phone from here" -- was true and is the reason the
+-- guesses were wrong.  A Poco X7 (Mali-G615 MC2, 2712x1220) ran the VOXEL
+-- row at about one frame a second on the default rungs.  Three findings, in
+-- order of how much they cost:
+--
+--   * Every render target in the mod was SEVEN TIMES the pixels it asked
+--     for, because love.graphics.newCanvas(w, h) multiplies by the display
+--     density and Android's is 2.625.  RES divided a number that was then
+--     multiplied back twice.  See lib/RenderTarget.lua.
+--   * ShadowMap.available() resized the shadow canvas every frame, which
+--     destroyed and rebuilt two render targets per frame AND defeated the
+--     every-other-frame deferral described above -- the sun pass ran on
+--     every frame, including while standing still.
+--   * The RES row is a DIVISOR, and a divisor is not a cost.  1/2 of the
+--     window this was written on is 332k pixels; 1/2 of that phone's panel
+--     is 827k.  The same rung, two and a half times the work.
+--
+-- So RES gained AUTO (lib/AutoQuality.lua): a pixel budget for the first
+-- frame and a governor after it, which is the only honest answer to a
+-- device that cannot be measured from here -- it measures itself.  Every
+-- other row still means exactly what it meant, and a player who picks a
+-- rung by hand is never overridden.
 
 -- the mod namespace (see main.lua): V.require loads a sibling module
 local V = ...
 
 local ModSetting = V.require("ModSetting")
+local AutoQuality = V.require("AutoQuality")
+local Device = V.require("Device")
 
 local Quality = {}
 
--- The ladder is ordered so values[1] -- ModSetting's default, and its
--- fallback for an unreadable stored value -- is the cheap rung rather than
--- the pretty one. Cycling still walks it in a sensible direction; it just
--- starts where a phone wants to start.
+-- AUTO is values[1], so it is what a player who has never touched this row
+-- gets and what an unreadable stored value falls back to.  It is not a
+-- fifth constant: it is a pixel budget and a governor (lib/AutoQuality.lua),
+-- because the same divisor is a different amount of work on every panel --
+-- 1/2 of the 1536x864 window this was written on is 332k pixels and 1/2 of
+-- the Poco X7's 2712x1220 is 827k, two and a half times as many through a
+-- GPU with a fraction of the fill rate.
+--
+-- 1/6 and 1/8 are new rungs below the old floor.  1/4 used to be the bottom
+-- and on a 3.31 Mpx panel it is still 207k pixels; 1/8 is 51k, which at a
+-- phone's fitScale is about one canvas texel per world pixel and therefore
+-- the point below which there is nothing left to save.  A player on a
+-- device that needs them can now reach them by hand, and AUTO can reach
+-- them without being asked.
+--
+-- The order of the rest is unchanged, so every value already in a save
+-- still resolves to itself and cycling still walks the same direction.
 Quality.setting = ModSetting.new("renderScale", "RES",
-                                 { 2, 1, 3, 4 },
-                                 { "1/2", "FULL", "1/3", "1/4" })
+                                 { "auto", 2, 1, 3, 4, 6, 8 },
+                                 { "AUTO", "1/2", "FULL", "1/3", "1/4",
+                                   "1/6", "1/8" })
 
 -- SOFT is a fourth rung above HIGH rather than a replacement for it: it
 -- keeps everything HIGH does -- the big map, the neighbours casting, a
@@ -121,12 +163,48 @@ end
 -- the render path: a setting that could throw there would take the frame
 -- with it, and the whole contract of this mod is that it falls back rather
 -- than errors.
+-- True while the RES row is on AUTO, which is the only state in which
+-- anything is allowed to move the rung on its own.
+function Quality.autoScale()
+  local ok, v = pcall(Quality.setting.get, Quality.setting)
+  return ok and v == "auto"
+end
+
 function Quality.scale()
   local ok, v = pcall(Quality.setting.get, Quality.setting)
-  local n = (ok and tonumber(v)) or 2
+  if ok and v == "auto" then
+    local okA, d = pcall(AutoQuality.divisor)
+    if okA and type(d) == "number" then v = d else v = 2 end
+  end
+  local n = tonumber(v) or 2
   if n < 1 then n = 1 end
-  if n > 4 then n = 4 end
+  if n > 8 then n = 8 end
   return math.floor(n)
+end
+
+-- One rendered frame of the 3D pass, for the governor.  A no-op unless the
+-- row is on AUTO, so a player who picked a rung by hand is never overridden
+-- and never pays for the measurement.
+function Quality.frame()
+  if not Quality.autoScale() then return end
+  pcall(AutoQuality.frame)
+end
+
+-- The window changed size (or the mod hot-reloaded): the pixel budget's
+-- answer is different now and a rung that failed at the old size says
+-- nothing about the new one.
+function Quality.invalidate()
+  pcall(AutoQuality.invalidate)
+end
+
+-- One line for the GPU report and the probes.
+function Quality.report()
+  local okD, d = pcall(Device.report)
+  local okA, a = pcall(AutoQuality.report)
+  local lines = { okD and d or "device: ?" }
+  lines[#lines + 1] = ("scale:    1/%d  %s")
+    :format(Quality.scale(), okA and a or "(auto unavailable)")
+  return table.concat(lines, "\n")
 end
 
 function Quality.shadows()
@@ -165,7 +243,20 @@ end
 -- rung is actually reachable on a phone-shaped view instead of the fit
 -- falling through to the top of the ladder every time.
 function Quality.shadowSizes()
-  if Quality.softShadows() then return { 1024, 1536, 2048 } end
+  if Quality.softShadows() then
+    -- HIGH and SOFT are the DESKTOP rungs, and on a phone-shaped view the
+    -- fit lands on the top of that ladder every time -- 2048 squared is
+    -- 4.2 megatexels of colour plus the same again of depth, cleared and
+    -- filled with the whole map's geometry every frame.  MOBILE.md
+    -- describes fixing exactly this and only fixed it for LOW.
+    --
+    -- On a tiler the top rung is capped.  HIGH still means what it says --
+    -- the neighbours cast, the redraw is every frame, and SOFT still gets
+    -- its blocker search -- it just stops meaning "four megatexels", which
+    -- is not a thing this class of GPU can do sixty times a second.
+    if Device.mobile() then return { 768, 1024, 1280 } end
+    return { 1024, 1536, 2048 }
+  end
   return { 512, 768, 1024 }
 end
 

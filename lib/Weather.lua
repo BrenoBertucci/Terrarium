@@ -71,6 +71,7 @@
 -- the mod namespace (see main.lua): V.require loads a sibling module
 local V = ...
 local WaterMap = V.require("WaterMap")   -- where water may be drawn at all
+local RenderTarget = V.require("RenderTarget")
 
 
 local ModSetting = V.require("ModSetting")
@@ -3072,8 +3073,11 @@ local function captureBehind()
   local w, h = target:getDimensions()
   if w < 1 or h < 1 then return nil end
   if behindCanvas == nil or behindW ~= w or behindH ~= h then
-    local okC, c = pcall(g.newCanvas, w, h)
-    if not okC then return nil end
+    -- `w, h` come from the target's UNIT size, so the copy has to be made
+    -- in units too: a plain newCanvas would put the display density back on
+    -- top of a number that already carries it.  See lib/RenderTarget.lua.
+    local c = RenderTarget.new(w, h)
+    if not c then return nil end
     behindCanvas, behindW, behindH = c, w, h
   end
   local pm, pa = g.getBlendMode()
@@ -4073,8 +4077,32 @@ end
 -- and drawWorld skips it; when the blur is off, drawWorld draws it as
 -- before. One paint per frame either way -- main.lua owns that choice
 -- because main.lua is where both passes live.
+-- Is there anything at all for the screen-space pass to do this frame?
+--
+-- Weather.draw already answers this and returns early, but it answers it
+-- AFTER Weather.present has bound the canvas -- and the canvas here is the
+-- finished, panel-sized world. On a tiler that bind is a resolve of the whole
+-- 3.31 Mpx target out to memory and a reload back in, paid on every frame of
+-- a clear sky, which is most frames.
+--
+-- The test is deliberately "nothing to paint AND nothing to clean": drops and
+-- shafts are cleared by Weather.draw's own early-out, and skipping the call
+-- entirely must not strand them. The after-rain window keeps motes alive for
+-- minutes after `kind` goes nil, and a lightning flash paints with no rain
+-- power at all, so both are named here rather than assumed away.
+function Weather.presentsNothing()
+  local okK, kind = pcall(Weather.visible)
+  if not okK then return false end
+  if kind then return false end
+  if #motes > 0 or #drops > 0 or #shafts > 0 then return false end
+  local okF, lit = pcall(Weather.flash)
+  if okF and (lit or 0) > 0 then return false end
+  return true
+end
+
 function Weather.present(canvas, project, scale)
   if not canvas then return canvas end
+  if Weather.presentsNothing() then return canvas end
   local g = love.graphics
   local w = canvas.getWidth and canvas:getWidth() or 0
   local h = canvas.getHeight and canvas:getHeight() or 0
