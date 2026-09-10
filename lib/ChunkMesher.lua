@@ -341,12 +341,36 @@ end
 local CHUNK_X = 256          -- world pixels: eight blocks across
 local CHUNK_Z = 64           -- two blocks deep
 
--- Slack on a cell's bounds, in world pixels. A quad is filed by its first
--- corner, and a few of the things this mesher emits -- a stamped tree
--- hull, a prop's prism -- reach past the cell that corner landed in. This
--- is bigger than any of them; over-generous bounds cost a little culling
--- and nothing else, while short ones would clip geometry out of a frame it
--- belongs in.
+-- ------- THE MARGIN THAT ATE THE CULLING
+--
+-- A quad is filed by its FIRST corner, and a few of the things this mesher
+-- emits -- a stamped tree hull, a prop's prism -- reach past the cell that
+-- corner landed in.  The original answer was a fixed 96-pixel slack on every
+-- side, on the reasoning that over-generous bounds cost a little culling and
+-- nothing else.
+--
+-- On the Z axis they cost nearly all of it.  A cell is 64 world pixels deep
+-- and the margin made its box 256 deep -- four times the cell -- and Z is
+-- the only axis with any culling in it (see the note above: Gen 1 maps are
+-- narrow and tall, and the view is wide and shallow).  So the test kept
+-- roughly four cells for every one it actually needed.
+--
+-- The obvious fix is to stop guessing: push() already walks all four corners
+-- of every quad to track the cell's height, so growing the horizontal bounds
+-- in the same loop costs a handful of comparisons and gives the bucket's
+-- EXACT extent.
+--
+-- It was implemented, measured, and BACKED OUT, and the reason is worth more
+-- than the optimisation was.  Exact bounds put a band of empty sky along the
+-- top of ROUTE_1 -- the far terrain culled away -- because this margin is
+-- not only covering quads that overhang their cell.  It is also covering the
+-- north reach of VoxelScene.bounds, which is fitted to where the GROUND
+-- stops being visible and is about a chunk short of where terrain still
+-- reads on the horizon.  Tighten the cell and the shortfall becomes a hole.
+--
+-- So the margin stays until the view box is fixed, which is the actual bug.
+-- Measured with tests/visual_ab_probe.lua: 4.0% of ROUTE_1's pixels against
+-- a 0.0% run-to-run noise floor.
 local CHUNK_MARGIN = 96
 
 -- A finished map's terrain: the list of chunk meshes and their bounds.
@@ -414,6 +438,9 @@ local function newChunkedSink()
       if c[3][2] > y then y = c[3][2] end
       if c[4][2] > y then y = c[4][2] end
       if y > b.ymax then b.ymax = y end
+      -- and how far it REACHES, which is what replaced CHUNK_MARGIN. The
+      -- same four corners, three more comparisons each, and the box ends up
+      -- exact instead of 96 world pixels of slack on every side.
       b.sink.push(c, uv, shade, sky)
     end,
     finish = function()

@@ -37,6 +37,7 @@ local PaletteFX = require("src.render.PaletteFX")
 -- (see Water.lua). Required here rather than pushed in: this file already
 -- owns the animation clock, and Water has no reverse dependency on us.
 local Water = V.require("Water")
+local RenderTarget = V.require("RenderTarget")
 
 local TerrainAtlas = {}
 
@@ -343,7 +344,8 @@ local function readback(image)
   pcall(love.graphics.push, "all")
   local ok, data = pcall(function()
     local w, h = image:getDimensions()
-    local canvas = love.graphics.newCanvas(w, h)
+    local canvas = RenderTarget.new(w, h)
+    if not canvas then return nil end
     love.graphics.origin()
     love.graphics.setScissor()
     love.graphics.setShader()

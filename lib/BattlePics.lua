@@ -69,6 +69,8 @@
 -- the mod namespace (see main.lua): V.require loads a sibling module
 local V = ...
 
+local RenderTarget = V.require("RenderTarget")
+
 local BattlePics = {}
 
 -- Cached by the image the engine handed over. Weak keys, so a pic that goes
@@ -96,7 +98,8 @@ local function readBack(img)
   local prevR, prevG, prevB, prevA = love.graphics.getColor()
   local data = nil
   local ok = pcall(function()
-    local canvas = love.graphics.newCanvas(w, h)
+    local canvas = RenderTarget.new(w, h)
+    if not canvas then return nil end
     love.graphics.setCanvas(canvas)
     love.graphics.clear(0, 0, 0, 0)
     love.graphics.setBlendMode("replace", "premultiplied")

@@ -38,6 +38,41 @@ Upstream Dramatic Shape still uses `3` / `5` / `6` / `7` / `8` / `9`.
 - Wild Pokemon visible in the grass; ecology / shelter / city life systems
 - Tuned defaults for lower-end / mobile hardware
 
+## New in 1.34.5-beta
+
+**Beta para testes e nada mais.**
+
+Shop, crypt and tower interiors went black on Android: Bloom's film grain
+overflowed fp16 on the present canvas. The grain is now the same interleaved
+gradient noise RayFX already used.
+
+## New in 1.34.1-beta
+
+**Fixes 1.34.0-beta, which took the 3D mode off phones entirely.** That build put `precision highp float;` into the pixel stage unconditionally, and LOVE forward-declares `effect` at its own mediump default BEFORE a mod's source is concatenated -- so the definition had highp parameters against a mediump prototype, which GLSL ES refuses. No shader, no mode, flat 2D. Desktop cannot see it: there both qualifiers are `#define`d to nothing and they agree trivially.
+
+- `effect()` now pins its own float parameters to `mediump`, so it matches LOVE's prototype whatever the default is.
+- The precision statement became **a rung of the shader ladder** (`FRAG_HIGHP`), tried first and **dropped** if the driver refuses -- the same fallback the vertex taps and the crypt samplers already have. The worst case is now the fp16 fragment stage every Android build has always run: a picture with static in it, rather than no picture. `tests/gpu_compat_probe.lua` gained the case that proves the drop works, and `tools/essl1_check.py` the assertion that keeps the prototype matched.
+
+## New in 1.34.0-beta
+
+**Television static on Mali, and why it was only there.** A GLES fragment shader defaults to `mediump` -- LOVE emits exactly that at the top of every pixel shader it builds -- and `mediump` on a phone is fp16, which has a resolution of ONE at a magnitude of 1024. This shader works in world pixels, and a city is more than a thousand of them across, so every position, every shadow lookup and every one of the six `fract(sin(dot(...)) * 43758.5)` hashes was being computed on a number quantised to about a whole world pixel -- a quantisation that shifts as the camera moves, amplified on purpose. That is the static. One `precision highp float;`, guarded on `GL_ES` **and** `GL_FRAGMENT_PRECISION_HIGH` and confined to the pixel stage, fixes all of it; both halves of that guard are load-bearing and the wrong spelling takes the whole shader down on desktop (measured, twice).
+
+- The water's ordered dither was a checkerboard on a fixed **2 canvas pixels**, which is 2 display pixels at RES FULL and **eight** at the 1/4 that AUTO picks on a 3.31 Mpx panel -- so the dither had become the pattern. The cell and its amplitude now follow RES, and FULL and 1/2 are unchanged exactly.
+- **New DIAG row** (default OFF): prints what the build is over the corner of the screen -- version, GPU, mobile detection, panel and dpiscale, which shader rung the driver took, what every row resolves to, whether each kit loaded, and how many models the current map built. A phone cannot be asked anything and a screenshot is the only channel out of one; this makes that screenshot an answer.
+- **New `tools/essl1_check.py`**: the two GLES2 rules that have taken the 3D mode off a phone, asserted as text against the shipped source, in a second and with no GPU.
+
+## New in 1.33.0-beta
+
+**The 3D mode on a phone.** A Poco X7 (Mali-G615 MC2, 2712x1220) ran the VOXEL row at about one frame a second, with every "mobile" default already applied. The cause was not any of them: `love.graphics.newCanvas(w, h)` multiplies by the panel's dpiscale, which on Android is 2.625, so **every render target in the mod was 6.9x the pixels the code asked for** -- the present canvas alone was 22.8 megapixels, seven times the area of the screen it is shown on, blitted every frame. That is why turning RES down never helped: RES divides a number that is then multiplied back twice.
+
+- **RES = AUTO** is the new default: a pixel budget picks the first frame (1/4 on that phone, FULL on a desktop) and a governor walks the ladder from there, aiming at 30 fps. It cannot oscillate, it ignores mesh-build hitches, and it works on a device that is slow everywhere. Two new rungs below the old floor: **1/6** and **1/8**.
+- **RTX = AUTO**, which is OFF on a tile-based mobile GPU: the RT rung marches thirteen dependent depth fetches per pixel and forces the scene's depth buffer to be a readable canvas.
+- The sun pass no longer destroys and rebuilds two render targets **every frame**, and its every-other-frame redraw -- which had never once fired -- now works.
+- Clears before every full-coverage blit (a tiler reloads the whole target otherwise), chunk textures re-bound only when they change, and neighbouring maps that are out of frame no longer submit their grass, flowers, lamps and trees.
+- On the desktop this was developed on the frame went from 25.0 ms to the 60 fps vsync ceiling at every measured setting, and from 148 to 110 draw calls -- and eight maps of pixel-diff say the picture did not change.
+
+Full detail, including two optimisations that were implemented, measured and reverted, is in `MOBILE.md`.
+
 ## New in 1.32.0-beta
 
 **Beta para testes e nada mais.**

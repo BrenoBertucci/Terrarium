@@ -60,6 +60,7 @@
 local V = ...
 
 local Mat4 = V.require("Mat4")
+local RenderTarget = V.require("RenderTarget")
 local TileShape = V.require("TileShape")
 local WaterMap = V.require("WaterMap")
 local BattleHudXY = V.require("BattleHudXY")
@@ -1495,10 +1496,9 @@ local function ensureCanvases(w, h)
   if canvases.color and canvases.w == w and canvases.h == h then return true end
   if canvases.color and canvases.color.release then pcall(canvases.color.release, canvases.color) end
   if canvases.depth and canvases.depth.release then pcall(canvases.depth.release, canvases.depth) end
-  local ok1, c = pcall(love.graphics.newCanvas, w, h)
-  local ok2, d = pcall(love.graphics.newCanvas, w, h,
-                       { format = "depth24", readable = false })
-  if not (ok1 and ok2 and c and d) then
+  local c = RenderTarget.new(w, h)
+  local d = RenderTarget.new(w, h, { format = "depth24", readable = false })
+  if not (c and d) then
     canvases.color, canvases.depth = nil, nil
     return false
   end

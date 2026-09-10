@@ -20,11 +20,354 @@ The old `-mobile` channel is retired. Historical tags keep it (`v1.28.0-mobile` 
 
 Tags and packages:
 
-- Git tag: `v1.32.0-beta`
-- Zip asset: `TERRARIUM-1.32.0-beta.zip`
-- `manifest.json` / catalog `version` field: `1.32.0-beta`
+- Git tag: `v1.34.5-beta`
+- Zip asset: `TERRARIUM-1.34.5-beta.zip`
+- `manifest.json` / catalog `version` field: `1.34.5-beta`
 
 ## Unreleased
+
+## 1.34.5-beta
+
+**A loja, a cripta e a torre ficavam PRETAS no Android — e perfeitas no PC.**
+Uma linha, num arquivo que ninguém suspeitava, com um defeito que este repo já
+tinha diagnosticado e consertado em outro lugar.
+
+### O caminho
+
+O que essas três salas têm e o overworld não tem: `Bloom.apply`. Ele é chamado
+de exatamente dois lugares em `lib/VoxelScene.lua` — `Crypt.bloomOpts` (cripta
+e torre) e `Shop.bloomOpts`. É a lista das telas pretas, inteira.
+
+Dentro do `GRADE` do `lib/Bloom.lua` estava o grão de filme:
+
+```glsl
+fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453)
+```
+
+`p` é `sc` — pixel do canvas de present, que é o **painel inteiro**. A LÖVE
+emite `precision mediump float;` no topo de todo pixel shader GLES, e mediump
+nessa peça é **fp16, cujo maior finito é 65504**. No painel do relator
+(1220x2712):
+
+    1220*12,9898 + 2712*78,233 = 15848 + 212168 = 228016
+
+Três vezes e meia o teto, **antes** do termo de tempo. E o termo de tempo é
+pior: o deslocamento sozinho vale `12,9898*17t + 78,233*31t ≈ 2646t`, e `time`
+é `getTime() % 100` — então a partir de **t ≈ 24,8 s** o deslocamento **por si
+só** estoura o teto, independente do pixel. O argumento satura em `+inf`,
+`sin(+inf)` é NaN, e o NaN sai andando pelo `rgb +=` até o frame.
+
+Ou seja: nos primeiros ~25 s de cada ciclo de 100 só a parte de cima da tela
+sobrevive, e nos outros ~75 s **a tela inteira** é NaN. Que é o relato.
+
+`grain` não salvava: `NaN * 0.0` continua NaN. E o desktop nunca via nada
+disso — lá é `#version 330`, `float` é fp32, e 228016 é um número comum.
+
+### O conserto, e por que não é elevar a precisão
+
+Trocado pelo *interleaved gradient noise* do `lib/RayFX.lua`, que foi escrito
+para esta mesma classe de driver e cujo comentário **já explicava este mesmo
+perigo** — a correção simplesmente nunca chegou neste arquivo. As constantes
+são pequenas por construção: o mesmo canto do painel chega a 98, e todo passo
+depois disso está dentro de um `fract()`.
+
+`precision highp float;` **não** é o conserto: num pixel shader da LÖVE ela
+redeclara os parâmetros de `effect()` contra o protótipo mediump que a LÖVE
+concatena antes do fonte — que foi o que tirou o modo 3D do ar na 1.34.0. Quem
+tem que ser segura é a aritmética.
+
+Os outros três passes do arquivo (`BRIGHT`, `RAYS`, `BLUR`) trabalham em `tc`
+normalizado e nunca correram esse risco. `lib/Sky.lua` tem um `cloudHash` com a
+mesma forma, mas sobre um domínio pequeno, e a única evidência que temos é que
+o céu funciona — ficou como está.
+
+## 1.34.4-beta
+
+**O governador de RES estava descendo até o chão e não sabia voltar.** No Poco
+X7 (Mali-G615 MC2, painel de 3,31 Mpx) o relatório dizia `RES AUTO -> 1/8`,
+`moves 6` — e logo depois, dentro do Centro Pokémon de Lavender, `median 16,6
+ms` com a resolução ainda no chão. Um mapa pesado por alguns segundos estragava
+a imagem da sessão inteira.
+
+### A premissa que ninguém escreveu
+
+O passeio monótono do `lib/AutoQuality.lua` supunha uma coisa que nunca foi dita
+em voz alta: **que descer um degrau deixa o frame mais rápido**. Quando não
+deixa, todo degrau "não segura", todo degrau é marcado no caminho, e o passeio
+que deveria parar um abaixo do primeiro degrau ruim vai até o fim da escada —
+para sempre, porque um degrau marcado nunca é reescalado.
+
+1/8 de um painel de 3,31 Mpx é uma cena de **339x152**. Um frame que continua
+custando 26–34 ms em 339x152 não está pagando por pixel nenhum, e nenhuma
+divisão a mais ia encontrar esse dinheiro. Pior: abaixo de FULL este mod
+**acrescenta** um canvas do tamanho do painel, um `clear` e um blit de upscale
+(`Voxel3D.endScene`), então os degraus de baixo carregam um custo fixo que os
+de cima não têm.
+
+### O conserto
+
+Um passo para baixo virou uma **hipótese**, e a janela seguinte é o teste. Se o
+passo não comprou pelo menos `GAIN_MIN` da mediana contra a qual foi tomado
+(nunca menos que `GAIN_MS`, para uma máquina rápida não ser cobrada por uma
+fração de nada), então RES não é onde o frame está gastando: o passo é
+**desfeito**, o degrau de onde veio é **desmarcado**, e o governador fica
+**INERT** — para de mexer em RES pelo resto da sessão em vez de moer uma escala
+que não paga. A linha do DIAG passa a dizer `| INERT` ou `| on trial`.
+
+A convergência continua garantida, e por um motivo mais forte que antes: agora
+**toda marca tem uma medição atrás dela**, e o único caminho que marcava degraus
+sem evidência encerra o passeio em vez de continuá-lo. Um resize limpa a trava,
+porque a pergunta é outra num tamanho outro.
+
+`tests/autoquality_offline.lua` foi de 17 para 24 checagens: a máquina falsa que
+provava a descida tinha custo **constante no degrau** — que é exatamente o bug
+do Poco X7, não o caso que ela achava que estava provando. Agora existe uma
+máquina de verdade limitada por preenchimento (que ainda desce até 1/8) e o
+caso 2b, que é o Poco X7 nominalmente.
+
+### E o xadrez sobre a tela inteira
+
+O mesmo defeito da água, consertado em só um dos dois lugares. O passo do cel
+(`ANIME`) tem a célula do dither medida em **pixels do render buffer**: isso é
+um dither em RES FULL e um **tabuleiro de xadrez** quando o buffer é uma fração
+do painel. Medido no aparelho do relator em RES 1/8: todo comprimento de run
+numa área limpa de grama era múltiplo de 8 — 8, 16, 24, 32, 64 — que é um
+padrão de **um** pixel de canvas ampliado 8x, duas cores em 34% e 24% da área.
+
+A água foi relatada como o pior da vez passada porque água é para onde o olho
+vai; o passo do cel cobre o chão inteiro, e numa câmera de cima o rim acende
+tudo. Agora `animeCell` e `animeDither` têm a mesma licença que `waterDither` já
+tinha: 1 em FULL e 1/2, para nada que alguém já viu se mexer, e abaixo disso a
+célula colapsa para um pixel e a amplitude relaxa em direção à própria média.
+
+## 1.34.1-beta
+
+**Conserta a 1.34.0-beta, que derrubou o modo 3D no celular.** Quem instalou
+aquela versão viu o mundo voltar a ser 2D. A culpa é de uma linha só, e o
+motivo dela ter passado por todos os testes é o mesmo ponto cego que a própria
+1.34 documentou — e no qual eu caí no mesmo dia.
+
+### O que aconteceu
+
+A 1.34.0 pôs `precision highp float;` no estágio de fragmento sem condição
+nenhuma além de ser GLES. Mas a LÖVE concatena o `GLSL.PIXEL.MAIN` **antes**
+do fonte do mod, e o MAIN carrega isto:
+
+```glsl
+vec4 effect(vec4 vcolor, Image tex, vec2 texcoord, vec2 pixcoord);
+```
+
+Uma **declaração adiantada**, escrita enquanto o padrão ainda é o `mediump` da
+LÖVE. Levantar o padrão depois dela deixa a *definição* de `effect` com
+parâmetros `highp` contra um protótipo `mediump` — e GLSL ES 1.00 exige que
+protótipo e definição concordem, precisão inclusive. Erro de compilação, sem
+shader, sem modo, `Voxel3D.available()` falso, e o jogo desenha 2D em
+silêncio.
+
+O desktop não consegue ver isso: lá `highp` e `mediump` são ambos
+`#define`ados para **nada**, os dois concordam trivialmente, e o
+`gpu_compat_probe` diz ALL PASS.
+
+### Duas coisas saíram disso
+
+**`effect()` fixa os próprios parâmetros em `mediump`**, então bate com o
+protótipo da LÖVE seja qual for o padrão. (No desktop `mediump` é vazio, então
+a assinatura lê exatamente como sempre leu.)
+
+**E a linha inteira virou um degrau da escada** — `FRAG_HIGHP`. O
+`Voxel3D.shader()` tenta com ela primeiro e **desiste dela** se o driver
+recusar, exatamente como já faz com os taps de vértice e os samplers da
+cripta. É o eixo mais externo do caminhamento de propósito: é o único que não
+é uma *feature* — tudo que os outros degraus largam é algo que o jogador vê
+sumir, e este larga só a precisão aritmética do fragmento. Vale tentar contra
+todo rung e toda precisão de uniform antes de abrir mão, e vale abrir mão em
+vez de perder o modo.
+
+O pior caso passa a ser o estágio de fragmento fp16 que todo build Android
+deste mod sempre rodou: **uma imagem com chuvisco, em vez de nenhuma imagem.**
+
+### O teste que faltava
+
+Um degrau só vale se **largá-lo for testado**. O `gpu_compat_probe` ganhou o
+caso: um driver falso que recusa `#define FRAG_HIGHP 1` tem de aterrissar no
+fragmento fp16 com o modo **ON**, no rung 1, com os uniforms ainda em highp —
+sem ceder mais nada. E o `tools/essl1_check.py` ganhou a asserção do protótipo:
+os parâmetros float de `effect()` têm de estar fixados em `mediump`.
+
+O contador do caso "nada compila" foi de 8 para **16** recusas, porque a
+escada agora tem três eixos (4 rungs × 2 precisões de uniform × 2 respostas
+para o fragmento). O número está escrito por extenso no teste de propósito,
+para que acrescentar um eixo e não pensar nele quebre o teste.
+
+
+## 1.34.0-beta
+
+**O chuvisco de TV no Mali.** Um Poco X7 rodando a 1.33.0-beta voltou com um
+sinal de interferência sobre o mundo inteiro, pior na água, e **só no
+Android**. A causa não é o mod: é o padrão do GLES.
+
+### O estágio de fragmento inteiro rodava em fp16
+
+Um fragment shader de desktop calcula em fp32. Um de GLES não: a precisão
+padrão de `float` no estágio de fragmento é **mediump**, a LÖVE emite
+exatamente isso no topo de todo pixel shader que monta
+(`GLSL.PIXEL.HEADER`, dentro da própria `love.dll`), e mediump num celular é
+**fp16 — onze bits de mantissa e resolução de UM na casa de 1024**.
+
+Este shader trabalha em **pixels de mundo**. Uma rota tem centenas deles de
+ponta a ponta e o outro lado de uma cidade passa de mil, então em fp16 uma
+coordenada de mundo é quantizada a cerca de um pixel de mundo inteiro — e
+tudo que vem depois herda isso: a busca no mapa do sol (`vSun`), a normal da
+onda, a distância da margem, todo `floor()` e `fract()` que vira padrão, e os
+seis hashes `fract(sin(dot(...)) * 43758.5)`, cujo trabalho é justamente
+amplificar uma mudança pequena da entrada. Uma quantização que se desloca
+quando a câmera anda, amplificada de propósito, é literalmente chuvisco.
+
+O `VXHP` da 1.31 consertou essa mesma classe de problema para os **uniforms**,
+porque lá era erro de link e o modo simplesmente não subia. As varyings e as
+variáveis locais tinham o mesmo defeito e nenhum erro para anunciá-lo — só
+`vWorld` e `vGrid` carregavam qualificador.
+
+Uma linha resolve todas de uma vez, e as duas metades da condição são
+essenciais:
+
+```glsl
+#ifdef PIXEL
+#if defined(GL_ES) && defined(GL_FRAGMENT_PRECISION_HIGH)
+  precision highp float;
+#endif
+#endif
+```
+
+`#ifdef PIXEL` porque o estágio de vértice já é highp e um macro que pode
+valer `mediump` o **rebaixaria** — e aquilo são as posições. `GL_ES` junto
+com `GL_FRAGMENT_PRECISION_HIGH` porque a LÖVE define o segundo **no desktop
+também**, onde `highp` é `#define`ado para nada: perguntar só por ele emite
+`precision  float;` e derruba o shader inteiro. Aconteceu duas vezes durante
+este trabalho, as duas medidas pelo `gpu_compat_probe` (ALL PASS → 34 falhas).
+
+- **novo `tools/essl1_check.py`** — as duas regras de GLES2 que já tiraram o
+  modo 3D do ar, checadas como texto a partir do fonte que é publicado: a
+  linha de precisão com a guarda certa no estágio certo, e **todo uniform da
+  região que os dois estágios compilam com qualificador explícito** (37
+  hoje). Roda em um segundo e não precisa de GPU, que é a única razão pela
+  qual alguém vai rodar.
+
+### O xadrez da água
+
+O dither ordenado da água era `floor(sc / 2.0)` — **dois pixels de CANVAS,
+fixo**. Um xadrez só é dither enquanto a célula tem o tamanho de um pixel de
+tela: com RES 1/4, que é o que o AUTO escolhe num painel de 3,31 Mpx, ela vira
+**oito pixels de tela** e o dither passa a ser o padrão. Agora a célula e a
+amplitude seguem o RES, e em FULL e 1/2 nada muda (é identidade exata).
+
+### E um jeito de perguntar ao celular
+
+- **novo `lib/Diag.lua`** e a linha **DIAG** (padrão OFF): imprime sobre o
+  canto da tela o que este build é — versão, GPU, se foi detectado como
+  móvel, painel e dpiscale, qual degrau do shader o driver aceitou e quantas
+  recusas houve, o que cada linha resolve, se cada kit carregou, e **quantos
+  modelos o mapa atual construiu**.
+
+  Existe porque um celular não pode ser perguntado: `print` não chega ao
+  logcat de dentro de um mod, `io` e `os.getenv` não estão no sandbox, a
+  pasta do save não é legível por adb num Android moderno, e o único canal
+  que funciona — uma foto da tela — carrega pixels e mais nada. Um relato de
+  "a torre nova não carrega" custou uma rodada inteira de adivinhação por
+  falta desta tela; agora é uma foto.
+
+
+## 1.33.0-beta
+
+**O modo 3D num celular.** Um Poco X7 Global (Dimensity 7300-Ultra,
+Mali-G615 MC2, painel 2712×1220) rodava a linha VOXEL a cerca de um quadro por
+segundo, com todos os padrões "de celular" da 1.26 já aplicados. A história
+inteira, com números, está em `MOBILE.md`; o resumo:
+
+### A causa raiz: todo render target era 7× o pedido
+
+`love.graphics.newCanvas(w, h)` multiplica pelo `dpiscale` do painel, que no
+Android é 2,625. Ao quadrado, 6,9. O canvas de apresentação, que devia ser os
+3,31 Mpx da tela, era **22,8 Mpx — sete vezes a área da tela em que ele
+aparece —, blitado todo frame**; o da cena em RES 1/2 era 5,7 Mpx em vez de
+0,83; o mapa de sombra LOW era 1344² em vez de 512². É por isso que a linha
+RES não salvava nada: ela divide um número que depois é multiplicado de volta
+duas vezes.
+
+- **novo `lib/RenderTarget.lua`** — toda alocação de render target do mod passa
+  por um lugar só, com `dpiscale = 1`. Não muda o tamanho em unidades, então
+  a composição, a projeção e cada uv de cada shader veem exatamente os mesmos
+  números; muda só quantos pixels existem atrás deles. No desktop é um no-op
+  por definição.
+
+### O passe do sol rodava todo frame e se realocava duas vezes nele
+
+`ShadowMap.available()` **redimensionava** o canvas de sombra em vez de só
+responder se dava para rodar — dois render targets destruídos e dois criados
+por frame, e, porque isso zera `ready`, o adiamento "redesenha a cada dois
+frames" descrito no `MOBILE.md` da 1.26 **nunca disparou uma vez sequer**.
+
+### RES ganhou AUTO, e AUTO se mede
+
+- **novo `lib/AutoQuality.lua`** e **novo `lib/Device.lua`**. `RES = AUTO` é o
+  padrão: um orçamento de pixels escolhe o primeiro frame (1/4 naquele
+  celular, FULL num desktop) e um governador anda a escada mirando 30 fps.
+  Não oscila (um degrau do qual se desceu fica marcado), não age em hitch, e
+  o portão de outlier é **relativo** — a primeira versão recusava tudo acima
+  de 250 ms, o que num aparelho a 1000 ms/frame recusa todos os frames que
+  existem.
+- Duas linhas novas na escada: **1/6 e 1/8**.
+- Nenhuma outra linha é tocada pelo governador, e quem escolhe um degrau na
+  mão nunca é sobrescrito.
+
+### RTX ganhou AUTO, e AUTO é OFF num tiler
+
+RT marcha treze buscas de profundidade *dependentes* por pixel e força o
+depth buffer da cena a ser um canvas legível. `RayFX.floor` (a cripta e a
+loja pedindo AO) não pode mais desfazer essa decisão do dispositivo.
+
+### E o resto
+
+- `clear()` antes de cada blit que cobre o alvo inteiro — num tiler, ligar um
+  alvo sem limpar **carrega** 13 MB da memória para depois sobrescrever tudo.
+- textura de chunk só é religada quando muda (eram 66–86 `setTexture`
+  redundantes por passe).
+- um vizinho fora de quadro não entrega mais grama, flores, postes nem
+  árvores — quatro malhas de mapa inteiro que não tinham caixa de culling
+  nenhuma, nos dois passes.
+- a escada de sombra HIGH/SOFT é limitada num tiler (2048² é 4,2 megatexels
+  de cor mais outro tanto de profundidade, todo frame).
+- FULL não prende mais o desfoque no máximo num celular, e a linha T-SHIFT
+  deixa de sumir do menu sob FULL lá.
+
+### Medição
+
+- **novo `tests/mali_cost_probe.lua`** — custo por passe, sensibilidade a
+  resolução e trocas de canvas por frame. No desktop desta casa a base foi de
+  **25,0 ms para 16,9 ms** (o teto do vsync, agora em todas as condições
+  medidas) e de **148 para 110 draw calls**.
+- **novo `tests/visual_ab_probe.lua`** — oito classes de mapa, tudo que se
+  mexe fixado, e o build da malha **aguardado por `ChunkMesher.pending()` em
+  vez de contado em frames**. Sem isso o piso de ruído é maior que o efeito.
+  No A/B final nenhum dos oito mapas ficou acima do próprio piso de ruído.
+- **novo `tests/autoquality_offline.lua`** + `tools/run_autoquality_offline.py`
+  — o governador provado em aritmética pura, sem GPU: 17 checagens.
+- `tests/gpu_compat_probe.lua` continua ALL PASS depois da mudança no GLSL.
+
+### Duas mudanças revertidas, e por quê
+
+Condicionar o fetch de `glassMask` ficou de fora porque **não deu para mostrar
+que é inofensivo**: com ele VIRIDIAN_CITY diferia 1,04% da base, sem ele o par
+deu 0,000% -- e depois o mesmo build revertido diferiu 2,46% de si mesmo
+naquele mapa. O piso de ruído do probe ali é de 1 a 3% e não resolve o efeito.
+Cortar os casters do sol pela caixa da **luz** em vez da câmera derrubou
+sombras de árvore (4,0% dos pixels da ROUTE_1 contra 0,0% de ruído): o volume
+ortográfico é ajustado em espaço de luz, logo é cisalhado e alcança mais
+longe no mundo que a caixa de onde saiu. Trocar a margem de 96 px do chunk por
+bounds exatas abriu uma faixa de céu no horizonte: aquela margem também está
+cobrindo o alcance norte curto de `VoxelScene.bounds`, que é o bug de
+verdade. Ambas estão registradas no código onde alguém iria tentar de novo.
+
 
 ## 1.32.0-beta
 

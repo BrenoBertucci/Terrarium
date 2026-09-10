@@ -28,6 +28,7 @@
 local V = ...
 
 local Mat4 = V.require("Mat4")
+local RenderTarget = V.require("RenderTarget")
 local Voxel = V.require("VoxelState")
 local Quality = V.require("Quality")
 
@@ -75,6 +76,11 @@ ShadowMap.KZ = -0.55      -- north drift per pixel of height
 ShadowMap.SIZES = { 1024, 1536, 2048 }
 ShadowMap.TARGET = 0.45
 ShadowMap.res = 1024      -- the rung in use; read by the main pass's filter
+
+-- The light frustum's world footprint, {x0, z0, x1, z1}, refreshed by fit()
+-- on every pass.  nil until the first fit, which is what castShadows falls
+-- back on.  See the note where it is written.
+ShadowMap.box = nil
 
 -- The tallest geometry the pass covers: gabled buildings and border forest
 -- run well under this, and the margin it buys costs only resolution --
@@ -196,8 +202,12 @@ end
 local function getCanvas(res)
   if canvas == false then return nil end
   if canvas and canvasRes == res then return canvas end
-  local ok, c = pcall(love.graphics.newCanvas, res, res)
-  if not (ok and c) then
+  -- `res` is a TEXEL count, so it has to arrive as one: a plain newCanvas
+  -- multiplies it by the display density on Android, and the LOW rung's
+  -- 512 became 1344 -- 6.9x the texels the rung exists to avoid, redrawn
+  -- with the whole map's geometry.  See lib/RenderTarget.lua.
+  local c = RenderTarget.new(res, res)
+  if not c then
     canvas = false
     return nil
   end
@@ -205,7 +215,7 @@ local function getCanvas(res)
   -- linearly blended PACKED depth is not a depth at all
   c:setFilter("nearest", "nearest")
   pcall(c.setWrap, c, "clamp", "clamp")
-  if canvas and canvas.release then pcall(canvas.release, canvas) end
+  RenderTarget.release(canvas or nil)
   canvas, canvasRes = c, res
   ready = false
   return canvas
@@ -241,9 +251,37 @@ function ShadowMap.available()
           and love.graphics.setDepthMode) then
     return false
   end
-  -- the smallest rung is enough to answer the question; fit() picks the
-  -- one this frame actually wants
-  return getShader() ~= nil and getCanvas(Quality.shadowSizes()[1]) ~= nil
+  if getShader() == nil then return false end
+
+  -- ------- ASKING MUST NOT RESIZE
+  --
+  -- This used to be `getCanvas(Quality.shadowSizes()[1])`, on the reasoning
+  -- that the smallest rung is enough to answer a yes/no question.  It is --
+  -- but getCanvas does not answer a question, it MAKES the canvas that size,
+  -- and this runs once per frame from castShadows while begin() makes it the
+  -- rung fit() actually wants.  On any view whose rung is not the smallest
+  -- (768 at 35 degrees and up on a phone-shaped window, 2048 on SOFT) that is
+  -- two render targets destroyed and two created EVERY FRAME -- and on
+  -- Android those go through a kernel allocator that zero-fills the pages,
+  -- while the texture being freed is one the GPU was drawing into a moment
+  -- earlier, which is a pipeline flush.
+  --
+  -- And it cost more than the allocations.  getCanvas sets `ready = false`
+  -- whenever it reallocates, `ShadowMap.stale` opens with
+  -- `if not ready then return true end`, and Quality.shadowInterval's
+  -- every-other-frame deferral lives behind that test.  So the shrink here
+  -- made the map permanently un-ready, the deferral never fired once, and
+  -- the sun pass redrew the whole map's geometry every single frame --
+  -- including while standing perfectly still, where the signature has not
+  -- changed and the pass should not run at all.  MOBILE.md describes a
+  -- deferral this defeated the day it was written.
+  --
+  -- So: allocate on the FIRST call, at the smallest rung, and after that
+  -- report on whatever rung is live.  `false` is sticky (a driver that could
+  -- not make one is not asked again), and nil means untried.
+  if canvas == false then return false end
+  if canvas then return true end
+  return getCanvas(Quality.shadowSizes()[1]) ~= nil
 end
 
 -- The map to sample, or the blank stand-in. Never nil once the main pass
@@ -346,7 +384,15 @@ function ShadowMap.drawGroup(group, texture, model, b)
     local ch = chunks[i]
     if not b or (ch.x1 >= b[1] and ch.x0 <= b[3]
                  and ch.z1 + ch.ymax >= b[2] and ch.z0 <= b[4]) then
-      if texture then ch.mesh:setTexture(texture) end
+      -- Only when it CHANGED. The same atlas was being re-bound on every
+      -- chunk of every frame -- 66 to 86 redundant Mesh:setTexture calls per
+      -- pass on a route, each one a Lua call through the FFI and a texture
+      -- rebind the driver has to at least look at. The atlas object does
+      -- change (palette mode, a repaint), so it is cached per chunk rather
+      -- than set once at build time.
+      if texture and ch.tex ~= texture then
+        ch.mesh:setTexture(texture); ch.tex = texture
+      end
       love.graphics.draw(ch.mesh)
     end
   end
@@ -442,6 +488,29 @@ local function fit(cx, cy, vw, vh)
     if xs[2] <= xs[1] then xs = { cl[1], cl[3] } end
     if zs[2] <= zs[1] then zs = { cl[2], cl[4] } end
   end
+
+  -- ------- THE BOX THE SUN PASS SHOULD CULL AGAINST
+  --
+  -- xs/zs are the light frustum's footprint in WORLD pixels, caster margin
+  -- (`reach`) and all, clamped to the map.  Nothing outside it can put a
+  -- texel into the map that is about to be drawn -- that is what fitting a
+  -- frustum means.
+  --
+  -- Until now castShadows culled its casters with VoxelScene.bounds(...,
+  -- forSun = true) instead, which is the CAMERA's box widened on purpose
+  -- (VoxelScene.FAR_CAP is twice the scene's reach, because the sun shader
+  -- dissolves distant shadows and a hard end to the terrain would show).
+  -- That is the right box for the SCENE and the wrong question for the sun:
+  -- it submits chunks the light frustum cannot store, and at a steep camera
+  -- angle it is roughly two and a half times the ground area.  A route
+  -- chunk is tens of thousands of vertices and a tiler writes every one of
+  -- them out to memory during binning, so the waste is bandwidth rather
+  -- than triangles.
+  --
+  -- Published rather than returned because fit() is called from begin() and
+  -- read one call later by castShadows, which is exactly the ordering the
+  -- sun pass already relies on.
+  ShadowMap.box = { xs[1], zs[1], xs[2], zs[2] }
 
   local l, r, b, t, zn, zf
   for _, x in ipairs(xs) do

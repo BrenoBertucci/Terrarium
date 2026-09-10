@@ -88,6 +88,8 @@
 local V = ...
 
 local ModSetting = V.require("ModSetting")
+local Device = V.require("Device")
+local RenderTarget = V.require("RenderTarget")
 -- Held for its numbers and its rung, never the other way round: Anime
 -- requires ModSetting and nothing else, so this and Voxel3D can both hold
 -- it without either reaching back.
@@ -100,14 +102,29 @@ local DayNight = V.require("DayNight")
 local RayFX = {}
 
 -- The ladder, cheapest-useful first. values[1] is ModSetting's default and
--- its fallback for an unreadable stored value, and it is RT rather than OFF
--- on purpose: this is what the row is for, and a graphics setting whose
--- default is "none of it" is a setting nobody finds. Cycling walks DOWN
--- from there and wraps through MAX, the same shape Quality's own RES row
--- has.
+-- its fallback for an unreadable stored value.
+--
+-- ------- WHY THE DEFAULT IS AUTO AND NOT RT
+--
+-- It used to be RT, on the reasoning that "a graphics setting whose default
+-- is none of it is a setting nobody finds".  That reasoning still holds on a
+-- desktop and AUTO gives it RT there.  It does not hold on a phone, and this
+-- row is the single most expensive thing in the mod on one: RT marches
+-- thirteen DEPENDENT depth fetches per pixel through a full-screen pass, and
+-- it also forces the scene's depth buffer to be a READABLE canvas, which is
+-- the one attachment a tile-based GPU would otherwise never write out to
+-- memory at all.  At the old RES 1/2 on a 2712x1220 panel that is 11.6
+-- million incoherent fetches and a 3.3 MB depth store, every frame, before
+-- the world itself is drawn.  Defaulting a mobile GPU into that is not
+-- discoverability, it is a mod that does not run.
+--
+-- AUTO is one lookup (lib/Device.lua) and nothing else: RT on a desktop GL
+-- context, OFF on a tile-based mobile one.  Everything below it in the
+-- ladder is unchanged, so a save that says "rt", "ao", "off" or "max" still
+-- resolves to itself and the row still cycles the same direction.
 RayFX.setting = ModSetting.new("rayfx", "RTX",
-                               { "rt", "ao", "off", "max" },
-                               { "RT", "AO", "OFF", "MAX" })
+                               { "auto", "rt", "ao", "off", "max" },
+                               { "AUTO", "RT", "AO", "OFF", "MAX" })
 
 -- ------- the dials
 --
@@ -1082,9 +1099,31 @@ local RUNG = { off = 0, ao = 1, rt = 2, max = 3 }
 
 function RayFX.level()
   local ok, v = pcall(RayFX.setting.get, RayFX.setting)
-  if not (ok and (v == "off" or v == "ao" or v == "rt" or v == "max")) then
-    v = "rt"
+  -- An unreadable setting is not a request for the most expensive rung.
+  if not ok then return "off" end
+  local deviceOff = false
+  if v == "auto" then
+    -- An UNANSWERABLE device check assumes the phone, for the same reason:
+    -- the cost of guessing "desktop" wrong is a mod that does not run, and
+    -- the cost of guessing "mobile" wrong is one row a desktop player turns
+    -- back on in two presses.
+    local okD, mobile = pcall(Device.mobile)
+    deviceOff = (not okD) or mobile
+    v = deviceOff and "off" or "rt"
   end
+  if not (v == "off" or v == "ao" or v == "rt" or v == "max") then
+    v = "off"
+  end
+  -- ------- THE FLOOR MAY NOT UNDO THE DEVICE GATE
+  --
+  -- RayFX.floor is how the crypt and the shop ask for AO in a room that
+  -- looks wrong without it, and it is allowed to raise a rung the PLAYER
+  -- chose -- that is a deliberate, long-standing behaviour and it stays.
+  -- What it must not do is raise a rung the DEVICE chose: AUTO answering
+  -- "off" on a tiler is not a preference, it is the reason the mode runs at
+  -- all, and every Poke Mart and every floor of the tower would otherwise
+  -- switch a full screen-space pass back on behind the player's back.
+  if deviceOff then return "off" end
   local f = RayFX.floor
   if f and RUNG[f] and RUNG[f] > (RUNG[v] or 0) then return f end
   return v
@@ -1159,15 +1198,13 @@ end
 local function outCanvas(name, w, h)
   local held = outs[name]
   if held and held.w == w and held.h == h then return held.canvas end
-  local ok, c = pcall(love.graphics.newCanvas, w, h)
-  if not (ok and c) then return nil end
+  local c = RenderTarget.new(w, h)
+  if not c then return nil end
   -- nearest, like every other canvas in this mode: what comes out of here
   -- is either blitted 1:1 or scaled up by the present pass, and this world
   -- is pixel art on a fixed grid
   c:setFilter("nearest", "nearest")
-  if held and held.canvas and held.canvas.release then
-    pcall(held.canvas.release, held.canvas)
-  end
+  RenderTarget.release(held and held.canvas)
   outs[name] = { canvas = c, w = w, h = h }
   return c
 end
@@ -1337,6 +1374,10 @@ function RayFX.apply(o)
   local prevBlend, prevAlpha = love.graphics.getBlendMode()
   local ok = pcall(function()
     love.graphics.setCanvas(out)
+    -- covered edge to edge by the blit below, so the tile can start at a
+    -- constant instead of being read back in -- see the note in
+    -- Voxel3D.endScene
+    love.graphics.clear(0, 0, 0, 0, false, false)
     love.graphics.setShader(sh)
     love.graphics.setColor(1, 1, 1, 1)
     -- replace, not alpha blend: this is an image-processing copy and the
