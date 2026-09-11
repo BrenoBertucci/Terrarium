@@ -155,7 +155,11 @@ local Vfx = V.require("Vfx")
 local AmbientLife = V.require("AmbientLife")
 local WindFX = V.require("WindFX")
 local StepFX = V.require("StepFX")
+local SnowFallFX = V.require("SnowFallFX")
+local BreathFX = V.require("BreathFX")
+local RainOnFX = V.require("RainOnFX")
 local VegFX = V.require("VegFX")
+local LeafFallFX = V.require("LeafFallFX")
 local SprayFX = V.require("SprayFX")
 local HearthFX = V.require("HearthFX")
 local GhostFX = V.require("GhostFX")
@@ -406,10 +410,24 @@ mod.content.render_pipelines:register(PIPE_VOXEL, {
     -- this frame's; its own field, because WindFX clears when the wind
     -- drops under FLOOR and a footstep makes dust in dead calm.
     StepFX.update(dt, Voxel.active())
+    -- and what comes down off the roofs and the trees: slabs letting go of
+    -- the eaves on their own, crowns shaken by a bump or a gust. Behind
+    -- GroundFX (it reads the cover that tick wrote) and behind Wind for
+    -- the reason the dust is; its own field, because a roof lets go in a
+    -- dead calm.
+    SnowFallFX.update(dt, Voxel.active())
+    -- and everybody's breath, while it is cold out
+    BreathFX.update(dt, Voxel.active())
+    -- and the rain running down the people in it: how much reaches each
+    RainOnFX.update(dt, Voxel.active())
     -- and what the wind takes off the plants. Behind WindFX because it
     -- emits INTO that module's field, which the update above has just
     -- capped, cleared or stepped for this frame.
     VegFX.update(dt, Voxel.active())
+    -- and where those leaves go: down through the same air, onto the
+    -- ground, and aside under whoever walks through them. After VegFX, so
+    -- a leaf shed this frame falls this frame.
+    LeafFallFX.update(dt, Voxel.active())
     -- and what it tears off the water. Same field, same reason, and the
     -- water's own size (WaterBody.sizeAt) is the emission probability --
     -- a harbour whips spray, a fountain pond does not.
@@ -932,14 +950,21 @@ local SETTINGS = {
     .. "-- and they wear the SKY's own colour, because a puddle is a piece of "
     .. "the sky lying on the ground and one that stayed grey through a sunset "
     .. "would be the only thing on screen not taking part in the evening. "
-    .. "Snow settles in drifts that thicken as it falls, and everybody "
-    .. "walking on it -- you, the NPCs, the wild Pokemon in the grass -- "
-    .. "leaves a trail of prints behind them that fills back in over half a "
-    .. "minute, faster while it is still coming down. All of it is drawn as "
-    .. "geometry BETWEEN the ground and the people standing on it, so it "
-    .. "takes the hour's light and the sun's shadows and never paints over "
-    .. "anybody's feet -- which is also why it wants the VOXEL camera on, "
-    .. "like the steam off a mug.",
+    .. "Snow lies on every face that points at the sky -- the ground, the "
+    .. "roofs, the crowns of the trees and the hedges -- heaped into drifts, "
+    .. "standing in the hour's light, glittering where the sun lands on a "
+    .. "crest. And it DEFORMS: everybody walking on it -- you, the NPCs, "
+    .. "the wild Pokemon in the grass -- presses a groove into it with a "
+    .. "footprint every stride and the displaced snow heaped along the edge, "
+    .. "lit by the sun like the dug thing it is -- and it STAYS, until fresh "
+    .. "snow buries it or the thaw takes it. A full fall hides your boots "
+    .. "and shins, while it is coming down it settles on your hat and "
+    .. "shoulders, roofs let slabs slide off their eaves onto the ground, "
+    .. "and a tree you walk into drops its load on you. The puddles are drawn as "
+    .. "geometry BETWEEN the ground and the people standing on it, so they "
+    .. "take the hour's light and the sun's shadows and never paint over "
+    .. "anybody's feet -- which is also why all of it wants the VOXEL camera "
+    .. "on, like the steam off a mug.",
     when = function() return Weather.enabled() end, full = true },
   -- `full = true` because it is not a knob on the look at all: it is what
   -- the place sounds like, and a preset that owns the camera has no business
@@ -1807,7 +1832,7 @@ mod.events:on("world.block_replaced", function(payload)
   if mapId then ChunkMesher.refresh(mapId) end
   -- and the ground decals with it: a Cut tree is a new cell to stand on,
   -- and therefore a new cell that could hold a puddle
-  GroundFX.invalidate()
+  GroundFX.invalidate(mapId)
 end)
 
 -- The event above is the ANNOUNCED edit -- OverworldState:replaceBlock
@@ -1844,7 +1869,7 @@ do
       setBlock(self, bx, by, block)
       if self.id and self:blockAt(bx, by) ~= before then
         ChunkMesher.refresh(self.id)
-        GroundFX.invalidate()
+        GroundFX.invalidate(self.id)
       end
     end
     Map.dramaticShapeBlockHook = true

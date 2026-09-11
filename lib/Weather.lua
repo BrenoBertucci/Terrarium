@@ -758,7 +758,7 @@ Weather.SHAFTS_MAX = 780
 Weather.SHAFTS_HARD = 360
 Weather.SPLASH_HARD = 140
 Weather.EJECT_HARD = 36
-Weather.FLAKE_HARD = 140
+Weather.FLAKE_HARD = 300
 Weather.SHAFT_FALL = 102            -- world px / s, a mid-sized drop
 -- ------- a streak is a length of TIME
 --
@@ -788,7 +788,11 @@ Weather.SHAFT_REACH = 9             -- cells around the player
 -- third without anyone deciding that.
 Weather.SPLASHES = 300
 Weather.SPLASH_FLOOR = 40
-Weather.FLAKES = 280
+-- A fall is DENSE. A hundred and forty flakes over a nineteen-cell box
+-- put twenty-odd in the frame at a time, which reads as the odd flake and
+-- not as weather; three hundred reads as a snowfall, and a flake is two
+-- dozen vertices and one field read, so the budget is the rain's.
+Weather.FLAKES = 420
 
 -- ------- THE INK, because the street is white
 --
@@ -871,6 +875,43 @@ Weather.ADD_HEAD = 0.62
 Weather.ADD_TAIL = 0.05
 Weather.SPLASH = { 0.85, 0.92, 1.00 }
 Weather.SNOW = { 0.97, 0.98, 1.00 }
+
+-- ------- the flake's own DRAWING
+--
+-- assets/weather/snowflake.png: a strip of 32x32 frames cut from a sheet
+-- drawn by hand (tools/cut_snowflakes.py -- the 1.2 MB sheet is an 8 KB
+-- strip), drawn in the WORLD pass through the particle mesh whenever the
+-- 3D scene is up, so a flake behind the Mart is behind the Mart and one
+-- in front of a face is in front of it. The flat 2D path keeps the soft
+-- streaks below, which need no texture and no depth.
+Weather.FLAKE_SHEET = "assets/weather/snowflake.png"
+Weather.FLAKE_FRAME = 32
+Weather.FLAKE_SCALE = 1.05     -- world px of half-card per unit of size
+Weather.lastFlakeBatches = -1
+local flakeSheet = nil         -- nil untried, false missing
+local flakeBuilder = nil
+
+local function flakeSprites()
+  if flakeSheet ~= nil then return flakeSheet or nil end
+  local ok, img = pcall(function()
+    local Assets = require("src.render.Assets")
+    local path = V.path .. "/" .. Weather.FLAKE_SHEET
+    if not Assets.exists(path) then return nil end
+    local i = Assets.image(path)
+    if i then pcall(i.setFilter, i, "nearest", "nearest") end
+    return i
+  end)
+  flakeSheet = (ok and img) or false
+  return flakeSheet or nil
+end
+
+local function flakesInWorld()
+  if not flakeSprites() then return false end
+  local ok, Voxel = pcall(V.require, "VoxelState")
+  if not (ok and Voxel and Voxel.active) then return false end
+  local oka, on = pcall(Voxel.active)
+  return oka and on or false
+end
 
 -- ------- A DROP HAS A SIZE, AND EVERYTHING ELSE IS A CONSEQUENCE
 --
@@ -1432,7 +1473,9 @@ local function spawnFlake(ow)
     rate = 0.7 + rand() * 2.2,
     wob = 2.6 + rand() * 7.5,
     vx = 0, vz = 0,
-    size = (d > 0.72) and 1.4 or 0.9,
+    -- a continuous spread, skewed small: most flakes are specks, a few
+    -- are the fat ones the eye follows down
+    size = 0.65 + d * 1.05,
   }
 end
 
@@ -1835,6 +1878,40 @@ local function spawnCanopyDrip(ow)
     yLand = yLand, surf = lsurf, fall = 62 + rand() * 34,
     t = 0, ttl = 1.6,
   }
+end
+
+-- ------- and the drops that come OFF a figure
+--
+-- The rain used to be drawn ON the people in it: rivulets painted down the
+-- sprite's own texels by the scene shader (Voxel3D's coat block), which
+-- read as the DRAWING being wet rather than the person -- water crawling
+-- across a face that is a picture, and reported as exactly that. What a
+-- figure in rain actually shows is drops falling PAST them: off the hat
+-- brim, off the shoulders, in front of the card, landing at their feet
+-- with the same burst a drip off an eave makes. So lib/RainOnFX.lua asks
+-- for these instead -- the same "drip" mote, at half size, no hang, from
+-- the top of the figure -- and paints nothing on the sprite at all.
+--
+-- `size` scales the drawn streak and bead (see the drip branch of the
+-- overlay draw); every drip that does not carry one is drawn as before.
+Weather.FIGURE_DRIP_SIZE = 0.5
+Weather.figureDrips = 0
+
+function Weather.figureDrip(x, z, top, size)
+  if failed then return false end
+  local Game = game()
+  local ow = Game and Game.overworld
+  if not (ow and ow.map) then return false end
+  if Weather.moteCount("drip") >= dripCap() then return false end
+  local yLand, lsurf = surfaceAt(ow, x, z)
+  motes[#motes + 1] = {
+    kind = "drip", x = x, z = z,
+    y = yLand + (top or 15),
+    yLand = yLand, surf = lsurf, fall = 58 + rand() * 30,
+    t = 0, ttl = 1.2, size = size or Weather.FIGURE_DRIP_SIZE,
+  }
+  Weather.figureDrips = Weather.figureDrips + 1
+  return true
 end
 
 local function shaftBudget()
@@ -3704,6 +3781,45 @@ end
 -- FIRST (they are on the ground), shafts through the volume next, then the
 -- thin screen-space mist in front of everything -- rain between the camera
 -- and the near edge of the diorama has no world position.
+-- The flakes as SPRITES, in the scene pass (VoxelScene calls this with
+-- the other world particles). Reads the same mote list the overlay draw
+-- does and takes only the flakes; the overlay then skips them.
+local flakeField = {
+  count = function() return #motes end,
+  get = function(_, i) return motes[i] end,
+}
+
+function Weather.drawWorldFlakes()
+  local sheet = flakeSprites()
+  if not sheet or #motes == 0 then Weather.lastFlakeBatches = 0 return 0 end
+  local kind, power = Weather.visible()
+  if not kind then Weather.lastFlakeBatches = 0 return 0 end
+  local ParticleMesh = V.require("ParticleMesh")
+  local Voxel3D = V.require("Voxel3D")
+  flakeBuilder = flakeBuilder or ParticleMesh.newBuilder(Weather.FLAKE_HARD + 16)
+  local lr, lg, lb = rainLight()
+  local mPower = power or 0
+  local frames = math.max(1, math.floor(sheet:getWidth() / Weather.FLAKE_FRAME))
+  local describe = function(m)
+    if m.kind ~= "flake" then return nil end
+    local above = m.y - (m.yLand or 0)
+    local fade = math.min(1, m.t * 3, (above + 2) / 6)
+    if m.settled then fade = fade * math.max(0, 1 - m.settled / 0.5) end
+    local a = 0.95 * fade * mPower
+    if a <= 0.02 then return nil end
+    -- which drawing: the flake's own seed, fixed for its life
+    local f = math.floor((m.seed or 0) / 6.2832 * frames) % frames
+    local half = Weather.FLAKE_SCALE * (m.size or 1)
+    return sheet, f / frames, 0, (f + 1) / frames, 1, half, half,
+           m.spin or 0, lr, lg, lb, a
+  end
+  local mesh, batches = flakeBuilder:build(flakeField, describe)
+  if not mesh then Weather.lastFlakeBatches = 0 return 0 end
+  local drew = Voxel3D.drawParticles(mesh, sheet, batches, false)
+  Weather.lastFlakeBatches = drew
+  return drew
+end
+
 function Weather.draw(project, scale, w, h)
   -- visible, NOT falling: indoors and under a canopy this draws nothing at
   -- all -- no splashes, no flakes, no streaks. A mid-flash bolt may still
@@ -3735,6 +3851,8 @@ function Weather.draw(project, scale, w, h)
   -- what the leftover motes are lit by once the shower's power is spent:
   -- the after-rain window, at drip strength
   local mPower = power
+  -- the flakes are sprites in the scene pass while the 3D world is up
+  local worldFlakes = flakesInWorld()
   do
     local okA, v = pcall(Weather.afterRain)
     local floorP = ((okA and tonumber(v)) or 0) * 0.65
@@ -3820,6 +3938,8 @@ function Weather.draw(project, scale, w, h)
       elseif m.kind == "drip" then
         local c = Weather.RAIN_NEAR
         local a = 0.78 * mPower
+        -- a drop off a figure is drawn small (Weather.figureDrip)
+        local s = s * (m.size or 1)
         if m.hang and m.hang > 0 then
           local left = m.hang
           local total = Weather.DRIP_HANG_MIN + Weather.DRIP_HANG_VAR * 0.5
@@ -3845,6 +3965,8 @@ function Weather.draw(project, scale, w, h)
         local d = math.max(1, s * 0.55 * (m.size or 1))
         rainPush(sx + d, sy, sx - d, sy, d,
                  c[1] * lr, c[2] * lg, c[3] * lb, a, a)
+      elseif m.kind == "flake" and worldFlakes then
+        -- drawn by Weather.drawWorldFlakes, in the world, with its art
       else
         local c = Weather.SNOW
         local above = m.y - (m.yLand or 0)
@@ -3852,10 +3974,23 @@ function Weather.draw(project, scale, w, h)
         if m.settled then
           fade = fade * math.max(0, 1 - m.settled / 0.5)
         end
-        local a = 0.92 * fade * mPower
+        -- ------- a flake is a SOFT DOT, not a chip
+        --
+        -- One streak quad drew a flake as a hard diamond, which at this
+        -- size is confetti. Four short streaks from the centre out, each
+        -- fading to nothing at its tip, blend into a soft round spot with
+        -- the faint star a real flake catches the light in -- and the
+        -- nearest ones, which the eye would not be focused on, go bigger
+        -- and fainter rather than bigger and harder.
         local d = math.max(1, s * (m.size or 1))
-        rainPush(sx + d, sy, sx - d, sy, d,
-                 c[1] * lr, c[2] * lg, c[3] * lb, a, a)
+        local near = math.min(1, d / 9)
+        local a = (0.95 - 0.45 * near) * fade * mPower
+        local core = d * 0.55
+        local fr, fg, fb = c[1] * lr, c[2] * lg, c[3] * lb
+        rainPush(sx, sy, sx + d, sy, core, fr, fg, fb, a, 0)
+        rainPush(sx, sy, sx - d, sy, core, fr, fg, fb, a, 0)
+        rainPush(sx, sy, sx, sy + d, core, fr, fg, fb, a, 0)
+        rainPush(sx, sy, sx, sy - d, core, fr, fg, fb, a, 0)
       end
     else
       m._sx = nil

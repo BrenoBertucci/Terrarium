@@ -327,8 +327,20 @@ RayFX.PUDDLE_RIPPLE = 0.35
 -- Which is why the two numbers below are the ones the table above describes
 -- rather than the pond's. The player is not classified as water at any rung,
 -- so a puddle may finally reflect like one.
-RayFX.PUDDLE_AMOUNT = 0.96
-RayFX.PUDDLE_FRESNEL = 0.62
+RayFX.PUDDLE_AMOUNT = 0.92
+RayFX.PUDDLE_FRESNEL = 0.46
+-- ------- and the mirror is DARKER than what it reflects
+--
+-- With the floor above and the amount at nearly one, a pool under an
+-- overcast sky came out AS the sky: the same pale grey, edge to edge, and
+-- a wet plaza read as a sheet of snow. That is the "burst" the puddles
+-- were reported for. A film over dark paving is not a silvered mirror --
+-- at the angles this camera stands at it hands back well under all of
+-- the light that falls on it, and what the eye uses to tell standing
+-- water from the sky above it is exactly that the water is the sky, but
+-- DARKER. So a pool's reflection is scaled by this before it is mixed
+-- in, and a pond's is left alone: a pond has a body and its own curve.
+RayFX.PUDDLE_DIM = 0.62
 
 -- Paint the puddle classification instead of reflecting with it: every pixel
 -- the pass calls a pool comes out flat magenta. OFF in every build a player
@@ -672,6 +684,7 @@ local SHADER = [[
   uniform float puddleRipple;
   uniform float puddleAmount;   // a film over paving reflects nearly all of it
   uniform float puddleFresnel;  // and never drops below this, at any pitch
+  uniform float puddleDim;      // and reflects this much of what it sees
   // The probe's eye: paint what the pass CLASSIFIES rather than shade with
   // it. A reflection that lands on the wrong surface is invisible until it
   // is strong enough to be a bug, and the pair of shots that would show it
@@ -1041,6 +1054,8 @@ local SHADER = [[
         R = normalize(R);
         vec4 hit = traceSSR(tex, P, R);
         vec3 refl = mix(skyColor, hit.rgb, hit.a);
+        // a film over paving is a dark mirror -- see PUDDLE_DIM
+        if (pool) refl *= puddleDim;
         // Fresnel: a pond seen from straight above is mostly its own water
         // and a pond seen along the surface is mostly a mirror, which is
         // also exactly how the camera ladder moves -- 15 degrees barely
@@ -1317,6 +1332,7 @@ function RayFX.apply(o)
     send("puddleRipple", RayFX.PUDDLE_RIPPLE)
     send("puddleAmount", RayFX.PUDDLE_AMOUNT)
     send("puddleFresnel", RayFX.PUDDLE_FRESNEL)
+    send("puddleDim", RayFX.PUDDLE_DIM)
     send("debugMask", RayFX.DEBUG_MASK and 1 or 0)
     -- the shower itself, which is what a puddle's surface is made of. Read
     -- off Water rather than off Weather so this file gains no dependency it

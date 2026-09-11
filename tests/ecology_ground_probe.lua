@@ -448,16 +448,19 @@ return function(game)
   if after <= before then log("  FAIL: walking in snow left no prints") end
   shot("34_footprints.png")
 
-  -- and they fill back in
-  local peak = GroundFX.printCount()
-  GroundFX.PRINT_TTL = 4
+  -- and they fill back in: the trail is the snow field's (SnowField), and
+  -- a fresh fall erases it -- count the trodden texels, not the stamps
+  local SnowField = lib.require("SnowField")
+  local peak = SnowField.count()
+  local fillWas = SnowField.FILL_SNOWING
+  SnowField.FILL_SNOWING = 2
   wait(400)
-  log(("prints after they had time to fill: %d -> %d"):format(
-    peak, GroundFX.printCount()))
-  if GroundFX.printCount() >= peak then
-    log("  FAIL: prints never faded")
+  log(("trodden texels after they had time to fill: %d -> %d"):format(
+    peak, SnowField.count()))
+  if peak > 0 and SnowField.count() >= peak then
+    log("  FAIL: the trail never filled in")
   end
-  GroundFX.PRINT_TTL = 34
+  SnowField.FILL_SNOWING = fillWas
 
   -- ------- and the row switches it all off
   GroundFX.setting:sync("off")

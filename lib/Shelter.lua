@@ -550,6 +550,12 @@ function Shelter.indoors()
   return state.inside
 end
 
+-- Whether this figure is one the row walked to a doorway and is holding
+-- there: out of the rain, as far as lib/RainOnFX.lua is concerned.
+function Shelter.isHeld(e)
+  return e ~= nil and held[e] ~= nil
+end
+
 function Shelter.doorsFor(map)
   return doorsOf(map)
 end

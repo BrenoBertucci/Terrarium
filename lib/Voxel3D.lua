@@ -1450,6 +1450,11 @@ precision highp sampler2D;
   uniform Image glassMask;    // opaque where the atlas texel is window glass
   uniform vec2 glassSize;     // the mask's dimensions: tc -> atlas texels
   uniform float glassNight;   // 0 = daylight .. 1 = the lamps are on
+  // FROST on the panes, 0..1 with the cold: a feathered rime, thickest at
+  // the edges of a pane and thinning to a clear middle, grained per world
+  // pixel so every window's rime is its own. Set by VoxelScene with the
+  // snow's depth (winter alone gives a little).
+  uniform float frost;
   uniform vec3 lampColor;     // what the lamps BURN (DayNight.lampColor)
   uniform float glassPhase;   // the glint's phase: advances with TRAVEL
   uniform float glassGlint;   // and its strength: 0 while standing still
@@ -1585,6 +1590,30 @@ precision highp sampler2D;
   uniform float snowTop;
   uniform vec3 snowColor;
   uniform float snowSide;     // how much of it a flank takes; 1 on the top
+  // ------- and what walkers DID to it (lib/SnowField.lua)
+  //
+  // The deformation field for the map underfoot: R is how far down a spot
+  // has been trodden, G how much displaced snow is heaped on it. Read in
+  // THIS stage on purpose -- a fragment tap is refusable by no GLES2
+  // driver, where the vertex taps are exactly what the ladder drops. Sent
+  // per draw and defaulting to a blank, like wearMap; snowOn is the switch.
+  uniform Image snowMap;
+  uniform float snowOn;
+  uniform vec2 snowOrigin;    // world XZ of the field's corner
+  uniform vec2 snowInv;       // 1 / extent in world px, per axis
+  uniform vec2 snowTexel;     // one texel, in field UV
+  uniform float snowSlope;    // world px of height per cover unit, per texel
+  uniform float snowPress;    // how deep a boot goes, in cover units
+  // Snow lying on a SPRITE CARD's top edges -- the hat, the shoulders --
+  // while it is coming down. Per draw, zero for everything but the
+  // character pass (VoxelScene sets Voxel3D.coat around it).
+  uniform float coat;
+  uniform vec2 coatSheet;     // the sheet's size in texels
+  uniform float coatTop;      // V of this frame's top row on the sheet
+  // and RAIN on the same card: how much is reaching this figure (0..1,
+  // per draw, lib/RainOnFX.lua) and a clock for the water running down it
+  uniform float wet;
+  uniform float rainTime;
 
   // One lamp's contribution here. Returns the energy in .x and how near the
   // flame this fragment is in .y, which the caller uses to run the pool from
@@ -1735,6 +1764,67 @@ precision highp sampler2D;
     // blending keeps those texels out of the depth buffer, so a model never
     // carves a transparent hole out of whatever stands behind it
     if (p.a < 0.5) discard;
+    // ------- SNOW ON THE FIGURE
+    //
+    // A card is a drawing, and the snow that lands on a drawing lies along
+    // its TOP edges: the texels whose upstairs neighbour is transparent,
+    // plus the frame's own top row (whose upstairs neighbour is the frame
+    // above it on the sheet, and says nothing). Painted into the texel so
+    // the hour's light and the sun's shadow fall on it like on the rest of
+    // the figure; ragged per sheet texel so the rim is snow, not a white
+    // outline. Two extra reads, on the character pass, while it snows.
+    if (coat > 0.0 || wet > 0.0) {
+      float coatTexel = 1.0 / max(coatSheet.y, 1.0);
+      float up1 = Texel(tex, tc - vec2(0.0, coatTexel)).a;
+      float up2 = Texel(tex, tc - vec2(0.0, coatTexel * 2.0)).a;
+      float top = step(tc.y - coatTop, coatTexel * 1.5);
+      float edge = max(1.0 - step(0.5, up1), top);
+      edge = max(edge, 0.55 * (1.0 - step(0.5, up2)) * step(0.5, up1));
+      // per SHEET TEXEL, not per screen pixel: `tc` walks across a texel
+      // as the card is magnified, and a hash of it is static on the
+      // shoulders rather than snow on them
+      float cg = voxelHash(vec3(floor(tc * coatSheet), 5.0));
+      // ------- RAIN RUNNING DOWN THE FIGURE
+      //
+      // Rivulets: in a few of the sheet's columns at a time a bead of
+      // water slides down the frame with a fading tail behind it, on the
+      // drawing's own opaque texels, and starts over from the top with a
+      // different column on each pass. Which columns, and how fast, is a
+      // hash of the column and the pass, so no two figures stream alike
+      // and no rivulet repeats where the last one ran. Brighter and bluer
+      // than the cloth, never darker: this is water catching the light,
+      // not a wet look.
+      if (wet > 0.0) {
+        vec2 sheetTex = floor(tc * coatSheet);
+        float col = sheetTex.x;
+        // rows count down the frame from its top, 0..16
+        float row = (tc.y - coatTop) * coatSheet.y;
+        // three passes at three speeds, so the columns keep changing
+        float rain = 0.0;
+        for (int k = 0; k < 3; k++) {
+          float fk = float(k);
+          float speed = 5.0 + 3.0 * fk;
+          // each column on its own clock, or every rivulet in a pass sits
+          // on the same row and the water reads as a stripe across the hat
+          float tt = rainTime * speed / 22.0 + fk * 0.37
+                     + voxelHash(vec3(col, 3.0 + fk, 17.0));
+          float pass = floor(tt);
+          float ph = fract(tt);
+          // does this column carry a rivulet on this pass?
+          float pick = voxelHash(vec3(col, pass, 9.0 + fk));
+          float on = step(pick, 0.16 + 0.14 * wet);
+          // the bead runs 22 rows so it clears the frame, tail 6 rows long
+          float head = ph * 22.0 - 3.0;
+          float behind = head - row;
+          float tail = step(0.0, behind) * step(behind, 6.0) * (1.0 - behind / 6.5);
+          float bead = step(abs(behind), 1.0);
+          rain = max(rain, on * (tail * 0.60 + bead * 0.40));
+        }
+        p.rgb = mix(p.rgb, vec3(0.86, 0.93, 1.0), clamp(rain * wet, 0.0, 0.92));
+      }
+      float clay = edge * step(cg, coat * 1.35 - 0.15);
+      p.rgb = mix(p.rgb, snowColor, clamp(clay, 0.0, 1.0));
+    }
     // Two lights, not one. A shadow is not an absence of light, it is a
     // place lit by a DIFFERENT light -- the sky, which is cool and comes
     // from everywhere, rather than the sun, which is warm and comes from
@@ -2388,6 +2478,12 @@ precision highp sampler2D;
       float sweep = sin(tc.x * glassSize.x * 0.8 - glassPhase);
       float glint = pow(max(sweep, 0.0), 20.0) * 0.55 * glassGlint;
       vec3 pane = mix(rgb, vec3(0.93, 0.97, 1.0), glint * glass);
+      if (frost > 0.0) {
+        float rimeG = voxelHash(floor(vWorld * 1.7));
+        float rimeF = voxelHash(floor(vWorld * 0.5 + 3.0));
+        float rime = frost * glass * (0.30 + 0.45 * rimeF + 0.25 * rimeG);
+        pane = mix(pane, vec3(0.86, 0.91, 0.98) * light, clamp(rime, 0.0, 0.85));
+      }
       float shine = dot(p.rgb, vec3(0.299, 0.587, 0.114));
       // NOT EVERY WINDOW IS THE SAME LAMP. A hash on the pane's own block in
       // the atlas -- six texels across, the width the mask scans for -- gives
@@ -2437,174 +2533,164 @@ precision highp sampler2D;
                  haunted * (1.0 - glassNight));
       rgb = mix(pane, lamp, glassNight * glass * home);
     }
-    // The snow lying ON this surface, if it is one snow can lie on. A hard
-    // step rather than a smooth falloff: this is a four-colour world and the
-    // boundary between a snowed top and a bare side is a voxel edge, which
-    // is exactly where the step is. No geometry, no decal, no float -- the
-    // face the camera is already looking at simply goes white.
+    // ------- THE SNOW LYING ON THIS SURFACE
+    //
+    // Up-faces take all of it and flanks a share (vUp is a real face
+    // normal; see SNOW_SIDE for what guessing it off brightness cost), a
+    // grass tuft its cap and a canopy its crown (vGrassCap, vCanopy: the
+    // two surfaces whose normal says "side" and whose winter says "white
+    // on top"). None of that changed.
+    //
+    // Everything after it did. The cover used to be four dithered rungs
+    // of a flat white, one number for the whole map, with footprint
+    // decals lying on it -- which read as mould on the paving and stickers
+    // on the mould. Now it is a smooth arrival with the SHAPE of a fall
+    // (a drift noise anchored in world space), it stands in the hour's
+    // light with the sky's blue in its hollows, it glitters where the sun
+    // lands on a crest -- and where a boot went through it, the field
+    // says so: a trench with lit walls, a heaped rim, and the ground
+    // showing at the bottom of a shallow one (lib/SnowField.lua).
     if (snowTop > 0.0) {
-      // The UP faces take all of it and the flanks take a share, which is
-      // the difference between a snowed world and a world with white lids on
-      // it. A bush is a rounded blob: from this camera almost every voxel of
-      // it you can see is a SIDE, so a top-face-only rule left every hedge in
-      // a white town standing green while the ground and the wall tops went
-      // pale -- correct about which face points up, wrong about what a
-      // snowfall looks like.
-      //
-      // A STEP on the face's own normal, not a ramp on its brightness.
-      //
-      // This used to read `smoothstep(0.60, 1.0, vShade)`, on the theory that
-      // a shade of 1.0 meant up and the darker a face drew the more it must
-      // be turned away. Two things were wrong with it and both showed. A
-      // BUILDING's facade is emitted at 1.0 because the south face IS the
-      // artwork, so a house tested as sky-facing and took the whole tint --
-      // every wall in a snowed town went white. And that same house's ROOF
-      // carries VOLUME_TOP_SHADE, which is darker than its walls, so the one
-      // surface the snow actually lands on took less of it than the wall
-      // underneath. A town in a snowfall came out as white boxes with grey
-      // lids, which is the exact inverse of a snowfall.
-      //
-      // vUp is the real answer: the meshers work each quad's own face normal
-      // out of its geometry and hand it over in the sign of the shade. So a
-      // roof, a ledge, the ground and the crown of a tree take all of it; a
-      // wall, a facade and a tree's front take SNOW_SIDE, whatever brightness
-      // any of them happen to draw at.
-      // ------- and the one surface a face normal cannot answer for
-      //
-      // A grass blade is a SIDE. Every honest reading of its geometry says
-      // so, vUp is correctly zero along the whole tuft, and the rule above
-      // therefore hands a meadow the flank's third and stops -- which is
-      // right about the normal and wrong about the winter. Snow lands from
-      // above and RESTS ON THE CROWN: winter grass is white on top with
-      // green showing underneath, and the boundary between the two is a
-      // height on the blade, not a face.
-      //
-      // `vGrassCap` is that height, already weighted by how much snow has
-      // settled (see the vertex stage), and it goes in through the same
-      // `lie` the normal does -- so a capped tip takes the full depth and
-      // runs through every layer below it (threshold, drift, grain,
-      // sparkle) exactly as a roof ridge does. No second snow path, no
-      // decal floating over the meadow, and the base of the tuft stays
-      // green because its cap is zero.
-      // A CANOPY IS THE GRASS PROBLEM AGAIN, one plant up.
-      //
-      // vUp is a face normal and it is honest: a leaf cluster's faces point
-      // outward, so a crown is all "flank" and takes the flank's share --
-      // a forest tinted a third pale while the ground beneath it went
-      // white. Grass hit this first and answered it with vGrassCap, which
-      // carries a different fact: not which way a face points, but how much
-      // has piled here.
-      //
-      // vCanopy is that fact for trees, and it arrives already shaped like
-      // it -- zero down the bole, rising through the crown, one at the tips
-      // (Trees3D packs it into VertexShade; see packedShade). Snow lands
-      // from above and rests on the crown, so the crown takes the TOP
-      // share and the trunk keeps the flank's.
-      //
-      // It also retires a workaround: the canopy's 60 alpha cards are
-      // near-horizontal, so vUp would have called every one of them a roof
-      // and given each tree a fistful of white discs. They were shipped
-      // with a forced positive shade to suppress exactly that. Now their
-      // snow comes from how high in the crown they sit, which is the fact
-      // that was wanted in the first place.
       float canopyCap = smoothstep(0.35, 0.85, vCanopy);
-      float lie = mix(snowSide, 1.0, max(max(vUp, vGrassCap), canopyCap));
-      // ... and not on liquid water at all: the sheet takes it only once
-      // it has frozen into a lid (the basin under it never sees the sky)
-      float depth = snowTop * lie * (1.0 - vWaterSurf * (1.0 - freeze));
-
-      // ------- the two noises every layer below is cut from
+      float upness = max(max(vUp, vGrassCap), canopyCap);
+      // liquid water takes none; ice takes all
+      float liquid = vWaterSurf * (1.0 - freeze);
+      float base = snowTop * (1.0 - liquid);
+      // ------- the drift: the shape of the fall
       //
-      // Both are voxel-quantized samples of WORLD space, so neither is a
-      // gradient and neither moves: a drift belongs to the place it lies in.
-      // It does not crawl when the camera pans, does not swim when a mesh is
-      // rebuilt, and two maps meeting at a seam agree about it because they
-      // agree about where they are. (A screen-space dither -- which is where
-      // the swell's checker lives, because a swell is already moving -- would
-      // stand still and let the world slide through it, and every roof in the
-      // frame would crawl as you walked.)
-      //
-      // All three axes go into the hash, which is what lets one line serve
-      // every face in the world: on a roof y barely moves and the pattern
-      // falls out of x and z, on a wall z is fixed and it falls out of x and
-      // y. Two axes would have given one of those a set of stripes.
-      //
-      // DRIFT is the shape of the fall at about five world pixels -- where it
-      // heaped, where the wind scoured it. GRAIN is per world pixel, and it
-      // does the dithering a four-colour machine would have done.
-      float drift = voxelHash(floor(vWorld * 0.2));
+      // Value noise on two lattices (eleven and thirty-two world pixels),
+      // world-anchored, so a heap belongs to the place it lies in and
+      // never crawls under the camera. Smooth, unlike the per-voxel grain,
+      // because a drift is a swell and not a stipple -- a finer lattice
+      // read as curd. Eight hashes, all multiply-and-fract, on snowed
+      // pixels only.
+      vec2 dp = vWorld.xz * 0.09;
+      vec2 di = floor(dp);
+      vec2 df = dp - di;
+      df = df * df * (3.0 - 2.0 * df);
+      float d00 = voxelHash(vec3(di, 7.0));
+      float d10 = voxelHash(vec3(di + vec2(1.0, 0.0), 7.0));
+      float d01 = voxelHash(vec3(di + vec2(0.0, 1.0), 7.0));
+      float d11 = voxelHash(vec3(di + vec2(1.0, 1.0), 7.0));
+      float drift = mix(mix(d00, d10, df.x), mix(d01, d11, df.x), df.y);
+      vec2 dq = vWorld.xz * 0.031;
+      vec2 qi = floor(dq);
+      vec2 qf = dq - qi;
+      qf = qf * qf * (3.0 - 2.0 * qf);
+      float q00 = voxelHash(vec3(qi, 11.0));
+      float q10 = voxelHash(vec3(qi + vec2(1.0, 0.0), 11.0));
+      float q01 = voxelHash(vec3(qi + vec2(0.0, 1.0), 11.0));
+      float q11 = voxelHash(vec3(qi + vec2(1.0, 1.0), 11.0));
+      drift = drift * 0.45
+            + mix(mix(q00, q10, qf.x), mix(q01, q11, qf.x), qf.y) * 0.55;
       float grain = voxelHash(floor(vWorld));
-
-      // ------- LAYER 1: where it lies at all
+      // how deep it lies HERE, before anybody walked on it
+      float depth = base * (0.70 + 0.60 * drift);
+      // ------- the field: what walkers did
       //
-      // The drift moves the THRESHOLD rather than the amount, and that is the
-      // difference between snow arriving and snow fading in. A hollow needs a
-      // deeper fall before it takes any and a heap takes it early -- so as the
-      // weather works, patches appear and then GROW into each other across a
-      // roof, instead of the whole surface going evenly paler all at once.
-      // The grain breaks each rung, so the edge of a patch is dithered rather
-      // than a clean curve, which is the only edge this world knows how to
-      // draw. It is one rung wide on purpose: the levels sit a third apart, so
-      // a smaller wobble would round both halves of the dither into the same
-      // level and do nothing at all.
-      float cover = depth * (0.72 + drift * 0.56) + (grain - 0.5) * 0.34;
-      // Four rungs, and the top one is 0.86 rather than 1. At a full 1 a
-      // covered roof loses its own art entirely and the town turns to white
-      // blocks -- which is exactly why GroundFX.SNOW_TINT stops short of 1,
-      // and exactly what rounding up to the last rung had been quietly
-      // undoing. The tiles read through the snow at every depth now.
-      float lay = floor(clamp(cover, 0.0, 1.0) * 3.0 + 0.5) / 3.0 * 0.86;
-
+      // Five reads: here, and a texel and a half out on each side. The
+      // trodden surface's height against the level fall at the four
+      // neighbours gives the slope by central difference, and the slope
+      // is the trench's wall -- a wall three texels wide in the shading,
+      // which on a one-pixel field is what keeps it a wall rather than a
+      // hairline. Up-faces only (a trail is a thing on the ground), and
+      // only inside the field.
+      float pressed = 0.0;
+      float rim = 0.0;
+      float dhx = 0.0;
+      float dhz = 0.0;
+      if (snowOn > 0.5 && vUp > 0.5) {
+        vec2 suv = (vWorld.xz - snowOrigin) * snowInv;
+        if (suv.x > 0.0 && suv.y > 0.0 && suv.x < 1.0 && suv.y < 1.0) {
+          vec2 ox = vec2(snowTexel.x * 1.5, 0.0);
+          vec2 oz = vec2(0.0, snowTexel.y * 1.5);
+          vec4 s0 = Texel(snowMap, suv);
+          vec4 sxp = Texel(snowMap, suv + ox);
+          vec4 sxm = Texel(snowMap, suv - ox);
+          vec4 szp = Texel(snowMap, suv + oz);
+          vec4 szm = Texel(snowMap, suv - oz);
+          pressed = s0.r;
+          rim = s0.g;
+          float hxp = sxp.g * 0.30 - min(sxp.r * snowPress, depth);
+          float hxm = sxm.g * 0.30 - min(sxm.r * snowPress, depth);
+          float hzp = szp.g * 0.30 - min(szp.r * snowPress, depth);
+          float hzm = szm.g * 0.30 - min(szm.r * snowPress, depth);
+          dhx = (hxp - hxm) * 0.5;
+          dhz = (hzp - hzm) * 0.5;
+        }
+      }
+      // a boot presses down by up to snowPress of a full fall and never
+      // below the ground; the heap it displaced stands on top
+      float press = min(pressed * snowPress, depth);
+      float h = depth - press + rim * 0.30 * base;
+      // ------- where it lies at all
+      //
+      // A smooth arrival over the first third of the depth, broken only
+      // by the grain at the fringe: patches appear in the drifts' lee
+      // first and grow into each other as the fall works. Flanks take
+      // their share of the AMOUNT, never of the height -- a wall never
+      // goes fully white however deep the fall -- and the tiles read
+      // through at the deepest cover, a little: a roof buried to 1.0 is a
+      // white block and the town turns to boxes.
+      float lay = smoothstep(0.03, 0.30, h + (grain - 0.5) * 0.05);
+      lay *= mix(snowSide, 1.0, upness);
+      lay = min(lay, 0.95);
       if (lay > 0.0) {
-        // ------- LAYER 2: snow standing in the world's own light
+        // ------- relief: the trench has walls and the rim a sunny side
         //
-        // This is what separates snow from white paint, and it was the whole
-        // of the old look's problem: snowColor went on as a flat constant
-        // AFTER the shading, so a covered roof was the same colour at noon, in
-        // a building's shadow and at midnight. Nothing else in the frame
-        // behaves that way, and the eye reads a surface that ignores the light
-        // as a surface that has been painted rather than covered. Through the
-        // hour's light it goes blue where only the sky reaches it, warm under
-        // a low sun, dark after dusk -- and a shadow thrown across a white
-        // field is finally visible, because there is something for it to fall
-        // on.
-        vec3 snow = snowColor * light;
-
-        // ------- LAYER 3: the drift has FORM
+        // The slope becomes a normal and the sun lights it, against what
+        // the flat ground gets. This is the whole of why a trail reads as
+        // dug rather than painted: one wall of every groove is in its own
+        // shadow and the other catches the light, and the heap along the
+        // edge does the opposite.
+        vec3 N = normalize(vec3(-dhx * snowSlope, 1.0, -dhz * snowSlope));
+        float nl = dot(N, -sunRay);
+        float flatNl = -sunRay.y;
+        float relief = clamp(1.0 + (nl - flatNl) * 2.6, 0.30, 1.6);
+        // ------- and a KEY the hour does not move
         //
-        // A crest catches more of the sky and a hollow sits back from it. Two
-        // hard steps rather than a gradient, because this is relief and not a
-        // sheen -- and it is what stops a fully covered roof reading as one
-        // flat tone even when the cover really is total.
-        snow *= 0.88 + 0.10 * step(0.45, drift) + 0.14 * step(0.78, drift);
-
-        // ------- LAYER 4: and where the sun lands on a crest, it GLITTERS
+        // At noon the sun is overhead and every wall of a trench takes
+        // the same light as its floor -- and a snowfall's own overcast
+        // dims the sun anyway -- so the sun alone erased the relief at
+        // exactly the hours it is needed. This is a fixed light from the
+        // TOP of the screen (north is -z; a little from the left), which
+        // is the one direction the eye assumes light comes from: a pit's
+        // far wall dark and its near wall lit reads as a pit, and the
+        // same light the other way round reads as a bump. The heap along
+        // the rim gets the opposite of the trench for free, which is how
+        // a rim reads as raised.
+        vec3 key = normalize(vec3(-0.35, 1.0, -0.65));
+        float form = clamp(1.0 + (dot(N, key) - key.y) * 2.4, 0.35, 1.45);
+        // the floor of a trench is sky-lit only, and less of the sky at
+        // that: a hollow goes dark and blue where the level snow around
+        // it stays bright and warm
+        float hollow = clamp(press / max(depth, 0.001), 0.0, 1.0)
+                       * (1.0 - rim * 0.5);
+        vec3 snowLight = (skyTint * (1.0 - 0.50 * hollow)
+                        + sunTint * lit * relief * (1.0 - 0.60 * hollow))
+                       * form;
+        vec3 snow = snowColor * snowLight;
+        // a crest catches more sky than the hollow between drifts
+        snow *= 0.90 + 0.14 * drift;
+        // trodden snow has the ground in it -- but only where the boot
+        // reached the ground: a trench through a deep fall has a floor of
+        // packed snow, grey and blue, and no grass in it. Squared, so a
+        // dusting shows the paving through every print and a full fall
+        // shows almost none.
+        float thin = 1.0 - base * 0.45;
+        float dirt = hollow * thin * thin;
+        snow = mix(snow, p.rgb * light * 0.80, dirt * 0.70);
+        // ------- and where the sun lands on a crest, it GLITTERS
         //
         // A few per cent of the covered pixels, gated on the sun actually
-        // reaching this fragment -- which is what makes it dynamic with no
-        // clock to drive it: walk a shadow across a snowed roof and the
-        // glitter goes out under it and comes back on the far side, and the
-        // whole field lights up and dies as the day turns. Up-faces only, and
-        // only once the fall is deep enough to have a surface of its own: a
-        // dusting does not sparkle.
-        //
-        // Brighter than the snow AROUND it rather than a fixed white, and
-        // that distinction is the whole of whether this works after dark. The
-        // sun rig hangs the moon on the same lamp, so `lit` is high at
-        // midnight wherever the moon reaches -- and a constant white here
-        // would have put noon-bright specks across a field that is otherwise
-        // deep blue. Half again the local snow keeps a highlight proportional
-        // to whatever is lighting it, and clamps out at the top end by day,
-        // which is what a highlight does anyway.
-        // A capped grass tip is an up-surface for this purpose too -- it is
-        // the same snow catching the same sun, and leaving it out would put
-        // a glittering field behind a dull white meadow.
-        float spark = step(0.93, grain) * step(0.62, drift)
-                      * step(0.55, lit) * max(max(vUp, step(0.5, vGrassCap)),
-                                            step(0.5, canopyCap))
-                      * step(0.5, depth);
+        // reaching this fragment, up-faces only, level snow only: a
+        // dusting does not sparkle and neither does a trodden path.
+        // Brighter than the snow AROUND it rather than a fixed white,
+        // which is what keeps a moonlit field from wearing noon specks.
+        float spark = step(0.992, grain) * step(0.55, drift) * step(0.55, lit)
+                      * step(0.5, upness) * step(0.45, depth)
+                      * (1.0 - step(0.15, hollow));
         snow = mix(snow, snowColor * light * 1.5, spark);
-
         rgb = mix(rgb, snow, lay);
       }
     }
@@ -2920,6 +3006,59 @@ local function sendWearMap(sh, m)
   pcall(sh.send, sh, "wearOn", on)
   pcall(sh.send, sh, "wearOrigin", { ox, oz })
   pcall(sh.send, sh, "wearInv", inv)
+end
+
+-- Always-bound stand-in for snowMap: level snow everywhere (R = G = 0),
+-- which is what a draw that has no field -- a neighbour map, the water,
+-- the particles -- must read.
+local snowMapBlank = nil
+local function snowMapBlankImg()
+  if snowMapBlank == nil then
+    local ok, img = pcall(function()
+      local d = love.image.newImageData(1, 1)
+      d:setPixel(0, 0, 0, 0, 0, 1)
+      local i = love.graphics.newImage(d)
+      pcall(i.setFilter, i, "nearest", "nearest")
+      return i
+    end)
+    snowMapBlank = (ok and img) or false
+  end
+  return snowMapBlank or nil
+end
+
+-- `m` is SnowField.state(): the image, the extent, the texel and the wall
+-- slope. nil sends the blank and switches the taps off.
+local function sendSnowMap(sh, m)
+  local img, on, ox, oz = nil, 0, 0, 0
+  local ix, iz, tu, tv, slope = 0, 0, 0, 0, 0
+  if m and m.img then
+    img = m.img
+    on = tonumber(m.on) or 1
+    ox, oz = tonumber(m.ox) or 0, tonumber(m.oz) or 0
+    ix, iz = tonumber(m.invX) or 0, tonumber(m.invZ) or 0
+    tu, tv = tonumber(m.texelU) or 0, tonumber(m.texelV) or 0
+    slope = tonumber(m.slope) or 0
+  end
+  if not img then img = snowMapBlankImg() end
+  if img then pcall(sh.send, sh, "snowMap", img) end
+  pcall(sh.send, sh, "snowOn", on)
+  pcall(sh.send, sh, "snowOrigin", { ox, oz })
+  pcall(sh.send, sh, "snowInv", { ix, iz })
+  pcall(sh.send, sh, "snowTexel", { tu, tv })
+  pcall(sh.send, sh, "snowSlope", slope)
+  pcall(sh.send, sh, "snowPress", Voxel3D.SNOW_PRESS or 0)
+end
+
+-- The snow on a sprite card's top edges. Zero unless the caller set
+-- Voxel3D.coat for the pass, so nothing but the figures ever wears it.
+local function sendCoat(sh, on)
+  pcall(sh.send, sh, "coat", on and (Voxel3D.coat or 0) or 0)
+  pcall(sh.send, sh, "wet", on and (Voxel3D.wet or 0) or 0)
+  pcall(sh.send, sh, "rainTime", Voxel3D.rainTime or 0)
+  local sheet = Voxel3D.coatSheet
+  pcall(sh.send, sh, "coatSheet",
+        sheet and { sheet[1] or 16, sheet[2] or 16 } or { 16, 16 })
+  pcall(sh.send, sh, "coatTop", Voxel3D.coatTop or 0)
 end
 
 -- Whether the driver admits to supporting derivatives. Only a hint --
@@ -3423,6 +3562,8 @@ Voxel3D.tint = { 1, 1, 1 }
 -- (DayNight.windowLight). nil / 0 -- the defaults -- draw no glass effect.
 Voxel3D.glassMask = nil
 Voxel3D.glassNight = 0
+-- and how frosted the panes are, 0..1 (VoxelScene, from the cold)
+Voxel3D.frost = 0
 -- The haunted building this scene stands, if any: VoxelScene reads it off
 -- the map's structure cache (Buildings.stamp records a TowerKit model's
 -- `haunt`). { x0, z0, x1, z1 } in world XZ plus `color`; nil draws every
@@ -3910,6 +4051,7 @@ function Voxel3D.beginScene(w, h, cx, cy, vw, vh, sky, slot)
     pcall(sh.send, sh, "glassSize", { ok and mw or 1, ok and mh or 1 })
   end
   pcall(sh.send, sh, "glassNight", Voxel3D.glassNight or 0)
+  pcall(sh.send, sh, "frost", Voxel3D.frost or 0)
   pcall(sh.send, sh, "lampColor", Voxel3D.lampColor or { 1.0, 0.84, 0.5 })
   pcall(sh.send, sh, "glassPhase", Voxel3D.glassPhase or 0)
   pcall(sh.send, sh, "glassGlint", Voxel3D.glassGlint or 0)
@@ -4069,8 +4211,12 @@ end
 -- player is rather than a hole punched in the building. The wall it is
 -- seen through still shows, which is what keeps it reading as "behind
 -- that" instead of "in front of it".
-Voxel3D.GHOST_COLOR = { 0.26, 0.26, 0.28 }
-Voxel3D.GHOST_ALPHA = 0.5
+-- Black, and most of the way opaque: a grey at half strength over a
+-- green crown was a slightly different green, and read as nothing. The
+-- silhouette is there to say WHERE you are when you cannot see yourself,
+-- and an outline says that by contrast, not by tint.
+Voxel3D.GHOST_COLOR = { 0.03, 0.03, 0.04 }
+Voxel3D.GHOST_ALPHA = 0.85
 
 -- Draw a character AGAIN wherever the ordinary draw LOST the depth test.
 --
@@ -4217,7 +4363,25 @@ Voxel3D.SNOW_COLOR = { 0.93, 0.95, 0.99 }
 -- What a face that does NOT point up still takes. A third: enough that a
 -- hedge reads as snowed rather than as green with a lid, little enough that
 -- a wall keeps its own art down its flank.
-Voxel3D.SNOW_SIDE = 0.34
+Voxel3D.SNOW_SIDE = 0.42
+-- How deep a boot goes into a full fall, in cover units: a little over
+-- half, so a trail through a deep drift has a floor of snow and one
+-- through a dusting reaches the paving. See the snow block in SHADER.
+Voxel3D.SNOW_PRESS = 0.55
+-- The deformation field for the draw in hand (SnowField.state()), set by
+-- VoxelScene for the map underfoot and nil for everything else. Same
+-- per-draw contract as wearMap.
+Voxel3D.snowMap = nil
+-- Snow on the figures' top edges, 0..1, and the two numbers the tap
+-- needs about the sheet in hand. VoxelScene sets them around the
+-- character pass and zeroes coat after it.
+Voxel3D.coat = 0
+Voxel3D.coatSheet = nil
+Voxel3D.coatTop = 0
+-- and how much rain is running down the figure in hand, plus the clock
+-- the rivulets slide on (VoxelScene sets both around the character pass)
+Voxel3D.wet = 0
+Voxel3D.rainTime = 0
 
 -- How tall a leaning thing stands, in world pixels, when the caller does
 -- not say. Ten is the classic extruded slab plus a little: it is only the
@@ -4492,6 +4656,10 @@ function Voxel3D.draw(mesh, texture, model, pull, sunModel, sway)
   pcall(sh.send, sh, "snowTop", Voxel3D.snowTop or 0)
   pcall(sh.send, sh, "snowColor", Voxel3D.SNOW_COLOR)
   pcall(sh.send, sh, "snowSide", Voxel3D.SNOW_SIDE)
+  -- and what walkers did to it, from the field the caller set (nil for a
+  -- neighbour map, which has its own trails and is not asked for them)
+  sendSnowMap(sh, Voxel3D.snowMap)
+  sendCoat(sh, true)
   love.graphics.draw(mesh)
 end
 
@@ -4517,6 +4685,13 @@ function Voxel3D.drawGroup(group, texture, model, pull, sunModel, b)
   -- and it is the only pass that owns geometry below the ground plane:
   -- the water's basin (see Water.BED). Raised for the group, dropped after.
   pcall(sh.send, sh, "basinOn", 1)
+  -- the snow on its up-faces and the field of what walkers did to it --
+  -- sent here rather than inherited from whatever drew last
+  pcall(sh.send, sh, "snowTop", Voxel3D.snowTop or 0)
+  pcall(sh.send, sh, "snowColor", Voxel3D.SNOW_COLOR)
+  pcall(sh.send, sh, "snowSide", Voxel3D.SNOW_SIDE)
+  sendSnowMap(sh, Voxel3D.snowMap)
+  sendCoat(sh, false)
   if texture and texture.getWidth then
     pcall(sh.send, sh, "waterTexel", { 1 / texture:getWidth(),
                                        1 / texture:getHeight() })
@@ -4565,6 +4740,8 @@ function Voxel3D.drawWater(group, texture, model, b)
   pcall(sh.send, sh, "snowColor", Voxel3D.SNOW_COLOR)
   pcall(sh.send, sh, "snowSide", Voxel3D.SNOW_SIDE)
   pcall(sh.send, sh, "waterPass", 1)
+  sendSnowMap(sh, nil)
+  sendCoat(sh, false)
   if texture and texture.getWidth then
     pcall(sh.send, sh, "waterTexel", { 1 / texture:getWidth(),
                                        1 / texture:getHeight() })
@@ -4641,6 +4818,8 @@ function Voxel3D.drawParticles(mesh, texture, batches, write)
   pcall(sh.send, sh, "snowTop", 0)
   pcall(sh.send, sh, "snowColor", Voxel3D.SNOW_COLOR)
   pcall(sh.send, sh, "snowSide", Voxel3D.SNOW_SIDE)
+  sendSnowMap(sh, nil)
+  sendCoat(sh, false)
 
   pcall(g.setDepthMode, "lequal", write and true or false)
   if texture then mesh:setTexture(texture) end

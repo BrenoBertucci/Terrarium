@@ -73,6 +73,15 @@ de emissão — mar da Route 19 a 21-22/10s, lagoa de Viridian a 3-4/10s
 DESCOPADA com motivo (nenhuma classe de tile/flag/módulo sabe o que é
 cachoeira; grep zero). Crop: `probe_out_spray/spray_crop.png`.
 
+**T16 (folhas que caem, deitam e espalham) FECHOU em 2026-09-10** — pedido
+fora do quadro original, e a continuação de uma versão incompleta do
+ChatGPT. `lib/LeafLitter.lua` (armazém puro do chão) + `lib/LeafFallFX.lua`
+(ar, chão, chute) + `lib/VegFX.lua` (queda em qualquer ar). A folha no ar é a
+do WindFX com peso; a do chão é um card plano numa malha estática reescrita só
+no slot que muda; o chute joga pros lados da passada e nada some. Histórico e
+portões na seção T16. Runners: `tools/run_leaf_litter_offline.py`,
+`tools/run_leaf_fall_offline.py`, `tests/run_leaves.cmd`.
+
 A próxima tarefa é escolher entre:
 
 - **T13 (emissor: fogo e casa)** — recomendada: fecha o quarteto de
@@ -139,6 +148,7 @@ Rodar: `tests/run_amb.cmd` (fixtures) e `tests/run_amb_smoke.cmd` (default).
 | T13 | emissor: fogo e casa | não começada |
 | T14 | Vfx semeia o solver | não começada |
 | T15 | varredura de custo e rungs | não começada |
+| T16 | folhas que caem, deitam e espalham | **FEITA** — queda em qualquer ar da copa real, chão persistente numa malha estática, chute pros lados sem perder folha; offline 35/35 + 32/32, no jogo todos os portões |
 
 Ordem escolhida: fundação primeiro — e a fundação acabou (T0-T5, T7, T8).
 O que resta é conteúdo (T9-T13 emissores, T14 batalha), polimento (T6) e o
@@ -915,6 +925,107 @@ ou módulo do mod sabe o que é uma cachoeira (grep: zero), Gen 1 tem
 meia dúzia de tiles disso em lugares que esta câmera mal visita, e névoa
 de cachoeira em calmaria exigiria um campo próprio além. A margem é o
 feature de todo dia; a cachoeira espera uma razão para existir.
+
+### T16 — folhas que caem, deitam e espalham (FEITA, 2026-09-10)
+
+Pedido do Breno: queda de folha otimizada nas árvores, folhas que se acumulam
+no mundo aberto e se espalham quando o jogador passa. O ChatGPT tinha começado
+um `LeafFallFX` (pool de 180) e parado no meio, com cinco defeitos: trocou a
+folha aprovada do WindFX pelo strip antigo `leaves.png` girando (volta atrás
+nas regras 7 e 9), física própria fora do solver, `clear()` do chão inteiro em
+todo frame não-live (uma batalha ou um menu apagava tudo), chão só num raio de
+14 células (sumia ao andar) desenhado como billboard em pé, e closure + tabela
+proxy alocadas por frame no draw. Reescrito em três peças:
+
+- **`lib/LeafLitter.lua`** — o chão, sem `love`: um array por campo (slot é
+  índice), cadeia por célula (`head`/`nxt`, no máximo `PER_CELL` = 6), pilha
+  de livres, cursor de despejo que prefere folha LONGE do jogador, e fila de
+  slots sujos que desiste acima de `QUEUE_MAX` e pede reescrita inteira. Não
+  aloca depois de aquecer.
+- **`lib/LeafFallFX.lua`** — o ar: campo próprio do solver com os MESMOS
+  speed/bob/mass/area da folha do WindFX (dança os mesmos eddies); `lift`
+  integrado como afundamento até um terminal, e o bob do solver faz o balanço
+  da queda; sem `floorAt`, porque o clamp içaria a folha em cada casco de copa.
+  O chão: survey por mapa (andável e (flatTop ou canteiro), nunca grama alta ou
+  escada), pouso a `floor + RAISE` (2 px de mundo, a lição dos decais de
+  chuva), card plano com shade −1 (face pra cima: o lampião ilumina como chão;
+  o sol não usa a normal), uma malha `dynamic` de 2000 quads com `setVertex` só
+  no slot que mudou. Semeadura determinística por id do mapa, até
+  `SEED_PER_CELL` = 3. Célula cheia: a folha que pousa fica e a mais antiga da
+  célula cede. O chute: quem andou no frame (jogador, Pikachu, `ow.npcs`)
+  levanta as folhas a `KICK_R` = 10 que descansaram `REST` = 0.6 s, jogadas pro
+  LADO da passada (+0.55 ao longo), kind denso (τ ~0.24 s), hop 48 gasto a 120.
+  Chão lembrado pelos últimos 3 mapas; o estado de um mapa deixado solta o
+  objeto `Map`.
+- **`lib/VegFX.lua`** — folha em qualquer ar: taxa POR ÁRVORE EM ALCANCE
+  (lista `near` refeita a cada 0.5 s — a lição do SprayFX), `LEAF_CALM` 1/150,
+  `LEAF_WIND` 1/40, teto 3/s × PFX; o burst da rajada usa a mesma lista.
+  Semente e pétala continuam atrás do FLOOR (`windGate`). A floresta entra via
+  `Trees3D.wantsMap`. O scan usa o tamanho real do mapa: a janela fixa de 64
+  células deixava as árvores do fim das rotas longas sem soltar nada. A folha
+  solta de qualquer ponto do disco da copa (`SHED_R` 15): do centro, em
+  calmaria, ela caía sempre de volta na célula da própria árvore.
+
+**Portões offline** (lupa, sem GPU, segundos): `tools/run_leaf_litter_offline.py`
+35/35 — cadeias contra força bruta, 30 mil operações aleatórias, despejo longe
+do jogador, PFX encolhendo, fila, fingerprint, 0,000 KB em 40 mil operações.
+`tools/run_leaf_fall_offline.py` 32/32 — semeadura idêntica após esquecer, 40
+folhas soltas = pousadas + perdidas, corredor 24 → 0 com as 24 re-pousadas,
+chão parado com 0 escrita, LRU, PFX LOW com exatamente 1 reescrita, neve, 0,03
+KB em 3000 frames de andar/cair/pousar/chutar/desenhar. Esse harness pegou três
+coisas antes do jogo (a semeadura saturando, um critério errado e um stub que
+alocava).
+
+**Portão no jogo** (`tests/leaf_fall_probe.lua`, `tests/run_leaves.cmd`,
+Route 1; faixas de várias rodadas, a última com todos os portões PASS):
+
+| medição | valor |
+|---|---|
+| semeadura | 466 folhas; 0 fora de célula aberta, 0 altura errada, máx 3 por célula, 0 copa marcada aberta |
+| queda (GALE, 10 s) | 22–27 soltas (= contagem do VegFX), 6–14 pousadas, contagem do chão = pousadas − chutadas − despejadas − cedidas, exata |
+| origem | 28–31 folhas jovens por janela; o ponto onde cada uma soltou fica a no máximo 12.5–14.3 px de uma copa real (`SHED_R` 15), 0 além |
+| calmaria (WIND OFF) | 5 folhas soltas, 0 sementes/pétalas, gate `wind below FLOOR` |
+| chute | 7 células andadas, 20/20 chutadas, caminho 20 → 0, lados +20, 0 perdidas, chão 493 → 493 |
+| memória | Viridian e volta: checksum e contagem idênticos; esquecido e re-semeado: checksum = o da primeira semente |
+| pixels | câmera congelada, pilha de 13 folhas laranja em chão livre: laranja no ponto projetado 13/13 e 13/13 com o chão ligado, 0/13 desligado; na caixa, 2485 px estáveis que o toggle explica contra 19 px de ruído entre as duas fotos ON |
+| custo | update 0.016–0.038 ms/frame; na janela 0 reescritas inteiras e escritas de slot = pousos + chutes; chão parado 240 frames = 0 escrita; alocação do update com o JIT desligado e o cache de traces esvaziado: 0.0000–0.0005 KB/frame (400 frames com folhas no ar) |
+| floresta | Viridian Forest liga: 748 copas, 154 semeadas |
+| erros / canários | 0 / todos vivos |
+
+`tests/veg_probe.lua` foi ajustado (origem nas folhas do LeafFallFX, calmaria
+exige folha E zero semente/pétala, origem julgada no ponto onde a folha
+soltou) e passou inteiro: 124/104/52 sítios, 20/16/8 em 10 s de GALE, origem
+no nascimento ≤ 14.3 px (`SHED_R` 15), calmaria limpa.
+
+**Armadilhas novas:**
+
+1. **Semear até o teto da célula faz a folha sumir ao pousar.** Toda folha que
+   cai perto da copa encontra a célula cheia — o olho segue a folha descendo e
+   vê ela desaparecer no chão. Semear pela metade e deixar a mais antiga ceder.
+2. **`collectgarbage("count")` no jogo conta os traces do LuaJIT.** O update
+   mediu 0,15 KB/frame com o JIT ligado e 0,008 com `jit.off()`. Alocação de
+   regime se mede com o compilador desligado; o lupa não tem JIT e não vê isso.
+3. **A câmera SM64 anda entre capturas; congelar é trocar a função.** O
+   `VoxelScene` instala `MarioCam.camera()` todo frame, então o probe a troca
+   por uma que devolve um snapshot. Enquanto o press travado da armadilha 4
+   empurrava o jogador contra a parede, duas capturas ON ainda diferiam em ~22%
+   do quadro; com o input solto, 19 px na caixa da pilha. E mesmo com a cena
+   parada o portão é matiz no ponto projetado de cada folha (13/13), não diff
+   de luminância numa caixa: diff mede tudo que se mexeu, matiz mede a folha.
+4. **Press injetado na `pressQueue` fica SEGURADO.** `Input:step()` do engine
+   faz `state[btn] = true` para press sem fonte real, e nada solta: depois da
+   caminhada do chute, todo `setMap` seguinte levava o jogador andando sozinho
+   até a parede de árvores (duas rodadas pediram 8,20 e 10,20 e acharam o
+   jogador em 17,20). `game.input:reset()` ao fim de cada trecho de input
+   roteirizado. E alinhe fixture pelo `cellX/cellY` real: uma rodada pediu
+   5,15 e o jogador ficou em 5,16.
+5. **Erro no coroutine do driver só vai pro console** (`driver error` +
+   `quit(1)`); erro no callback de captura sobe do `present()`. Uma rodada
+   morreu com o PNG em 0 bytes e não repetiu em três. O probe agora envolve o
+   callback em pcall e engancha `love.errorhandler` pra escrever no log antes.
+
+Limite conhecido: o chão de folhas de mapas vizinhos não é desenhado (o mesmo
+limite de VegFX e StepFX).
 
 ---
 

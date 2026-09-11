@@ -30,7 +30,8 @@
 --
 -- Outdoors, voxel mode, overworld on top -- WindFX's own gates minus the
 -- wind. Then per footfall: GroundFX.wetness() kills dust as the ground
--- soaks (mud does not puff) and GroundFX.cover() as snow muffles it.
+-- soaks (mud does not puff) and GroundFX.cover() turns it white: a boot in
+-- a drift throws powder the way it throws dust off a dry road.
 -- Rate rides the PFX row's multiplier like every other particle budget.
 
 local V = ...
@@ -59,12 +60,46 @@ StepFX.KINDS = {
            curlA = 0.10, curlB = 0.06, mass = 0.45, area = 0.35 },
   dust = { speed = 0.72, bob = 2.2, lowClamp = 0.4, highClamp = 14,
            curlA = 0.20, curlB = 0.10, mass = 0.16, area = 1.10 },
+  -- ------- a DROP of water thrown out of a puddle
+  --
+  -- The solver has no gravity (its motes float and bob, which is right for
+  -- dust and wrong for water), so a drop is the one kind this file drives
+  -- itself: `lift` is its vertical speed, and the pass after field:step
+  -- takes DROP_G off it every frame and kills it where it meets the ground.
+  -- Heavy and small, so the air barely moves it -- a splash goes where the
+  -- boot sent it, not where the wind is blowing.
+  drop = { speed = 0.05, bob = 0, lowClamp = 0.1, highClamp = 40,
+           curlA = 0, curlB = 0, mass = 3.0, area = 0.30 },
 }
 
 StepFX.MAX = 64            -- hard field cap; PFX scales the RATE, not this
 StepFX.STRIDE = 8          -- world px per footfall
 StepFX.WET_KILL = 0.45     -- wetness at which the ground stops puffing
-StepFX.SNOW_KILL = 0.35    -- settled cover at which snow muffles the step
+StepFX.SNOW_KILL = 0.35    -- settled cover at which the step throws snow
+-- What that snow is tinted: the fall's own white (Weather.SNOW), a hair
+-- cooler, so a kicked pinch of it reads as powder and not as dust.
+StepFX.SNOW = { 0.95, 0.97, 1.00 }
+StepFX.SNOW_SIZE = 1.35    -- powder flies bigger than dust
+StepFX.WATER = { 0.74, 0.85, 1.00 }   -- and a splash off a soaked road
+-- ------- and a real SPLASH, out of standing water
+--
+-- Damp ground spatters (above). A POOL -- a cell the ground row says holds
+-- water right now -- throws water: a handful of drops in an arc off the
+-- boot, up and outward, falling under their own weight and dying where
+-- they land, more of them the deeper the pool, with a splash to hear. It
+-- is the footstep that makes a puddle a thing you stepped IN rather than
+-- a picture you walked across, and everybody gets it -- the player, the
+-- follower, the townspeople crossing the square in the rain.
+StepFX.DROP = { 0.86, 0.94, 1.00 }
+StepFX.DROPS_MIN = 4        -- drops per footfall in the shallowest pool
+StepFX.DROPS_DEPTH = 6      -- and how many more a full-depth one adds
+StepFX.DROP_UP = 68         -- vertical speed at the boot (solver units)
+StepFX.DROP_UP_VAR = 42
+StepFX.DROP_OUT = 9         -- horizontal speed, world px/s, plus a share
+StepFX.DROP_OUT_VAR = 16
+StepFX.DROP_G = 230         -- what it loses per second
+StepFX.splashes = 0         -- footfalls that splashed, for the probe
+StepFX.lastSplashDepth = 0
 StepFX.REACH = 12          -- cells from the player before a mote is culled
 StepFX.KICK = 12           -- world px/s of backward toss per footfall
 
@@ -101,15 +136,82 @@ local function game()
   return require("src.core.Game")
 end
 
-local function footfall(x, z, mx, mz)
-  local wet = StepFX.wetness() or 0
-  if wet >= StepFX.WET_KILL then return end
-  if (StepFX.snow() or 0) >= StepFX.SNOW_KILL then return end
-  -- dry ground puffs fully, damp ground less, mud not at all
-  local dry = 1 - wet / StepFX.WET_KILL
+-- Standing water under this footfall, 0..1 deep, or 0. Asked of the ground
+-- row rather than of the wetness: a soaked map is damp everywhere and a
+-- pool is somewhere in particular.
+local function poolUnder(x, z)
+  local Game = game()
+  local ow = Game and Game.overworld
+  if not (ow and ow.map) then return 0 end
+  local ok, d = pcall(GroundFX.poolDepth, ow.map,
+                      math.floor(x / 16), math.floor(z / 16))
+  return (ok and tonumber(d)) or 0
+end
+
+local function splash(x, z, mx, mz, depth)
   local mul = Quality.particles()
   local ground = WindFX.groundAt(x, z)
-  local tint = WindFX.DUST
+  local n = StepFX.DROPS_MIN + math.floor(depth * StepFX.DROPS_DEPTH + 0.5)
+  for _ = 1, n do
+    if rand() < math.min(1, mul) and not field:full() then
+      local m = field:claim()
+      if not m then break end
+      m.kind = "drop"
+      m.x = x + (rand() * 2 - 1) * 2.5
+      m.z = z + (rand() * 2 - 1) * 2.5
+      m.y = ground + 1.0
+      m.t, m.ttl = 0, 1.6
+      m.seed = rand() * 6.2831
+      m.fast = 1
+      m.lift = StepFX.DROP_UP + rand() * StepFX.DROP_UP_VAR
+      m.spin = (rand() * 2 - 1) * 2.0
+      m.frame, m.flip, m.front = 0, 1, false
+      m.size = (0.90 + rand() * 0.70) * (0.8 + 0.4 * depth)
+      m.tint = StepFX.DROP
+      m.ang = 0
+      -- outward in a random direction, plus a little of the stride's own
+      local a = rand() * 6.2831
+      local s = (StepFX.DROP_OUT + rand() * StepFX.DROP_OUT_VAR) * (0.7 + 0.5 * depth)
+      m.vx = math.cos(a) * s + mx * 5
+      m.vz = math.sin(a) * s + mz * 5
+      StepFX.emitted = StepFX.emitted + 1
+    end
+  end
+  StepFX.splashes = StepFX.splashes + 1
+  StepFX.lastSplashDepth = depth
+  local okS, AmbientSound = pcall(V.require, "AmbientSound")
+  if okS and AmbientSound and AmbientSound.playSplash then
+    pcall(AmbientSound.playSplash, x, z, depth)
+  end
+end
+
+local function footfall(x, z, mx, mz)
+  -- standing water first: a pool splashes, whatever the map's wetness
+  local depth = poolUnder(x, z)
+  if depth > 0 then
+    splash(x, z, mx, mz, depth)
+    return
+  end
+  local wet = StepFX.wetness() or 0
+  -- ------- snow does not muffle the step, it CHANGES it
+  --
+  -- A boot in a drift throws a pinch of snow the way it throws dust off a
+  -- dry road: the same grain and puff, white, and a little more of it --
+  -- powder flies. Mud is the one ground that puffs nothing, and settled
+  -- snow on it is snow.
+  local snowy = (StepFX.snow() or 0) >= StepFX.SNOW_KILL
+  -- ------- and a SOAKED road does not puff either -- it splashes
+  --
+  -- The step that used to be nothing (mud) is a spatter of water off the
+  -- boot: the same grain, thrown a little harder and higher, in the
+  -- rain's own pale blue, and a smaller puff of spray.
+  local soaked = wet >= StepFX.WET_KILL and not snowy
+  -- dry ground puffs fully, damp ground less; snow and water fully
+  local dry = (snowy or soaked) and 1 or (1 - wet / StepFX.WET_KILL)
+  local mul = Quality.particles()
+  local ground = WindFX.groundAt(x, z)
+  local tint = snowy and StepFX.SNOW or (soaked and StepFX.WATER) or WindFX.DUST
+  local big = snowy and StepFX.SNOW_SIZE or (soaked and 0.75) or 1
 
   -- the grain, thrown backward off the boot
   if rand() < math.min(1, 0.85 * dry * mul) and not field:full() then
@@ -125,11 +227,12 @@ local function footfall(x, z, mx, mz)
       m.lift = 3 + rand() * 4
       m.spin = (rand() * 2 - 1) * 1.5
       m.frame, m.flip, m.front = 0, 1, false
-      m.size = 0.40 + rand() * 0.50
+      m.size = (0.40 + rand() * 0.50) * big
       m.tint = tint
       m.ang = 0
       -- the kick itself: initial velocity the drag will spend
-      local k = StepFX.KICK * (0.75 + rand() * 0.5)
+      local k = StepFX.KICK * (0.75 + rand() * 0.5) * (soaked and 1.4 or 1)
+      if soaked then m.lift = m.lift * 1.6 end
       m.vx = -mx * k + (rand() * 2 - 1) * 4
       m.vz = -mz * k + (rand() * 2 - 1) * 4
       StepFX.emitted = StepFX.emitted + 1
@@ -150,7 +253,7 @@ local function footfall(x, z, mx, mz)
       m.lift = 2 + rand() * 3
       m.spin = (rand() * 2 - 1) * 3.0
       m.frame, m.flip, m.front = 0, 1, false
-      m.size = 0.55 + rand() * 0.55
+      m.size = (0.55 + rand() * 0.55) * big
       m.tint = tint
       m.ang = 0
       StepFX.emitted = StepFX.emitted + 1
@@ -239,6 +342,27 @@ local function updateBody(dt, voxelOn)
     stepCtx.originZ = (p.py or 0) + 8
     stepCtx.reach = StepFX.REACH * 16
     field:step(dt, stepCtx)
+    -- ------- the drops fall
+    --
+    -- The solver moved everything by its lift; this takes the lift down
+    -- (gravity) and ends a drop that has come back to the ground -- it
+    -- lands, it does not hover in a ring at ankle height.
+    local G = StepFX.DROP_G
+    local i = 1
+    while i <= field:count() do
+      local m = field:get(i)
+      if m and m.kind == "drop" then
+        m.lift = (m.lift or 0) - G * dt
+        local g = WindFX.groundAt(m.x, m.z)
+        if m.lift < 0 and m.y <= g + 0.6 then
+          field:kill(i)
+        else
+          i = i + 1
+        end
+      else
+        i = i + 1
+      end
+    end
   end
 end
 
@@ -253,6 +377,7 @@ end
 local CARD = {
   kick = { 1.05, 1.0, 1.0 },
   dust = { 1.80, 1.2, 1.1 },
+  drop = { 0.95, 0.8, 1.35 },   -- taller than wide: a drop, not a grain
 }
 
 local function drawWorldBody()
@@ -267,7 +392,8 @@ local function drawWorldBody()
     if not img then return nil end
     -- fast in (a step is sudden), long settle-out (dust dies by fading)
     local fade = math.min(1, m.t * 6, (m.ttl - m.t) * 1.6)
-    local a = 0.62 * fade
+    -- water is bright and hard-edged; it does not fade the way dust does
+    local a = (m.kind == "drop" and 0.92 or 0.62) * fade
     if a <= 0.02 then return nil end
     local c = CARD[m.kind] or CARD.kick
     local base = c[1] * (m.size or 1)

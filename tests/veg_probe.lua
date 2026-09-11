@@ -4,11 +4,14 @@
 --             ROUTE_1 (it has all three)
 --   SHEDS     under GALE, all classes with in-range sites emit within
 --             a ten-second window
---   ORIGIN    the heart of the task: young veg-marked leaves sit within
---             a crown's reach of a REAL tree site. pickKind's generic
---             storm leaves are not marked and not judged.
---   FLOOR     wind row OFF: nothing sheds, and the gate says why
+--   ORIGIN    the heart of the task: young falling leaves sit within a
+--             crown's reach of a REAL tree site
+--   CALM      wind row OFF: seeds and petals stop and the gate says why,
+--             while leaves keep falling at the calm trickle
 --   CLEAN     no errors, canaries alive
+--
+-- Where the leaves go after they let go -- the ground, the kick -- is
+-- tests/leaf_fall_probe.lua's to measure.
 --
 --   POKEPORT_VERSION=yellow DS_PROBE_DIR=<dir> \
 --   POKEPORT_DRIVER=mods/TERRARIUM/tests/veg_probe.lua gen1recomp
@@ -58,6 +61,7 @@ return function(game)
   local Wind     = lib.require("Wind")
   local WindFX   = lib.require("WindFX")
   local VegFX    = lib.require("VegFX")
+  local LeafFallFX = lib.require("LeafFallFX")
   local AmbientLife = lib.require("AmbientLife")
   local Quality  = lib.require("Quality")
   local Voxel3D  = lib.require("Voxel3D")
@@ -102,19 +106,22 @@ return function(game)
   local checked, violations, worst = 0, 0, 0
   for i = 1, 600 do
     coroutine.yield()
-    if i % 10 == 0 then
-      for j = 1, WindFX.count() do
-        local m = WindFX.get(j)
-        if m and m.veg and m.kind == "leaf" and m.t < 0.15 then
+    if i % 5 == 0 then
+      for j = 1, LeafFallFX.count() do
+        local m = LeafFallFX.get(j)
+        -- judged where it LET GO, not where a gale has carried it since:
+        -- a leaf is born anywhere under its crown, within SHED_R of it
+        if m and m.kind == "fall" and m.bornX and m.t < 0.15 then
           local best = 1e9
           for k = 1, #S.trees do
             local t = S.trees[k]
-            local d = math.max(math.abs(m.x - t.x), math.abs(m.z - t.z))
+            local dx, dz = m.bornX - t.x, m.bornZ - t.z
+            local d = math.sqrt(dx * dx + dz * dz)
             if d < best then best = d end
           end
           checked = checked + 1
           if best > worst then worst = best end
-          if best > 24 then violations = violations + 1 end
+          if best > LeafFallFX.SHED_R + 0.01 then violations = violations + 1 end
         end
       end
     end
@@ -128,9 +135,9 @@ return function(game)
   log(("sheds verdict: %s%s")
       :format((dl > 3 and ds > 3 and petalOk) and "PASS" or "FAIL",
               irF == 0 and "  (no flowers in range: petal not judged)" or ""))
-  log(("origin: %d young veg leaves checked, worst crown distance %.1f px,"
-       .. " violations %d  %s")
-      :format(checked, worst, violations,
+  log(("origin: %d young falling leaves checked, worst distance from a crown"
+       .. " at birth %.1f px (SHED_R %d), violations %d  %s")
+      :format(checked, worst, LeafFallFX.SHED_R, violations,
               (checked >= 5 and violations == 0) and "PASS" or "FAIL"))
 
   -- ------- the picture: shot against the nearest in-range tree
@@ -146,12 +153,12 @@ return function(game)
         :format(near.x, near.z, near.h,
                 tostring(sx and math.floor(sx)), tostring(sy and math.floor(sy))))
   end
-  -- every veg mote's screen position, projected in the same resume the
+  -- every falling leaf's screen position, projected in the same resume the
   -- capture is scheduled in, so the offline crop can ring them -- a green
   -- leaf against a green crown needs the ring to be seen at all
-  for j = 1, WindFX.count() do
-    local m = WindFX.get(j)
-    if m and m.veg then
+  for j = 1, LeafFallFX.count() do
+    local m = LeafFallFX.get(j)
+    if m and not m.dying then
       local mx, my = Voxel3D.project(m.x, m.y, m.z)
       if mx and my then
         log(("MOTE %s %d %d"):format(m.kind, math.floor(mx), math.floor(my)))
@@ -160,30 +167,32 @@ return function(game)
   end
   shot("veg.png")
 
-  -- ------- FLOOR
+  -- ------- CALM: the wind's debris stops, the leaves do not
   do
     Wind.setting:sync(0)
-    wait(60)
+    wait(420)                         -- the smoothed amount has to sink first
     local l1, s1, f1 = VegFX.emittedLeaf, VegFX.emittedSeed, VegFX.emittedPetal
-    wait(300)
-    local still = (VegFX.emittedLeaf - l1) + (VegFX.emittedSeed - s1)
-                + (VegFX.emittedPetal - f1)
-    log(("floor: %d emissions with the row OFF  gate [%s]  %s")
-        :format(still, tostring(VegFX.lastGate),
-                (still == 0 and VegFX.lastGate == "wind below FLOOR")
-                and "PASS" or "FAIL"))
+    wait(600)
+    local still = (VegFX.emittedSeed - s1) + (VegFX.emittedPetal - f1)
+    local leaves = VegFX.emittedLeaf - l1
+    log(("calm: amount %.2f  %d seeds+petals with the row OFF  gate [%s]"
+         .. "  leaves still falling %d  %s")
+        :format(Wind.amount(), still, tostring(VegFX.windGate), leaves,
+                (still == 0 and VegFX.windGate == "wind below FLOOR"
+                 and leaves > 0) and "PASS" or "FAIL"))
     Wind.setting:sync(4)
   end
 
   -- ------- CLEAN
-  log(("errors: %s (%d)"):format(tostring(VegFX.lastError), VegFX.errorCount))
+  log(("errors: veg=%s (%d)  leaves update=%s (%d) draw=%s (%d)")
+      :format(tostring(VegFX.lastError), VegFX.errorCount,
+              tostring(LeafFallFX.lastError), LeafFallFX.errorCount,
+              tostring(LeafFallFX.drawError), LeafFallFX.drawErrors))
   log(("canaries: VegFX.ticks %d live %d  WindFX gate [%s] batches %s  "
        .. "Weather.ticks %s ok %s")
       :format(VegFX.ticks, VegFX.ticksLive, tostring(WindFX.lastGate),
               tostring(WindFX.lastBatches),
               tostring(Weather.ticks), tostring(Weather.ticksOk)))
-
-
 
   log("done")
   logf:close()

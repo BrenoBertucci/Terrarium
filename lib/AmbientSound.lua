@@ -206,6 +206,19 @@ local THUNDER = {
   } } },
 }
 
+-- A boot landing in standing water: a short crack of bright noise (the
+-- slap) and a wetter tail that falls off (the spray coming down). Kept
+-- SHORT -- a splash is over in a third of a second, and a longer tail
+-- reads as a bucket. Chip on purpose: a one-shot this brief is what the
+-- noise channel is good at, unlike the beds (see the note over RAIN).
+local SPLASH = {
+  channels = { { hw = 4, program = {
+    { noiseNote = { len = 2, volume = 11, fade = 1, parameter = noise(3, 7) } },
+    { noiseNote = { len = 5, volume = 8, fade = 3, parameter = noise(5, 6) } },
+    { noiseNote = { len = 6, volume = 4, fade = 4, parameter = noise(6, 7) } },
+  } } },
+}
+
 -- id -> spec, in the order they are registered. The ids carry the mod's own
 -- prefix because the sfx registry is one flat namespace shared with the ROM's
 -- two hundred effects.
@@ -216,6 +229,7 @@ AmbientSound.PROGRAMS = {
   { "TR_AMB_LAP", LAP },
   { "TR_AMB_RAIN", RAIN },
   { "TR_AMB_THUNDER", THUNDER },
+  { "TR_STEP_SPLASH", SPLASH },
 }
 
 -- ------- registration
@@ -345,6 +359,12 @@ AmbientSound.THUNDER = { file = "thunder.ogg", chip = "TR_AMB_THUNDER",
 -- (house default for anything that never had a synth version).
 AmbientSound.GRASS = { file = "grass.ogg", chip = nil, gain = 0.42 }
 
+-- A step into a puddle (lib/StepFX asks for it). No recording ships; a
+-- sound pack that drops splash.ogg beside the others is used instead of
+-- the synth, the way every bed here works.
+AmbientSound.SPLASH = { file = "splash.ogg", chip = "TR_STEP_SPLASH",
+                        gain = 0.50 }
+
 -- ------- decoding
 --
 -- Decoded to a SoundData and rebuilt into a Source rather than handed to
@@ -464,12 +484,26 @@ local function sourceFor(key, spec)
     sources[key] = false
     return nil
   end
-  local src, err = fromFile(spec)
+  -- A recording that is simply NOT SHIPPED is not "unusable": the splash
+  -- has none by design, and the synth is its sound rather than its
+  -- fallback. Only a file that exists and will not decode is worth a line.
+  local shipped = true
+  if spec.file then
+    local okA, Assets = pcall(require, "src.render.Assets")
+    if okA and Assets and Assets.exists then
+      local okE, ex = pcall(Assets.exists, V.path .. "/" .. AUDIO .. spec.file)
+      if okE and ex == false then shipped = false end
+    end
+  else
+    shipped = false
+  end
+  local src, err
+  if shipped then src, err = fromFile(spec) else err = "not shipped" end
   if not src then
     -- the recording is not usable: say so ONCE, then fall back to the synth
     -- when there is one. Beds with chip = nil degrade quiet -- no blip, no
     -- spam: the ambient just is not there for that layer.
-    if V.mod and V.mod.log then
+    if shipped and V.mod and V.mod.log then
       if spec.chip then
         V.mod.log:warn("ambient sound: %s unusable (%s) -- falling back to "
                        .. "the synthesized program",
@@ -632,6 +666,47 @@ function AmbientSound.playGrass(wx, wz)
   end
 end
 
+-- The splash, one clone per foot that can land before the last is done.
+-- Deeper water is louder and a little lower.
+local splashVoices = nil
+AmbientSound.splashPlays = 0
+
+function AmbientSound.playSplash(wx, wz, depth)
+  if not love.audio then return end
+  if not AmbientSound.enabled() then return end
+  if splashVoices == nil then
+    local base = sourceFor("splash", AmbientSound.SPLASH)
+    if not base then
+      splashVoices = false
+      return
+    end
+    splashVoices = { base }
+    for _ = 2, 3 do
+      local ok, clone = pcall(base.clone, base)
+      if ok and clone then splashVoices[#splashVoices + 1] = clone end
+    end
+  end
+  if not splashVoices then return end
+  depth = tonumber(depth) or 0.5
+  for _, src in ipairs(splashVoices) do
+    local ok, playing = pcall(src.isPlaying, src)
+    if not (ok and playing) then
+      pcall(src.setVolume, src,
+            AmbientSound.GAIN * sfxScale() * AmbientSound.SPLASH.gain
+            * (0.55 + 0.45 * depth))
+      pcall(src.setPitch, src, 0.88 + math.random() * 0.24 - depth * 0.12)
+      if wx and wz and SpatialAudio and SpatialAudio.place then
+        pcall(SpatialAudio.place, src, wx, 0, wz)
+      else
+        SpatialAudio.relative(src)
+      end
+      pcall(src.play, src)
+      AmbientSound.splashPlays = AmbientSound.splashPlays + 1
+      return
+    end
+  end
+end
+
 function AmbientSound.silence()
   for _, bed in pairs(beds) do
     if bed.src then pcall(bed.src.stop, bed.src) end
@@ -642,6 +717,9 @@ function AmbientSound.silence()
   end
   if type(grassVoices) == "table" then
     for _, src in ipairs(grassVoices) do pcall(src.stop, src) end
+  end
+  if type(splashVoices) == "table" then
+    for _, src in ipairs(splashVoices) do pcall(src.stop, src) end
   end
 end
 
