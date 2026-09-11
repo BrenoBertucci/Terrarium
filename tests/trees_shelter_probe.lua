@@ -62,8 +62,8 @@ return function(game)
   log("voxel shader:", Voxel3D.shader() and "PASS" or "FAIL",
       tostring(Voxel3D.shaderError))
   log("bake:", Trees3D.available() and "PASS" or "FAIL")
-  log(string.format("GroundFX thresholds: CANOPY_DRY=%.2f SNOW_KEEP=%.2f",
-                    GroundFX.CANOPY_DRY, GroundFX.CANOPY_SNOW_KEEP))
+  log(string.format("GroundFX thresholds: CANOPY_DRY=%.2f",
+                    GroundFX.CANOPY_DRY))
 
   local function settle(label)
     local ticks = 0

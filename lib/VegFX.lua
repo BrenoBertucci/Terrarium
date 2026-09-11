@@ -6,18 +6,27 @@
 -- from a grass tuft, a petal from a flower bed, each at the plant's own
 -- cell, so the gust that crosses a tree line visibly strips IT.
 --
--- ------- WINDFX'S FIELD, NOT ITS OWN -- THE FLOOR DECIDED
+-- ------- SEEDS AND PETALS: WINDFX'S FIELD -- THE FLOOR DECIDED
 --
 -- StepFX took its own field because a footstep makes dust in dead calm
--- and WindFX clears below FLOOR. Vegetation is the opposite case: nothing
--- tears off a plant in still air, so the clear-below-FLOOR contract is
--- not a problem, it is the CORRECT behaviour -- and sharing the field
--- buys the budget, the climate handling, the draw paths and the world
+-- and WindFX clears below FLOOR. A seed or a petal is the opposite case:
+-- nothing tears it off a plant in still air, so the clear-below-FLOOR
+-- contract is not a problem, it is the CORRECT behaviour -- and sharing the
+-- field buys the budget, the climate handling, the draw paths and the world
 -- pass for free. Emission goes through WindFX.emit (T11's API), marked
--- `veg` so a probe can tell a located leaf from pickKind's generic one.
+-- `veg` so a probe can tell a located mote from pickKind's generic one.
 -- The generic storm leaves STAY: in a gale the air legitimately carries
--- foliage from beyond the screen; this module adds the ones you can see
--- let go.
+-- foliage from beyond the screen.
+--
+-- ------- LEAVES: LEAFFALLFX, IN ANY AIR
+--
+-- A leaf is the one thing here the wind does not own. A tree drops leaves
+-- in still air too, and a leaf that reaches the ground stays there until
+-- something kicks it -- so a torn leaf goes to LeafFallFX, which owns the
+-- fall, the ground and the kick. Shedding runs at a trickle in dead calm
+-- and climbs with the wind, per tree in range and capped for the view; a
+-- gust still strips the tree line in a burst. It runs in the forest too,
+-- whose trees are authored (Trees3D.wantsMap) though its sky is not open.
 --
 -- ------- WHERE THE PLANTS ARE
 --
@@ -25,14 +34,18 @@
 -- authored answer the mesher builds geometry from, so a cell reads as a
 -- tree exactly when it LOOKS like one: `cylinder`/`canopy` crowns (with
 -- their class height, so the leaf starts at the crown and not the roots),
--- `grass` tufts, `flower` beds. Emission then SAMPLES the site lists a
--- few times per pulse instead of iterating them -- a forest map holds
--- hundreds of tree cells and O(attempts) does not care.
+-- `grass` tufts, `flower` beds. Emission then SAMPLES the site lists
+-- instead of iterating them -- a forest map holds hundreds of tree cells
+-- and O(attempts) does not care. Leaves sample a list of the trees in
+-- range, rebuilt every NEAR_EVERY seconds: drawing from the whole map and
+-- discarding the far picks makes the rate beside the player depend on how
+-- much forest lies far from them (SprayFX learned that one first).
 
 local V = ...
 
 local Wind = V.require("Wind")
 local WindFX = V.require("WindFX")
+local LeafFallFX = V.require("LeafFallFX")
 local TileShape = V.require("TileShape")
 local Quality = V.require("Quality")
 
@@ -42,11 +55,19 @@ local VegFX = {}
 
 local rand = math.random
 
-VegFX.EMIT_EVERY = 0.35     -- seconds between emission pulses
+VegFX.EMIT_EVERY = 0.35     -- seconds between seed and petal pulses
 VegFX.BURST_AT = 0.70       -- Wind.gust() that strips the trees
 VegFX.BURST_WAIT = 3.0      -- seconds between bursts
 VegFX.RANGE = 200           -- world px from the player a site may emit
-VegFX.SCAN = 64             -- cells scanned per axis from origin
+VegFX.SCAN = 64             -- cells per axis for a map that does not say its size
+VegFX.NEAR_EVERY = 0.5      -- seconds between rebuilds of the trees in range
+
+-- Leaves per second PER TREE IN RANGE, at PFX ON: what a crown lets go of
+-- in dead calm, what full wind adds on top, and the ceiling for the whole
+-- view -- a forest must not snow leaves.
+VegFX.LEAF_CALM = 1 / 150
+VegFX.LEAF_WIND = 1 / 40
+VegFX.LEAF_CAP = 3
 
 -- petals are the one tint the wind palette does not carry
 VegFX.PETAL = { { 0.98, 0.52, 0.55 }, { 0.97, 0.88, 0.90 } }
@@ -57,10 +78,16 @@ VegFX.sites = { mapId = nil, trees = {}, grass = {}, flowers = {} }
 
 local pulse = 0
 local burstCool = 0
+local leafDue = 0
+local near, nearN, nearCool, nearMap = {}, 0, 0, nil
+local grows = setmetatable({}, { __mode = "k" })
 
+-- `lastGate` is the module's (may leaves fall here at all); `windGate` is
+-- the seeds' and petals' (is there wind to tear them off).
 VegFX.ticks = 0
 VegFX.ticksLive = 0
 VegFX.lastGate = "never ran"
+VegFX.windGate = "never ran"
 VegFX.emittedLeaf = 0
 VegFX.emittedSeed = 0
 VegFX.emittedPetal = 0
@@ -81,8 +108,12 @@ local function scan(map)
   S.mapId = map.id
   local ok, shapes = pcall(TileShape.forMap, map)
   if not ok or not shapes then return end
-  for cy = 0, VegFX.SCAN - 1 do
-    for cx = 0, VegFX.SCAN - 1 do
+  -- the map's own size: the long routes run past any fixed window (Route
+  -- 17 is 144 cells tall), and their far trees shed like the near ones
+  local cols = tonumber(map.widthCells) or VegFX.SCAN
+  local rows = tonumber(map.heightCells) or VegFX.SCAN
+  for cy = 0, rows - 1 do
+    for cx = 0, cols - 1 do
       if map:inBounds(cx, cy) then
         -- trees and grass answer on the bottom-left collision tile, the
         -- same one every height reader uses
@@ -117,6 +148,30 @@ local function scan(map)
   end
 end
 
+-- The site lists for `map`, scanning it first when it is not the one held.
+-- LeafFallFX seeds a map's ground from the same trees that shed on it.
+function VegFX.sitesFor(map)
+  if VegFX.sites.mapId ~= map.id then scan(map) end
+  return VegFX.sites
+end
+
+-- Whether this map's trees are live: outdoors, or a tileset whose trees
+-- are authored (the forest). Trees3D is the one place that answers the
+-- second half; asked lazily and remembered per map.
+function VegFX.grows(map)
+  if not (map and map.def) then return false end
+  local known = grows[map]
+  if known ~= nil then return known end
+  local yes = Map.isOutdoor(map.def) and true or false
+  if not yes then
+    local ok, Trees3D = pcall(V.require, "Trees3D")
+    yes = (ok and Trees3D and Trees3D.wantsMap
+           and Trees3D.wantsMap(map, false)) and true or false
+  end
+  grows[map] = yes
+  return yes
+end
+
 -- one sampled attempt against one site list; returns the site when it is
 -- in range of the player, or nil
 local function pick(list, px, pz)
@@ -128,19 +183,42 @@ local function pick(list, px, pz)
   return s
 end
 
+local function refreshNear(trees, px, pz, mapId)
+  local R = VegFX.RANGE
+  local k = 0
+  for i = 1, #trees do
+    local s = trees[i]
+    if math.abs(s.x - px) <= R and math.abs(s.z - pz) <= R then
+      k = k + 1
+      near[k] = s
+    end
+  end
+  for i = k + 1, nearN do near[i] = nil end
+  nearN = k
+  nearCool = VegFX.NEAR_EVERY
+  nearMap = mapId
+end
+
 local function shedLeaf(s)
-  local tint = WindFX.LEAF[rand(1, #WindFX.LEAF)]
-  if WindFX.emit("leaf",
-                 s.x + (rand() * 2 - 1) * 6,
-                 s.h - 1 - rand() * 4,
-                 s.z + (rand() * 2 - 1) * 6,
-                 { ttl = 2.2 + rand() * 2.8,
-                   size = 0.60 + rand() * 0.80,
-                   -- a torn leaf sinks while the wind carries it; the
-                   -- ground clamp catches it long before the fade does
-                   lift = -(1 + rand() * 4),
-                   tint = tint, veg = true }) then
+  if LeafFallFX.shed(s.x, s.h - 1 - rand() * 4, s.z) then
     VegFX.emittedLeaf = VegFX.emittedLeaf + 1
+  end
+end
+
+-- The steady fall: a RATE, not a coin per pulse, so a view with forty
+-- crowns drops forty crowns' worth and a view with two drops two's.
+-- Jittered per frame so the leaves do not let go on a metronome.
+local function shedLeaves(dt, wind01, mul)
+  if nearN == 0 then
+    leafDue = 0
+    return
+  end
+  local rate = nearN * (VegFX.LEAF_CALM + VegFX.LEAF_WIND * wind01)
+  if rate > VegFX.LEAF_CAP then rate = VegFX.LEAF_CAP end
+  leafDue = leafDue + rate * mul * dt * (0.5 + rand())
+  while leafDue >= 1 do
+    leafDue = leafDue - 1
+    shedLeaf(near[rand(1, nearN)])
   end
 end
 
@@ -181,45 +259,27 @@ local function updateBody(dt, voxelOn)
 
   local Game = game()
   local ow = Game and Game.overworld
-  local amount = Wind.amount()
   local live = voxelOn and ow and ow.map and ow.player
-               and Map.isOutdoor(ow.map.def)
                and Game.stack and Game.stack:top() == ow
                and not ow.transitioning
-               and amount > WindFX.FLOOR
+               and VegFX.grows(ow.map)
   if not live then
     VegFX.lastGate =
       (not voxelOn and "voxelOn=false")
       or (not (ow and ow.map and ow.player) and "no overworld/map/player")
-      or (not Map.isOutdoor(ow.map.def) and "indoors")
       or (not (Game.stack and Game.stack:top() == ow) and "overworld not on top")
       or (ow.transitioning and "map transitioning")
-      or (amount <= WindFX.FLOOR and "wind below FLOOR")
-      or "unknown"
+      or "indoors"
+    VegFX.windGate = VegFX.lastGate
     return
   end
   VegFX.lastGate = "live"
   VegFX.ticksLive = VegFX.ticksLive + 1
 
-  if VegFX.sites.mapId ~= ow.map.id then scan(ow.map) end
-  local S = VegFX.sites
+  local S = VegFX.sitesFor(ow.map)
   local p = ow.player
   local px, pz = (p.px or 0) + 8, (p.py or 0) + 8
-
-  -- the gust that strips the tree line: a handful of leaves let go at
-  -- once, from real crowns, on the same envelope the WindFX front rides
-  if Wind.gust() >= VegFX.BURST_AT and burstCool <= 0 and #S.trees > 0 then
-    burstCool = VegFX.BURST_WAIT
-    for _ = 1, 5 + rand(0, 3) do
-      local s = pick(S.trees, px, pz)
-      if s then shedLeaf(s) end
-    end
-  end
-
-  pulse = pulse + dt
-  if pulse < VegFX.EMIT_EVERY then return end
-  pulse = pulse - VegFX.EMIT_EVERY
-
+  local amount = Wind.amount()
   -- chance climbs with how hard the air pulls; the PFX row scales it the
   -- way it scales every other particle budget
   local wind01 = (amount - WindFX.FLOOR) / 1.8
@@ -227,11 +287,36 @@ local function updateBody(dt, voxelOn)
   local mul = Quality.particles()
   if mul > 2 then mul = 2 end     -- MAX doubles the shed, not x4 -- a
                                   -- gale is already a gale
-  for _ = 1, 2 do
-    if rand() < 0.55 * wind01 * mul then
-      local s = pick(S.trees, px, pz)
-      if s then shedLeaf(s) end
+
+  -- ------- leaves, in any air
+  nearCool = nearCool - dt
+  if nearCool <= 0 or nearMap ~= S.mapId then
+    refreshNear(S.trees, px, pz, S.mapId)
+  end
+  shedLeaves(dt, wind01, mul)
+
+  -- ------- and what only the wind tears off
+  local outdoor = Map.isOutdoor(ow.map.def)
+  if not (outdoor and amount > WindFX.FLOOR) then
+    VegFX.windGate = outdoor and "wind below FLOOR" or "no open sky"
+    return
+  end
+  VegFX.windGate = "live"
+
+  -- the gust that strips the tree line: a handful of leaves let go at
+  -- once, from real crowns, on the same envelope the WindFX front rides
+  if Wind.gust() >= VegFX.BURST_AT and burstCool <= 0 and nearN > 0 then
+    burstCool = VegFX.BURST_WAIT
+    for _ = 1, 5 + rand(0, 3) do
+      shedLeaf(near[rand(1, nearN)])
     end
+  end
+
+  pulse = pulse + dt
+  if pulse < VegFX.EMIT_EVERY then return end
+  pulse = pulse - VegFX.EMIT_EVERY
+
+  for _ = 1, 2 do
     if rand() < 0.45 * wind01 * mul then
       local s = pick(S.grass, px, pz)
       if s then shedSeed(s) end

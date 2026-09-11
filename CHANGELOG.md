@@ -26,6 +26,206 @@ Tags and packages:
 
 ## Unreleased
 
+### As poças refeitas: campo de profundidade, shader próprio, nunca no lago
+
+- **Não são mais adesivos.** As três tiras de 16x16 em três tamanhos (13, 20,
+  28 px) saíram do caminho. Cada chunk de 16 células ganha, uma vez, um
+  CAMPO de profundidade de 128x128 texels (`lib/PuddleFX.lua`): as mesmas
+  sementes espaçadas por bloco que o GroundFX sempre colocou, cada uma uma
+  elipse com borda ruidosa. A umidade do chão vira uma LINHA D'ÁGUA sobre o
+  campo: a poça é onde o campo fica abaixo dela. Cresce do ponto mais fundo
+  para fora, texel a texel, e seca do mesmo jeito. Nada troca de desenho,
+  nada estoura (medido: contagem de células com água monotônica nos dois
+  sentidos, maior degrau 12 células em 625).
+- **Nunca sobre a água.** O campo é cortado na CÉLULA: texel sobre água,
+  margem de água (vizinho-4), grama, parede, porta ou altura diferente da
+  semente é zero e fica zero. O decal de 38 px que pendurava 19 px sobre o
+  lago não existe mais (medido na Route 25: 0 quads sobre ou ao lado de
+  água em 225).
+- **Desenhada como água.** Shader próprio no mesmo slot de decal (entre o
+  terreno e as figuras, com escrita de depth e o carimbo de alpha que o RTX
+  lê): reflexo do céu pela paleta da hora (horizonte/zênite pelo raio
+  refletido), brilho do sol na direção do ShadowMap (morre no nublado),
+  anéis de chuva por célula no relógio hasheado + chop de textura, anéis de
+  pé e de shaft, crista/vale sombreados por uma luz fixa do céu (senão um
+  anel num céu nublado é invisível), menisco na borda e HALO ÚMIDO — o piso
+  escurece ao redor antes da poça nascer e depois que ela seca.
+- **O RTX não estoura mais a poça.** `RayFX.PUDDLE_DIM` (0.62) escurece o
+  espelho da poça antes da mistura; piso de Fresnel 0.62 → 0.46, amount
+  0.96 → 0.92. Sob nublado a poça era o próprio céu (lençol branco); agora
+  é o céu, mais escuro.
+- **GLES:** nenhum uniform em região compartilhada pelos dois estágios,
+  linha de precisão sob a mesma guarda do Voxel3D (largada se recusada),
+  coordenadas do fragmento locais ao chunk (0..256), hashes lidos de textura.
+  Se o shader não compilar, o GroundFX volta aos decais antigos; um
+  `assets/ground/puddle.png` de artista também força os decais.
+- Invalidação por MAPA (`GroundFX.invalidate(mapId)`): cortar uma árvore na
+  rota não reconstrói as poças da cidade ao lado. Bake ~1.3–2.6 ms por chunk,
+  até 6 por frame.
+- Probe: `tests/puddle_field_probe.lua` (shader, lago, crescimento, secagem,
+  custo, fotos).
+
+### Pisar na poça: respingo, gotas que caem, e som
+
+- Uma passada dentro de água parada (o que a poça diz que TEM água agora,
+  `GroundFX.poolDepth`, não o molhado genérico do mapa) joga um punhado de
+  gotas em arco pra cima e pros lados, que caem com gravidade e morrem onde
+  pousam — mais gotas e mais altas quanto mais funda a poça. Jogador,
+  seguidor e NPCs, todos. `lib/StepFX.lua`, kind `drop`: o solver não tem
+  gravidade, então o StepFX desconta `DROP_G` do `lift` a cada frame e mata
+  o mote ao tocar o chão.
+- Som de splash posicional (`AmbientSound.playSplash`): programa chip
+  `TR_STEP_SPLASH` (crack curto + cauda úmida), 3 vozes, mais grave e mais
+  alto quanto mais funda; um `assets/audio/splash.ogg` de sound pack
+  substitui o chip. `sourceFor` deixou de avisar "unusable" para gravação
+  que simplesmente não existe.
+- Probe: `tests/puddle_splash_probe.lua` (anda até uma poça, conta gotas no
+  ar por frame, passadas que respingaram e sons tocados).
+
+### Folha que cai na poça faz anel
+
+- `LeafFallFX`: ao pousar, a folha pergunta `GroundFX.poolAt` na célula; se
+  há água parada, empurra o mesmo anel que um pé faz (`GroundFX.ripple`,
+  agora público: campo da poça + passe de tela do RTX). A folha continua
+  deitando onde caiu — `RAISE` (2.0) fica acima do plano da poça (0.7),
+  então ela flutua sobre o filme em vez de aparecer por baixo. Folha
+  chutada por quem anda e cai na água também toca (contada à parte:
+  `splashedKick`). Gotas do respingo de passo maiores (`m.size` 0.9–1.6).
+- Probe: `tests/leaf_pool_probe.lua` (solta folhas sobre poças e sobre
+  piso seco em calmaria, com o emissor natural das árvores desligado).
+
+### Silhueta do jogador atrás das árvores, e preta
+
+- As árvores voxel (`Trees3D`) eram desenhadas com os postes, tarde no
+  frame — DEPOIS do passe de silhueta, que pergunta ao depth "o mundo está
+  na frente do jogador?". Atrás de um Mart havia contorno; atrás de uma
+  copa o jogador simplesmente sumia. As copas agora vão pro depth antes
+  do passe (`VoxelScene.render`, com seams/glass desligados e a neve do
+  mundo mantida), então a silhueta aparece através de qualquer árvore.
+- A cor foi de cinza 0.26 a 50% (um verde ligeiramente diferente sobre a
+  copa) para preto a 85%. Probe: `tests/ghost_tree_probe.lua` (A/B com e
+  sem silhueta no retângulo projetado do jogador: 3480 vs 146 pixels
+  quase pretos atrás da copa de Viridian (4,16)).
+
+### Chuva nas figuras: gotas que caem, não filetes pintados
+
+- Os filetes que o shader de cena pintava nos texels do sprite (`wet` no
+  bloco coat) estão DESLIGADOS (`RainOnFX.PAINT = false`): liam como o
+  desenho molhado, não a pessoa. No lugar, `RainOnFX` solta gotinhas
+  (`Weather.figureDrip`, o mesmo mote de drip dos beirais, a MEIO tamanho,
+  sem bead) do topo da figura, na FRENTE do card, que estouram nos pés.
+  3,2/s por figura encharcada; continua pingando uns segundos depois da
+  chuva. Probe: `tests/figure_drip_probe.lua`.
+
+### A neve refeita do zero: superfície, deformação, rastro permanente, neve caindo
+
+- **Não é mais decal.** As três tiras de drift, as três de crust e o sticker de
+  pegada saíram (`assets/ground/snow-*.png` apagados; `GroundFX` só guarda o
+  relógio `cover`). A neve é uma SUPERFÍCIE que o shader de cena desenha em
+  toda face que aponta para o céu — chão, telhado, topo de muro, ledge, copa,
+  cerca-viva, ponta da grama — com a forma de uma nevasca: dois swells de
+  value noise ancorados no mundo (11 e 32 px) fazem drifts e depressões que
+  pertencem ao lugar e não rastejam sob a câmera. Chega suave em vez de em
+  degraus dithered, fica na luz da hora (azul do céu nas depressões, quente do
+  sol nas cristas), brilha onde o sol pega uma crista e apaga na sombra, e a
+  parede leva 0.42 dela (era 0.34) para a cerca-viva ler como nevada.
+- **Deforma, e o rastro fica** (`lib/SnowField.lua`): um campo por mapa, um
+  texel por pixel de mundo (2 nas rotas mais longas), R = pisado, G = neve
+  empurrada para a borda. Cada andarilho (jogador, NPC, Pokémon selvagem)
+  escreve nele a partir da mesma lista `feet` que a grama e o desgaste já
+  leem: em neve funda os pernas abrem uma vala da largura do corpo (limitada a
+  0.62 para as pegadas continuarem legíveis dentro dela); a cada 8 px de
+  andar uma pegada em forma de bota, longa no sentido do passo, alternando os
+  lados; e a neve deslocada empilha ao redor. O shader lê o campo no estágio
+  de FRAGMENTO (cinco taps; refusável por nenhum driver GLES2, ao contrário
+  do tap de vértice do desgaste), transforma a inclinação entre texels em
+  normal e ilumina com o sol E com uma luz-chave fixa vinda do topo da tela —
+  a convenção do olho; do lado da câmera lia como relevo, medido — para a
+  vala ler ao meio-dia e sob o encoberto da própria nevasca. O rastro é
+  PERMANENTE: ar parado não assenta nada; só neve nova enterra (7 minutos de
+  queda cheia) e o degelo apaga; os últimos 6 mapas guardam o seu. O upload
+  é por blocos de 32x32 tocados (23 blocos/frame medidos; a caixa envolvente
+  dava 182 com seis andarilhos espalhados).
+- **Cobre parte do jogador.** Uma nevasca cheia esconde botas e canelas — 5 px
+  de 16, joelho, nunca enterrado — pelo mesmo corte do card que a waterline
+  do nadador usa, com um colar branco baixo (12 x ~3.5 px) na frente das
+  pernas para a figura estar NA neve e não num buraco. Enquanto cai, a neve
+  assenta no topo das figuras (chapéu, ombros, orelhas): o shader pinta os
+  texels cuja vizinha de cima é transparente, esfarelado por texel da sheet
+  (por pixel de tela virou chuvisco), e escorrega em meio minuto depois que
+  o céu abre ou ao entrar num interior.
+- **Neve caindo das coisas** (`lib/SnowFallFX.lua`, campo próprio do solver de
+  partículas, desenhado no passe 3D com oclusão): telhados soltam placas pelo
+  beiral de tempos em tempos (sítios escaneados pelo perfil de forma: célula
+  não andável com tampa plana acima do chão e vizinha sul andável), com
+  gravidade integrada no `lift` do solver; cada torrão que pousa EMPILHA o
+  campo (`SnowField.heap`) — drift sob cada beiral no fim da tempestade. Uma
+  árvore em que o jogador esbarra (borda de subida de `player.bumpFrames`,
+  a célula à frente é `cylinder`/`canopy`) despeja a copa em cima dele:
+  `SnowField.dumpOn` vira coat por figura, anel de neve ao redor dos pés,
+  6 s de espera por árvore; rajada forte (`Wind.gust() > 0.72`) sacode uma
+  copa perto sozinha.
+- **Chuva escorrendo nas pessoas** (`lib/RainOnFX.lua` + bloco do coat no
+  shader): filetes de água descendo pelo card da figura — uma conta brilhante
+  com rastro que some, em poucas colunas da sheet por vez, três passadas em
+  velocidades diferentes com colunas sorteadas por hash a cada passada. Só
+  enquanto a chuva alcança a figura (sob copa ou numa porta do SHELTER não;
+  para em 6 s depois que a chuva para). Sem asset: é procedural no shader
+  (uniforms `wet`, `rainTime`). E o passo em chão encharcado espirra água
+  (`StepFX.WATER`). (Uma primeira versão com figura escurecida, brilho,
+  pingos estourando, gotas caindo da figura, Pokémon se sacudindo e calhas
+  foi descartada a pedido.)
+- **Coisas pequenas de imersão**: vapor da respiração em todo mundo no frio
+  (`lib/BreathFX.lua`; inverno do SYNC, neve no chão ou caindo; mais rápido
+  andando), a neve do chapéu se soltando em pitadas quando a figura anda
+  (`SnowFallFX.shedCoat`), pingos de degelo nos beirais enquanto o `cover`
+  cai (`eavesDrip`), e gelo nas janelas (`frost` no bloco do vidro, grão por
+  pixel de mundo, 0.25 só pelo calendário de inverno).
+- **Passo na neve** (`StepFX`): a neve não abafa mais o passo, muda ele —
+  pó branco no chute e na nuvem, um pouco maior.
+- **Flocos** (`Weather`): 300 no ar (era 140), cada um com o DESENHO do
+  Breno — `assets/weather/snowflake.png`, 4 frames 32x32 cortados do sheet
+  de 1536x1024 por `tools/cut_snowflakes.py` (1,2 MB viraram 8 KB, fundo
+  chaveado em alfa suave para os braços finos sobreviverem à redução) —
+  girando ao cair, desenhados no passe 3D pelo `ParticleMesh` com oclusão
+  (`Weather.drawWorldFlakes`, chamado do VoxelScene). No modo 2D o caminho
+  antigo desenha pontos suaves sem textura.
+- Provas: `tests/snow_probe.lua` (4 rungs compilam; campo 640x576 a 1 px;
+  pressão 0.75 sob o caminho, borda 0.89; rastro sobrevive a 400 frames de ar
+  parado; enterra sob neve nova forçada; degelo zera; GROUND OFF zera;
+  telhados e árvores forçados). `tools/essl1_check.py` ALL PASS.
+
+### Folhas que caem, ficam no chão e se espalham quando alguém passa
+
+- **A queda** (`lib/VegFX.lua`): as árvores soltam folha em qualquer ar — um
+  gotejar em calmaria, mais com vento, e o burst da rajada continua. A taxa é
+  por árvore EM ALCANCE (sorteio na lista perto do jogador, não no mapa
+  inteiro) e tem teto para a vista. A floresta de Viridian também solta. O
+  scan de sítios passou a usar o tamanho real do mapa: as rotas longas tinham
+  árvores além da janela fixa de 64 células que nunca soltavam nada.
+- **O ar** (`lib/LeafFallFX.lua`): a folha que cai é a folha do vento (a strip
+  EdgeLoopRepeat, mesma massa e área no solver), agora com peso: `lift` vira
+  afundamento com velocidade terminal e o bob do solver faz o balanço da queda.
+  Campo próprio, então sobrevive ao vento cair abaixo do FLOOR.
+- **O chão** (`lib/LeafLitter.lua`): folha que pousa em célula aberta (andável,
+  plana ou canteiro; nunca grama alta, telhado, ledge, água ou copa) deita como
+  card plano numa malha estática — um draw call para o mapa inteiro, reescrita
+  só no slot que mudou. Cada rota começa semeada a partir das próprias árvores
+  (gerador com semente no id do mapa: mesma rota, mesmo chão). Célula cheia
+  aceita a folha nova e a mais antiga dali cede o lugar. Os últimos 3 mapas
+  guardam o chão.
+- **O chute**: quem se move (jogador, Pikachu, NPCs) lança as folhas no raio do
+  pé para os lados da passada com um saltinho; elas pousam de novo ao lado do
+  caminho. Andar não apaga folha. Bike chuta mais forte, folha molhada gruda, e
+  com neve o chão de folhas fica soterrado.
+- **Substitui a versão incompleta** que trocava a folha do WindFX por uma física
+  própria com o sprite antigo, perdia todo o chão ao entrar em batalha ou menu e
+  alocava closure por frame no draw.
+- Provas: `tools/run_leaf_litter_offline.py` e `tools/run_leaf_fall_offline.py`
+  (lupa, sem GPU: invariantes do armazém, conservação de toda folha, zero
+  escrita num chão parado, zero alocação em regime) e
+  `tests/leaf_fall_probe.lua` (`tests/run_leaves.cmd`) no jogo.
+
 ## 1.34.5-beta
 
 **A loja, a cripta e a torre ficavam PRETAS no Android — e perfeitas no PC.**

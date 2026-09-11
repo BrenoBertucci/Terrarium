@@ -579,6 +579,15 @@ local function drawEntity(sprite, px, py, facing, phase, flip, gh, colors,
   -- (castShadows draws this mesh through ShadowMap.snug) -- is where each
   -- vertex asks whether the light reached it; see ShadowMap.snug for why
   -- the lookup must match the stored transform to the letter
+  -- for the coat: one sheet texel, and where this frame's top row is,
+  -- so the shader knows a card's own top edge from the frame above it
+  if ((Voxel3D.coat or 0) > 0 or (Voxel3D.wet or 0) > 0) and tex and tex.getDimensions then
+    local iw, ih = tex:getDimensions()
+    local fy = frame * 16
+    if fy + 16 > ih then fy = 0 end
+    Voxel3D.coatSheet = { iw, ih }
+    Voxel3D.coatTop = fy / ih
+  end
   Voxel3D.draw(mesh, tex, billboardMatrix(px, py, y, mirror),
                billboardPull(),
                ShadowMap.snug(Voxel3D.casterMatrix(px, py, y, mirror)))
@@ -742,10 +751,64 @@ end
 -- below). Only that one entry gets the see-through treatment: NPCs and the
 -- ghosts standing on a neighbour map are left to honest occlusion, because
 -- it is only your own character you cannot afford to lose behind a roof.
+-- ------- how far into the snow everybody stands
+--
+-- World pixels of every walker's card hidden by the fall on the ground:
+-- the snow's depth (GroundFX, on the row's own gates) through the field's
+-- ruler (SnowField.sink). Zero on a bare or indoor map, so the card is the
+-- card it always was. Read once per frame for the whole cast: the cover is
+-- one number for the map, and a walker is always standing in the trench
+-- they just pressed, so a per-spot reading would say "no snow" under
+-- everybody (see SnowField.sink for why).
+local function snowSinkNow(state)
+  local okD, depth = pcall(GroundFX.snowDepth, state.map)
+  if not (okD and depth and depth > 0) then return 0 end
+  local okS, SF = pcall(V.require, "SnowField")
+  if not (okS and SF and SF.sink) then return 0 end
+  local okC, px = pcall(SF.sink, depth)
+  return (okC and tonumber(px)) or 0
+end
+
+-- ------- and the snow on their shoulders
+--
+-- How much is lying on everybody's hat and shoulders, 0..1: climbs over a
+-- few seconds while the fall is coming down where the camera is, and
+-- slides off over half a minute after it stops -- or the moment you step
+-- indoors, where Weather.visible already answers nothing. The scene
+-- shader paints it along each card's top edges (Voxel3D's coat block).
+local coatK = 0
+local coatAt = nil
+local function coatNow()
+  local now = (love.timer and love.timer.getTime and love.timer.getTime())
+              or 0
+  local dt = (coatAt and (now - coatAt)) or 0
+  coatAt = now
+  if dt < 0 then dt = 0 elseif dt > 0.1 then dt = 0.1 end
+  local kind, power = nil, 0
+  local okW, Weather = pcall(V.require, "Weather")
+  if okW and Weather and Weather.visible then
+    local okv, k, p = pcall(Weather.visible)
+    if okv then kind, power = k, tonumber(p) or 0 end
+  end
+  local target = 0
+  if kind == "snow" and GroundFX.enabled() then
+    target = math.min(1, power * 1.25)
+  end
+  if target > coatK then
+    coatK = coatK + (target - coatK) * math.min(1, dt / 6)
+  else
+    coatK = coatK - dt / 30
+    if coatK < target then coatK = target end
+  end
+  if coatK < 0 then coatK = 0 end
+  return coatK
+end
+
 local function posesOf(state, spriteColors)
   local colors = spriteColors(state.map)
   local posed = {}
   local me = nil
+  local sinkPx = snowSinkNow(state)
   for _, g in ipairs(state.ghosts or {}) do
     local sprite, vx, vy, facing, phase, flip = g.npc:pose()
     local gpx, gpy = vx + g.ox, g.npc.py + g.oy
@@ -767,6 +830,13 @@ local function posesOf(state, spriteColors)
         if okc and cut and cut > wl then wl = cut end
       end
     end
+    -- and the SNOW, through the same cut: a walker in a drift is in it
+    -- to the shin, and the collar drawn after the figures hides the boots
+    local sink = 0
+    if not onWater and sinkPx > 0 then
+      sink = sinkPx
+      if sink > wl then wl = sink end
+    end
     if onWater then
       local okl, lift = pcall(Water.standAnimLift, gpx + 8, gpy + 8)
       hop = (okl and lift) or 0
@@ -777,6 +847,8 @@ local function posesOf(state, spriteColors)
       gh = entityGround(g.map or state.map, g.npc, gpx, gpy) + hop,
       lift = onWater and 0 or (g.npc.py - vy),
       waterline = wl,
+      sink = sink,
+      ent = g.npc,
       colors = spriteColors(g.map or state.map),
       -- A ghost stands on a NEIGHBOUR map, and the persistent wear field
       -- bound this frame belongs to the map underfoot. Its world position
@@ -829,6 +901,12 @@ local function posesOf(state, spriteColors)
           if okc and cut and cut > wl then wl = cut end
         end
       end
+      -- and the SNOW, through the same cut (see the ghosts above)
+      local sink = 0
+      if not onWater and sinkPx > 0 then
+        sink = sinkPx
+        if sink > wl then wl = sink end
+      end
       if onWater then
         local okl, lift = pcall(Water.standAnimLift, drawPx + 8, drawPy + 8)
         hop = (okl and lift) or 0
@@ -841,6 +919,8 @@ local function posesOf(state, spriteColors)
         gh = entityGround(state.map, e, drawPx, drawPy) + hop,
         lift = onWater and 0 or (drawPy - vy),
         waterline = wl,
+        sink = sink,
+        ent = e,
         colors = colors,
         -- Who is doing the walking, for the persistent wear field. Taken
         -- from the entity here rather than guessed at the write site: the
@@ -1600,8 +1680,39 @@ function VoxelScene.render(state, w, h, vw, vh, paletteFor)
   Skyline.draw(state, cx, cy, vh)
 
   Voxel3D.snowTop = GroundFX.snowTint(state.map)
+  -- and the rime on the windows: the snow's depth, and a little for the
+  -- winter calendar on its own -- a cold clear morning frosts a pane too
+  do
+    local okD, depth = pcall(GroundFX.snowDepth, state.map)
+    local f = (okD and tonumber(depth)) or 0
+    local okW, Weather = pcall(V.require, "Weather")
+    if okW and Weather and Weather.isWinter then
+      local okw, winter = pcall(Weather.isWinter)
+      if okw and winter and f < 0.25 and GroundFX.enabled()
+         and Map.isOutdoor(state.map.def) then
+        f = 0.25
+      end
+    end
+    Voxel3D.frost = f
+  end
+  -- and what walkers did to it: the deformation field for THIS map, set
+  -- for every draw of this map's own geometry and dropped for a
+  -- neighbour's (its trails are its own and it is not asked for them --
+  -- the same one-field rule the wear map keeps, for the same upload)
+  local snowField = nil
+  local snowState = nil
+  if Voxel3D.snowTop > 0 then
+    local okS, SF = pcall(V.require, "SnowField")
+    if okS and SF then
+      snowField = SF
+      local okT, st = pcall(SF.state)
+      if okT then snowState = st end
+    end
+  end
+  Voxel3D.snowMap = snowState
   local box = VoxelScene.bounds(cx, cy, vw, vh, false)
   Voxel3D.drawGroup(terrain, atlasFor(state.map), nil, nil, nil, box)
+  Voxel3D.snowMap = nil
   for i, nb in ipairs(state.neighbors or {}) do
     Voxel3D.drawGroup(nbMesh[i], atlasFor(nb.map),
                       Mat4.translate(nb.ox, 0, nb.oy), nil, nil,
@@ -1617,6 +1728,7 @@ function VoxelScene.render(state, w, h, vw, vh, paletteFor)
       shopSheet = okK and ShopKit and ShopKit.SHEET or nil
     end
     Voxel3D.glass(false)
+    Voxel3D.snowMap = snowState
     for _, g in ipairs(ChunkMesher.spriteGroups(state.map) or {}) do
       -- the Mart's interior is one of these groups, and it is the only one
       -- whose sheet is banded by material: its rows say plaster, steel,
@@ -1627,6 +1739,7 @@ function VoxelScene.render(state, w, h, vw, vh, paletteFor)
       Voxel3D.draw(g.mesh, g.tex, nil, nil, nil, 0)
       if isShop then Voxel3D.shopMats(false) end
     end
+    Voxel3D.snowMap = nil
     for _, nb in ipairs(state.neighbors or {}) do
       for _, g in ipairs(ChunkMesher.spriteGroups(nb.map) or {}) do
         Voxel3D.draw(g.mesh, g.tex,
@@ -1676,6 +1789,36 @@ function VoxelScene.render(state, w, h, vw, vh, paletteFor)
   -- the panes' atlas positions stripe the cast with lamplight at night
   Voxel3D.glass(false)
 
+  -- ------- THE TREES, and they have to be here
+  --
+  -- The authored trees (lib/Trees3D.lua) were drawn with the street lamps,
+  -- late in the frame, because their bake is its own texture and wants the
+  -- seams and the window-light mask off as the posts do. Late was wrong for
+  -- one thing: the silhouette below asks the depth buffer "is the world in
+  -- front of the player", and a crown that had not been drawn yet was not
+  -- in the world -- walk behind a tree and you simply vanished, while a
+  -- Mart gave you an outline. So the crowns go down here, with the same
+  -- state the lamp pass gives them, and the snow the world is wearing (the
+  -- characters' pass turned it off just above; a crown is a thing it falls
+  -- on). Depth-tested and depth-writing like any voxel, so their order
+  -- against everything else is decided by the buffer, not by this line.
+  do
+    local okT, Trees3D = pcall(V.require, "Trees3D")
+    if okT and Trees3D then
+      Voxel3D.seams(false)
+      Voxel3D.snowTop = snowOnWorld
+      pcall(Trees3D.draw, state.map, outdoor)
+      for _, nb in ipairs(state.neighbors or {}) do
+        if mapInBox(nb.map, box, nb.ox, nb.oy) then
+          local nOut = nb.map and nb.map.def and Map.isOutdoor(nb.map.def)
+          pcall(Trees3D.draw, nb.map, nOut, nb.ox, nb.oy)
+        end
+      end
+      Voxel3D.snowTop = 0
+      Voxel3D.seams(true)
+    end
+  end
+
   -- The player's silhouette goes down BEFORE the characters, so the only
   -- thing it can meet in the depth buffer is the WORLD -- terrain, buildings,
   -- trees. Drawn after the solid pass it would meet the player's own card
@@ -1703,10 +1846,39 @@ function VoxelScene.render(state, w, h, vw, vh, paletteFor)
   -- character genuinely behind a building is far deeper and loses the
   -- test, so buildings and trees really occlude.
   Voxel3D.seams(false)
+  -- the snow on everybody's hat and shoulders, for the length of this
+  -- pass and no longer (see coatNow) -- and on top of it whatever a
+  -- shaken tree dropped on this one figure in particular
+  local coatBase = coatNow()
+  -- and how much rain is running down each one (lib/RainOnFX.lua), on a
+  -- clock the rivulets slide on -- off for anything that is not a figure
+  local rainOn = nil
+  do
+    local okR, R = pcall(V.require, "RainOnFX")
+    if okR and R and R.wetOf then rainOn = R end
+    Voxel3D.rainTime = (love.timer and love.timer.getTime and love.timer.getTime()) or 0
+  end
   for _, p in ipairs(posed) do
+    local c = coatBase
+    if snowField and p.ent then
+      local okc, d = pcall(snowField.coatOf, p.ent)
+      if okc and d and d > c then c = d end
+    end
+    Voxel3D.coat = c
+    -- what the shader may PAINT on the card: nothing, unless RainOnFX.PAINT
+    -- -- the rain on a figure is drops falling past it now, spawned in
+    -- RainOnFX's own update, not rivulets on the drawing
+    local w = 0
+    if rainOn and p.ent then
+      local okw, ww = pcall(rainOn.paintOf or rainOn.wetOf, p.ent)
+      w = (okw and tonumber(ww)) or 0
+    end
+    Voxel3D.wet = w
     drawEntity(p.sprite, p.px, p.py, p.facing, p.phase, p.flip, p.gh,
                p.colors, p.lift, p.waterline)
   end
+  Voxel3D.coat = 0
+  Voxel3D.wet = 0
   -- back on for everything textured from the atlas again -- figures, grass
   -- and flowers all sample it, where the mask's coordinates are honest
   Voxel3D.glass(true)
@@ -1716,10 +1888,12 @@ function VoxelScene.render(state, w, h, vw, vh, paletteFor)
   -- Drawn after the walkers so a player standing in front of the couch
   -- wins the overlap, which is the order the flat game draws them in.
   local figPull = billboardPull()
+  Voxel3D.snowMap = snowState
   eachFigure(state.map, 0, 0, function(mesh, model, caster)
     Voxel3D.draw(mesh, atlasFor(state.map), model, figPull,
                  ShadowMap.snug(caster))
   end)
+  Voxel3D.snowMap = nil
   for _, nb in ipairs(state.neighbors or {}) do
     eachFigure(nb.map, nb.ox, nb.oy, function(mesh, model, caster)
       Voxel3D.draw(mesh, atlasFor(nb.map), model, figPull,
@@ -1731,6 +1905,35 @@ function VoxelScene.render(state, w, h, vw, vh, paletteFor)
   -- in these passes rather than in the terrain group -- which is why the
   -- crowns stayed green while the ground and the walls went white.
   Voxel3D.snowTop = snowOnWorld
+  -- ------- the snow around everybody's legs
+  --
+  -- The card cut hid the boots; this is what hides them. One small white
+  -- card per sunk walker, on the same feet pivot and lean as the figure,
+  -- pulled a hair nearer than it so it wins the depth test in front of
+  -- the shins -- and drawn with the snow back ON, so it is snow standing
+  -- in the hour's light rather than a white sticker (SnowField.collar).
+  if snowField then
+    local cpull = billboardPull() + 0.75
+    local drewOne = false
+    for _, p in ipairs(posed) do
+      if p.sink and p.sink > 0 then
+        local mesh, img = snowField.collar(p.sink)
+        if mesh then
+          if not drewOne then
+            Voxel3D.glass(false)
+            Voxel3D.snowMap = snowState
+            drewOne = true
+          end
+          local y = p.gh + (p.lift or 0)
+          Voxel3D.draw(mesh, img, billboardMatrix(p.px, p.py, y, false),
+                       cpull,
+                       ShadowMap.snug(Voxel3D.casterMatrix(p.px, p.py, y,
+                                                           false)))
+        end
+      end
+    end
+    if drewOne then Voxel3D.glass(true) end
+  end
   -- and the seams are back on for the terrain art that follows: grass and
   -- flowers are the world's own drawing, not people
   Voxel3D.seams(true)
@@ -1831,6 +2034,8 @@ function VoxelScene.render(state, w, h, vw, vh, paletteFor)
         -- rather than needing a second parallel list that could fall out
         -- of step with this one.
         p.wearKind or "npc",
+        -- 8th: the entity itself, for the snow field's per-walker stride
+        p.ent,
       }
     end
     foot(me)
@@ -1898,6 +2103,19 @@ function VoxelScene.render(state, w, h, vw, vh, paletteFor)
         pcall(function() Voxel3D.wearMap = GW.state(0, 0) end)
       end
     end
+    -- ------- and the SNOW, from the same list
+    --
+    -- The deformation field (lib/SnowField.lua) wants exactly what the
+    -- wear field wants -- who is where, and whether they are stepping --
+    -- so it is written from the same feet rather than gathered again.
+    -- Bound and stepped by GroundFX's tick; only the map underfoot, like
+    -- wear; a ghost on a neighbour map weighs nothing there.
+    if snowField then
+      for i = 1, #feet do
+        local f = feet[i]
+        pcall(snowField.walk, f[8], f[1], f[2], f[7], (f[4] or 0) > 1.0, dt)
+      end
+    end
     if not crush then
       -- springs unavailable: the old per-frame list, which is still right,
       -- just instant
@@ -1905,6 +2123,7 @@ function VoxelScene.render(state, w, h, vw, vh, paletteFor)
     end
     Voxel3D.crush = crush
   end
+  Voxel3D.snowMap = snowState
   Voxel3D.draw(ChunkMesher.grass(state.map), grassTex, nil, pull,
                nil, sway)
   -- ------- and the neighbour maps get NO wear, on purpose
@@ -1919,6 +2138,7 @@ function VoxelScene.render(state, w, h, vw, vh, paletteFor)
   -- behind the map transition, and the alternative is paying for four
   -- fields to decorate the strip you are about to leave.
   Voxel3D.wearMap = nil
+  Voxel3D.snowMap = nil
   for _, nb in ipairs(state.neighbors or {}) do
     if mapInBox(nb.map, box, nb.ox, nb.oy) then
       local ntex = grassTex
@@ -1952,8 +2172,10 @@ function VoxelScene.render(state, w, h, vw, vh, paletteFor)
   -- shorter and stiffer than a grass tuft, and they are also the one thing
   -- in a meadow the eye settles on
   local fsway = sway * Wind.FLOWER_SHARE
+  Voxel3D.snowMap = snowState
   Voxel3D.draw(ChunkMesher.flowers(state.map), atlasFor(state.map), nil,
                fpull, ShadowMap.snug(nil), fsway)
+  Voxel3D.snowMap = nil
   for _, nb in ipairs(state.neighbors or {}) do
     if mapInBox(nb.map, box, nb.ox, nb.oy) then
       Voxel3D.draw(ChunkMesher.flowers(nb.map), atlasFor(nb.map),
@@ -1964,6 +2186,7 @@ function VoxelScene.render(state, w, h, vw, vh, paletteFor)
   Voxel3D.crush = nil
   Voxel3D.crushMap = nil
   Voxel3D.grassLoad = nil
+  Voxel3D.snowMap = nil
 
   -- Street lamps last among the world props: poles take the hour's light,
   -- heads flatten to lampColor after dusk so a DEEP night still has light
@@ -1979,22 +2202,9 @@ function VoxelScene.render(state, w, h, vw, vh, paletteFor)
       pcall(StreetLamps.draw, nb.map, nOut, nb.ox, nb.oy)
     end
   end
-  -- Authored trees ride the same pass for the same reason: their bake is
-  -- its own texture, not the tileset atlas, so they need seams and the
-  -- window-light mask off exactly as the posts do. When no bake is present
-  -- this is a no-op and the hulls in the terrain mesh are the forest.
-  do
-    local okT, Trees3D = pcall(V.require, "Trees3D")
-    if okT and Trees3D then
-      pcall(Trees3D.draw, state.map, outdoor)
-      for _, nb in ipairs(state.neighbors or {}) do
-        if mapInBox(nb.map, box, nb.ox, nb.oy) then
-          local nOut = nb.map and nb.map.def and Map.isOutdoor(nb.map.def)
-          pcall(Trees3D.draw, nb.map, nOut, nb.ox, nb.oy)
-        end
-      end
-    end
-  end
+  -- The authored trees used to ride this pass too, for the same reason
+  -- (their bake is not the tileset atlas). They are drawn up with the
+  -- world now, BEFORE the player's silhouette -- see the note there.
   Voxel3D.glass(true)
   -- and, underground, the corridor itself: slab, walls, the fittings the
   -- lamps are supposed to be coming out of, and the LED run along the foot
@@ -2048,6 +2258,34 @@ function VoxelScene.render(state, w, h, vw, vh, paletteFor)
   do
     local okS, StepFX = pcall(V.require, "StepFX")
     if okS and StepFX and StepFX.drawWorld then pcall(StepFX.drawWorld) end
+  end
+  -- and the snow coming off the roofs and the trees, for the same reason:
+  -- a slab sliding off the far side of a roof is behind that roof
+  do
+    local okF, SnowFallFX = pcall(V.require, "SnowFallFX")
+    if okF and SnowFallFX and SnowFallFX.drawWorld then
+      pcall(SnowFallFX.drawWorld)
+    end
+  end
+  -- and everybody's breath in the cold
+  do
+    local okB, BreathFX = pcall(V.require, "BreathFX")
+    if okB and BreathFX and BreathFX.drawWorld then pcall(BreathFX.drawWorld) end
+  end
+  -- and the snowflakes, with their own drawing, in the world rather than
+  -- over it: one behind a roof is behind the roof
+  do
+    local okW, Weather = pcall(V.require, "Weather")
+    if okW and Weather and Weather.drawWorldFlakes then
+      pcall(Weather.drawWorldFlakes)
+    end
+  end
+  -- and the leaves, falling and lying where they fell: cutouts from the
+  -- wind's own strip, so they write depth like the wind's sprites do --
+  -- lazily, for the same require-cycle caution
+  do
+    local okL, LeafFallFX = pcall(V.require, "LeafFallFX")
+    if okL and LeafFallFX and LeafFallFX.drawWorld then pcall(LeafFallFX.drawWorld) end
   end
   -- and the ambient life, in the same pass and for the same reason: a
   -- butterfly crossing in front of the Mart used to be drawn over its roof

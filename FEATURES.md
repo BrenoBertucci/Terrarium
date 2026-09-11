@@ -544,6 +544,34 @@ Below a floor of wind, indoors, under a canopy, or with the row OFF, it
 draws nothing at all: a calm day is calm, and motes drifting through a still
 meadow would be the effect announcing itself.
 
+### Leaves that come down, and stay down
+
+The trees drop leaves. A leaf lets go from somewhere under a real crown, not
+out of a box of air, and comes down the way the wind's own leaf moves: the
+same tumbling strip, the same weight, the same eddies, with a flutter on the
+way down. In dead calm a treed route drops a slow trickle; the harder the
+wind pulls, the more comes off, and a gust strips a handful at once. The
+forest drops them too, though its sky is not open.
+
+What lands on open ground **stays there**. Paths, dirt and flower beds keep
+their leaves; a leaf that comes down on a roof, a ledge, water, a crown or
+into tall grass is gone into it. Every route starts with the leaves its trees
+would already have dropped — around each crown, a little further downwind —
+and the same route shows the same ground every time you walk onto it. Stay
+under the trees long enough and the ground fills up; once a patch is full, a
+new leaf takes the place of the one that has lain there longest.
+
+**Walk through them and they scatter.** Anyone moving — you, Pikachu, the
+people on the route — flicks the leaves in their way to the sides of the
+stride with a little hop, and they settle again beside the path. Walking
+deletes nothing: the path clears because its leaves moved. A bike kicks
+harder, soaked leaves stick, and under snow the litter is buried.
+
+The ground remembers the last three maps you walked. It costs next to nothing
+per frame: the lying leaves are one mesh, rewritten only where a leaf lands or
+leaves, and the **PFX** row scales how many leaves the air and the ground may
+hold.
+
 ## What the meadow remembers — the wear field
 
 Everything above is *reactive*. The wind pushes and the tuft leans back; a boot
@@ -619,43 +647,103 @@ screen not taking part in the evening. With the **RTX** row at RT or MAX they
 also *reflect*: the same ray march across the same depth buffer the ponds
 get, so a pool on the road carries the hedge beside it.
 
-**Snow** falls in three drawings rather than one at three sizes — a dusting
-caught in the seams of the paving, then patches, then lying with the ground
-showing through in dithered holes. That is the difference between snow and
-water: a pool is the same pool getting wider, and a snowfall is a different
-picture at each depth.
+The puddles and the wet prints are drawn as **geometry between the ground
+and the people standing on it**, not as an overlay: a butterfly is in front
+of the world and a puddle is underneath the person standing in it. So they
+are depth-tested — a puddle behind the Mart stays behind the Mart — take the
+hour's light and the sun's own shadows for free, and never paint over
+anybody's feet. The price of that footing is the same one the steam off a
+mug pays: it wants the **VOXEL** camera on.
 
-And it settles on **everything** — the hedges, the trees, the roofs — not
-only on the ground you can walk on. A field of snow with green bushes
-standing in it reads as a fresh coat of paint. What wears a cap is any cell
-you cannot stand on that stands above the ground, which is the shape
-profile's own description of a tree or a roof and needs no list of tile ids.
-
-And **footprints**, behind everybody: you, the NPCs, the wild Pokémon in the
-grass. Dropped on the cell somebody *left* rather than the one they arrived
-at, so the trail is behind them, and filled back in over half a minute —
-faster while it is still snowing, because that is what snow does to a
-footprint. When the list is full the oldest print *somebody else* left goes
-first, so your own trail survives a meadow full of wandering Rattata.
-
-All of it is drawn as **geometry between the ground and the people standing
-on it**, not as an overlay: a butterfly is in front of the world and a puddle
-is underneath the person standing in it. So it is depth-tested — a puddle
-behind the Mart stays behind the Mart — takes the hour's light and the sun's
-own shadows for free, and never paints over anybody's feet. The price of that
-footing is the same one the steam off a mug pays: it wants the **VOXEL**
-camera on.
-
-The shapes are generated — an ellipse with a wobble, a blob with a dithered
-fringe — but they are only the fallback. Drop a strip of 16×16 frames at
-`assets/ground/puddle.png`, `assets/ground/drift.png` or
-`assets/ground/print.png` and it is used as-is, however many frames wide it
-is, with nothing generated. Two rules a replacement has to keep, and both are
+The shapes are generated — an ellipse with a wobble, a feathered patch of
+earth — but they are only the fallback. Drop a strip of 16×16 frames at
+`assets/ground/puddle.png` or `assets/ground/print.png` and it is used as-is,
+however many frames wide it is, with nothing generated. Two rules a replacement has to keep, and both are
 the scene shader's rather than this feature's: the **alpha is the shape** (
 anything under half alpha is discarded rather than blended, so draw hard
 edges and dither a fringe), and the **RGB is a tone, not a colour** (every
 texel is multiplied by the colour this picks, so a strip drawn in greys lands
 right at every hour and one drawn in blue comes out blue times blue at dusk).
+
+### The rain on the people in it
+
+While the rain reaches a figure — you, an NPC, a Pokémon in the street —
+water **runs down** their card: thin rivulets, a bright bead with a fading
+tail sliding down a few columns of the drawing at a time, starting over from
+the top in different columns on every pass (`lib/RainOnFX.lua` says how much
+rain reaches whom; the scene shader draws it). Under a tree's crown, or in a
+doorway the SHELTER row walked them to, it stops; a few seconds after the sky
+clears it stops everywhere. A boot on a soaked road throws water, not dust.
+
+### The snow
+
+The snow is not a decal, and it is not one number for the whole map any
+more. It is a **surface** the scene shader draws on every face that points at
+the sky — the ground, a roof, a wall's top, a ledge, the crown of a tree and
+a hedge, the cap of a grass tuft — with the shape of a fall: two swells of
+world-anchored noise heap it into drifts and hollows that belong to the place
+they lie in and never crawl under the camera. It arrives smoothly as the
+cover works rather than in dithered rungs, stands in the hour's light with
+the sky's blue in its hollows and the sun's warmth on its crests, glitters
+where the sun lands on a crest and goes out under a shadow, and a wall takes
+only a third of it so a snowed town is white roofs over its own walls and not
+white boxes.
+
+**It deforms.** Every walker — you, the NPCs, the wild Pokémon — writes into
+a field the snow remembers (`lib/SnowField.lua`, one texel per two to four
+world pixels, sized to the map): a groove the width of the body along the
+line of travel, a pit for every footfall either side of it, and the snow
+that was displaced heaped along the edge. The shader reads that field back in
+the fragment stage — five texture reads on snowed ground, and no geometry
+rebuilt under anybody — turns the slope between neighbouring texels into a
+normal, and lights it with the sun and with a fixed key from the top of the
+screen (the one direction the eye assumes light comes from, so a pit reads
+as a pit at noon and under an overcast). That is the whole of why a trail reads as
+*dug* rather than painted: one wall of every groove is in its own shadow and
+the other catches the light, the rim does the opposite, the floor of the
+trench is sky-lit and cool, and where a boot went through a shallow fall the
+paving shows at the bottom. And it **stays**: a trail outlives the walk,
+the map change and the clock — still air settles nothing — and only two
+things take it away: fresh snow buries it over minutes of a full fall, and
+the thaw wipes it. The last six maps keep theirs.
+
+**And it covers you.** A full fall hides a walker's boots and shins — five of
+a sixteen-pixel sprite, knee-deep and never buried — through the same cut in
+the card a swimmer's waterline uses, with a low white collar drawn in front of
+the legs so the figure stands *in* the drift rather than in a hole. While it
+is coming down, the flakes that land on a figure lie along its **top edges**
+— the hat, the shoulders, a Pokémon's ears — and slide off over half a minute
+after the sky clears or the moment you step indoors. A boot in a drift throws
+a pinch of white powder the way it throws dust off a dry road, and a tuft of
+grass bows under what has settled on it (see the WIND row).
+
+The fall itself is denser than it was — three hundred flakes tumbling on
+their own helices through the same wind the grass reads — and each flake
+wears a **drawing**: `assets/weather/snowflake.png`, four hand-drawn flakes
+cut into a 32×32 strip (`tools/cut_snowflakes.py`), spinning as they fall,
+drawn *in* the world with the other particles so one behind a roof is behind
+the roof. Replace the strip and every flake wears the new art. (With the 3D
+world off the flat path draws them as soft spots, which need no texture.)
+
+**And it comes down off things.** Every few seconds somewhere in a snowed
+town a roof lets a slab of its load slide off the eave — a scatter of clumps
+and a puff of powder, falling under gravity through the same air the dust
+and the leaves ride, occluded by whatever stands in front — and every clump
+that lands **heaps** the field where it fell, so by the end of a storm there
+is a drift under every eave. Walk into a tree and its crown drops what it
+was holding straight onto you: your hat and shoulders take the load (it
+slides off over half a minute), a ring of fallen snow grows around your
+feet, and the tree needs a few seconds before it has anything more to drop.
+A strong gust shakes a crown near you the same way on its own
+(`lib/SnowFallFX.lua`).
+
+**And the small things.** Everybody out in the cold — you, the NPCs, the
+Pokémon in the streets — puffs **breath** every few seconds, quicker on the
+move, that rises and takes the wind (`lib/BreathFX.lua`; winter on the SYNC
+calendar, snow lying or snow falling). A figure walking in a heavy coat of
+snow **sheds** it in pinches off the hat and shoulders. Once the thaw starts,
+the eaves **drip** meltwater. And the windows wear a feathered **rime** with
+the cold, thickest at the edges of every pane.
 
 ## Who is out right now — the ECOLOGY row
 

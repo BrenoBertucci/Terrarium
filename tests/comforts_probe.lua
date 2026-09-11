@@ -331,8 +331,8 @@ return function(game)
     log("  FAIL: the tag window reaches opaque geometry -- everything on "
         .. "screen would reflect")
   end
-  log(("puddles float at %.2f, drifts at %.2f, prints at %.2f")
-      :format(GroundFX.PUDDLE, GroundFX.DRIFT, GroundFX.PRINT))
+  log(("puddles float at %.2f, wet prints at %.2f")
+      :format(GroundFX.PUDDLE, GroundFX.PRINT))
 
   for _, a in ipairs({ 0.0, 0.2, 0.34, 0.5, 0.67, 0.9, 1.0 }) do
     log(("amount %.2f -> size step %d of %d"):format(
