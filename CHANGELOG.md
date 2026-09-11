@@ -20,13 +20,13 @@ The old `-mobile` channel is retired. Historical tags keep it (`v1.28.0-mobile` 
 
 Tags and packages:
 
-- Git tag: `v1.35.0-beta`
-- Zip asset: `TERRARIUM-1.35.0-beta.zip`
-- `manifest.json` / catalog `version` field: `1.35.0-beta`
+- Git tag: `v1.36.0-beta`
+- Zip asset: `TERRARIUM-1.36.0-beta.zip`
+- `manifest.json` / catalog `version` field: `1.36.0-beta`
 
 ## Unreleased
 
-## 1.35.0-beta
+## 1.36.0-beta
 
 **Beta para testes e nada mais.**
 
@@ -115,6 +115,10 @@ Tags and packages:
 - Probe: `tests/worldmap_new_probe.lua` (build, 47 lugares, shaders,
   rota do objetivo, strings, Fly, Area, Classic por paleta, fotos) e
   `tests/worldmap_discover_probe.lua` (o que o Town Map do engine carrega).
+
+## 1.35.0-beta
+
+**Beta para testes e nada mais.**
 
 ### As poças refeitas: campo de profundidade, shader próprio, nunca no lago
 

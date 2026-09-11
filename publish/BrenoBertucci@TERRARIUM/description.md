@@ -38,6 +38,18 @@ Upstream Dramatic Shape still uses `3` / `5` / `6` / `7` / `8` / `9`.
 - Wild Pokemon visible in the grass; ecology / shelter / city life systems
 - Tuned defaults for lower-end / mobile hardware
 
+## New in 1.36.0-beta
+
+**Beta para testes e nada mais.**
+
+The Town Map rebuilt from the classic picture as a 3D diorama (every town,
+route, cave and landmark where the Game Boy puts them; objective routed
+along the roads; classic inset; MAP 3D / CLASSIC row; US English).
+Swimmers drag the water: foam collar, churned wash, V wake, bow push, foam
+trail, splash in, drip out, the card rocking on the swell. Snow refills a
+trail under the fall, landed flakes join the cover, prints keep a packed
+floor, and the cover reaches the boots and no further.
+
 ## New in 1.35.0-beta
 
 **Beta para testes e nada mais.**
