@@ -251,3 +251,8 @@ tools/_tree_src/
 
 # tools/kit_headless.py renders and face dumps
 tools/_kit_out/
+
+# Shop-interior audit screenshots: probe output (tens of MB of PNGs per
+# round), not source. The audit lives in the notes; the frames stay here.
+assets/docs/shop/audit/
+assets/docs/shop/audit2/
