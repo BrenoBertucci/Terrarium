@@ -38,6 +38,13 @@ Upstream Dramatic Shape still uses `3` / `5` / `6` / `7` / `8` / `9`.
 - Wild Pokemon visible in the grass; ecology / shelter / city life systems
 - Tuned defaults for lower-end / mobile hardware
 
+## New in 1.35.0-beta
+
+**Beta para testes e nada mais.**
+
+Puddles as a depth field, snow as a surface with tracks, leaves on the
+ground, rain drips off figures, silhouette through trees.
+
 ## New in 1.34.5-beta
 
 **Beta para testes e nada mais.**

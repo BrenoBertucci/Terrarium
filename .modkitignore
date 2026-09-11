@@ -247,6 +247,24 @@ tools/essl1_check.py
 tools/pack_release.py
 tools/run_autoquality_offline.py
 
+# 1.35 puddle/snow/leaf probes and authoring tools. deploy.cmd is a
+# machine-local overlay helper and must never ship.
+tests/figure_drip_probe.lua
+tests/ghost_tree_probe.lua
+tests/leaf_fall_offline.lua
+tests/leaf_fall_probe.lua
+tests/leaf_litter_offline.lua
+tests/leaf_pool_probe.lua
+tests/puddle_field_probe.lua
+tests/puddle_splash_probe.lua
+tests/rain_on_probe.lua
+tests/run_leaves.cmd
+tests/snow_probe.lua
+tools/cut_snowflakes.py
+tools/deploy.cmd
+tools/run_leaf_fall_offline.py
+tools/run_leaf_litter_offline.py
+
 # NOTE: twenty older probes are still NOT listed here and therefore still
 # ship (ambient_beds, ambsound_cost, carry_headless, coexist, ds_z_anchor,
 # hidden_glint, ice_sprite, mesh_lod, minimap, puddle_rtx, qol_extras,
