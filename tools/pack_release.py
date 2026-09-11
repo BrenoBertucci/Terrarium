@@ -13,12 +13,12 @@
 #   * files added since the last zip are picked up from an explicit list, so
 #     a new module cannot be left out silently.
 #
-#   python tools/pack_release.py 1.35.0-beta
+#   python tools/pack_release.py 1.36.0-beta
 import io, os, sys, zipfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-VERSION = sys.argv[1] if len(sys.argv) > 1 else "1.35.0-beta"
-PREV = os.path.join(ROOT, "publish-zip", "TERRARIUM-1.34.5-beta.zip")
+VERSION = sys.argv[1] if len(sys.argv) > 1 else "1.36.0-beta"
+PREV = os.path.join(ROOT, "publish-zip", "TERRARIUM-1.35.0-beta.zip")
 OUT = os.path.join(ROOT, "publish-zip", "TERRARIUM-%s.zip" % VERSION)
 
 DROP_PREFIXES = ("probe_out_", "publish-zip/")
@@ -36,6 +36,7 @@ ADDED = [
     "lib/SnowFallFX.lua",
     "lib/SnowField.lua",
     "assets/weather/snowflake.png",
+    "lib/WakeFX.lua",
 ]
 
 prev = zipfile.ZipFile(PREV)
