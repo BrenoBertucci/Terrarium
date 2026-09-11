@@ -74,6 +74,13 @@ function RainOnFX.setWet(ent, k)
   if ent then wet[ent] = tonumber(k) or 0 end
 end
 
+-- A figure that just came out of the water is as wet as one that walked
+-- through a shower (lib/WakeFX.lua): it drips for the same few seconds.
+function RainOnFX.soak(ent, k)
+  if not ent then return end
+  wet[ent] = math.max(wet[ent] or 0, math.min(1, tonumber(k) or 1))
+end
+
 -- How much of the rivulet painting the scene shader should draw on this
 -- figure: the wetness if PAINT is on, nothing otherwise. What VoxelScene
 -- hands the shader.

@@ -59,6 +59,16 @@ function Mat4.rotateY(a)
            0, 0, 0, 1 }
 end
 
+-- About Z: a roll in the card's own plane (a swimmer rocking on the
+-- swell, lib/VoxelScene.lua).
+function Mat4.rotateZ(a)
+  local c, s = math.cos(a), math.sin(a)
+  return { c, -s, 0, 0,
+           s, c, 0, 0,
+           0, 0, 1, 0,
+           0, 0, 0, 1 }
+end
+
 function Mat4.rotateX(a)
   local c, s = math.cos(a), math.sin(a)
   return { 1, 0, 0, 0,

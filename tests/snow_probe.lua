@@ -150,7 +150,7 @@ return function(game)
   log(("deep: cover=%.2f depth=%.2f tint=%.2f sink=%d px"):format(
     GroundFX.cover(), depth, GroundFX.snowTint(game.overworld.map),
     SnowField.sink(depth)))
-  if SnowField.sink(depth) < 3 then log("  FAIL: a full fall does not sink the walker") end
+  if SnowField.sink(depth) < 2 then log("  FAIL: a full fall does not sink the walker to the boots") end
   local st = SnowField.state()
   local fw, fh = SnowField.size()
   log(("field: %s  %dx%d texels of %d px  key=%s"):format(

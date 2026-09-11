@@ -1417,6 +1417,14 @@ precision highp sampler2D;
   uniform float iceSparkle;   // cold silver glint on frozen plates
   uniform float stepJitter;   // 0..1 footstep crack on ice (visual only)
   uniform float waterWet;     // 0..1 rain on water (micro-ripples + heavy foam)
+  // ------- THE SWIMMERS (lib/WakeFX.lua): up to eight bodies moving through
+  // this sheet this frame. xy = world XZ, zw = unit heading; S = (speed 0..1,
+  // how much wake they still own -- grows as they move, dissolves after they
+  // stop). PIXEL-only, like everything in this block, so nothing here is a
+  // link-precision question.
+  uniform float wakeN;
+  uniform vec4 wakeP[8];
+  uniform vec2 wakeS[8];
   // Optional world-XZ surface art (assets/water/water.png). Sampler always
   // bound (blank when the file is missing); waterArtOn gates the replace.
   uniform Image waterArt;
@@ -2407,6 +2415,54 @@ precision highp sampler2D;
         rgb = mix(rgb, vec3(0.95, 0.97, 1.0) * light, veil);
         alpha = max(alpha, veil);
       }
+      // ------- THE WAKE: what a swimmer drags behind it
+      //
+      // A Kelvin wake: two arms at nineteen and a half degrees off the
+      // heading (tan = 0.354), foam along them fading with distance, the
+      // transverse ripples inside the V riding the foam's own clock, and a
+      // crescent of bow foam pushed ahead of the body. All of it scaled by
+      // how much wake the swimmer owns, so a stop dissolves it instead of
+      // cutting it.
+      // Four parts, the way a boat's wake photographs from above: a
+      // COLLAR of foam round the body where the water is pushed aside; the
+      // WASH, a straight churned-white lane directly astern, mottled and
+      // fading over a few body lengths; the V ARMS off the wash, fainter;
+      // and the BOW push ahead. The wash is the loud part -- the arms are
+      // what the eye reads as speed.
+      float wake = 0.0;
+      for (int i = 0; i < 8; i++) {
+        if (float(i) >= wakeN) break;
+        vec4 w = wakeP[i];
+        vec2 s = wakeS[i];
+        vec2 d = vWorld.xz - w.xy;
+        float along = -dot(d, w.zw);
+        float across = abs(d.x * w.w - d.y * w.z);
+        float r = length(d);
+        // the churn: two crossed ripples on the foam's clock, so the wash
+        // and the collar are mottled water and not paint
+        float churn = 0.55 + 0.45 * sin(along * 0.9 + across * 1.7 - foamPhase * 4.5)
+                            * sin(across * 2.3 - along * 0.5 + foamPhase * 3.0);
+        // the collar round the body, lapping
+        float lapR = 6.2 + 0.8 * sin(foamPhase * 3.0 + atan(d.y, d.x) * 3.0);
+        float collar = (1.0 - smoothstep(lapR, lapR + 2.2, r)) * step(4.2, r) * churn;
+        // the bow: pushed ahead, strongest at speed
+        float bow = (1.0 - smoothstep(5.0, 8.5, r)) * step(0.0, -along) * (0.3 + 0.7 * s.x);
+        // the wash astern: a lane a body wide, widening a little, mottled
+        float L = 40.0 + 46.0 * s.x;
+        float laneW = 3.4 + along * 0.07;
+        float lane = (1.0 - smoothstep(laneW * 0.6, laneW, across)) * step(0.0, along);
+        float fade = clamp(1.0 - along / L, 0.0, 1.0);
+        float wash = lane * fade * fade * (0.45 + 0.55 * churn);
+        // the arms of the V off the wash, thin and fainter
+        float arm = along * 0.354 + 1.5;
+        float armW = 1.1 + along * 0.05;
+        float v = exp(-((across - arm) * (across - arm)) / (armW * armW))
+                * step(0.0, along) * clamp(1.0 - along / (L * 1.25), 0.0, 1.0) * 0.55;
+        wake += (collar * 0.8 + bow * 0.7 + wash * 1.0 + v) * s.y;
+      }
+      wake = clamp(wake, 0.0, 1.0) * (1.0 - freeze);
+      rgb = mix(rgb, waterFoam * light, wake * (0.78 + 0.22 * check));
+      alpha = max(alpha, wake * 0.9);
       // THE SHORE: a foam ring where the sheet meets the bank, lapping on
       // the tide's clock and reaching further under chop.
       float lap = 0.10 * sin(foamPhase * 2.0 + vWorld.x * 0.21 + vWorld.z * 0.16);
@@ -2623,6 +2679,11 @@ precision highp sampler2D;
       // below the ground; the heap it displaced stands on top
       float press = min(pressed * snowPress, depth);
       float h = depth - press + rim * 0.30 * base;
+      // A boot never digs to the grass: what it leaves underfoot is PACKED
+      // snow, so the cover's presence is judged with the press only half
+      // counted -- the relief below still uses the full press (the trench
+      // is as deep as it is), the coverage just does not open a hole.
+      float hLay = depth - press * 0.45 + rim * 0.30 * base;
       // ------- where it lies at all
       //
       // A smooth arrival over the first third of the depth, broken only
@@ -2632,7 +2693,7 @@ precision highp sampler2D;
       // goes fully white however deep the fall -- and the tiles read
       // through at the deepest cover, a little: a roof buried to 1.0 is a
       // white block and the town turns to boxes.
-      float lay = smoothstep(0.03, 0.30, h + (grain - 0.5) * 0.05);
+      float lay = smoothstep(0.03, 0.30, hLay + (grain - 0.5) * 0.05);
       lay *= mix(snowSide, 1.0, upness);
       lay = min(lay, 0.95);
       if (lay > 0.0) {
@@ -2679,7 +2740,11 @@ precision highp sampler2D;
         // shows almost none.
         float thin = 1.0 - base * 0.45;
         float dirt = hollow * thin * thin;
-        snow = mix(snow, p.rgb * light * 0.80, dirt * 0.70);
+        // packed snow first -- grey-blue, sky-lit, the colour of a trodden
+        // path -- with only a hint of the ground under it; the ground
+        // itself shows through where the fall is a dusting
+        vec3 trodden = mix(snowColor * skyTint * 0.62, p.rgb * light * 0.80, 0.08 + 0.32 * thin * thin);
+        snow = mix(snow, trodden, clamp(hollow * 0.9, 0.0, 1.0) * (0.55 + 0.45 * dirt));
         // ------- and where the sun lands on a crest, it GLITTERS
         //
         // A few per cent of the covered pixels, gated on the sun actually
@@ -4381,6 +4446,9 @@ Voxel3D.coatTop = 0
 -- and how much rain is running down the figure in hand, plus the clock
 -- the rivulets slide on (VoxelScene sets both around the character pass)
 Voxel3D.wet = 0
+-- The swimmers the water sheet paints a wake for this frame: a list of
+-- { x, z, dirx, dirz, speed, active }, written by lib/WakeFX.lua.
+Voxel3D.wake = nil
 Voxel3D.rainTime = 0
 
 -- How tall a leaning thing stands, in world pixels, when the caller does
@@ -4742,6 +4810,23 @@ function Voxel3D.drawWater(group, texture, model, b)
   pcall(sh.send, sh, "waterPass", 1)
   sendSnowMap(sh, nil)
   sendCoat(sh, false)
+  -- the swimmers this frame (lib/WakeFX.lua writes Voxel3D.wake)
+  do
+    local wk = Voxel3D.wake
+    local n = (type(wk) == "table") and #wk or 0
+    if n > 8 then n = 8 end
+    pcall(sh.send, sh, "wakeN", n)
+    if n > 0 then
+      local P, S = {}, {}
+      for i = 1, 8 do
+        local w = wk[i]
+        P[i] = w and { w[1], w[2], w[3], w[4] } or { 0, 0, 0, 1 }
+        S[i] = w and { w[5], w[6] } or { 0, 0 }
+      end
+      pcall(sh.send, sh, "wakeP", P[1], P[2], P[3], P[4], P[5], P[6], P[7], P[8])
+      pcall(sh.send, sh, "wakeS", S[1], S[2], S[3], S[4], S[5], S[6], S[7], S[8])
+    end
+  end
   if texture and texture.getWidth then
     pcall(sh.send, sh, "waterTexel", { 1 / texture:getWidth(),
                                        1 / texture:getHeight() })
