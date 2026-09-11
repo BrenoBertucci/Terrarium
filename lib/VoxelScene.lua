@@ -461,7 +461,7 @@ VoxelScene._cardPitch = cardPitch
 -- Shared by the solid draw and the silhouette below, so the two can never
 -- drift apart -- a silhouette standing anywhere but exactly behind the
 -- figure would read as a second character.
-local function billboardMatrix(px, py, y, mirror)
+local function billboardMatrix(px, py, y, mirror, roll)
   local m = Mat4.translate(px + 8, y, py + 8)
   -- dead-on at the camera. A "best side" under-rotation toward the
   -- drawing's own cardinal lived here for a while (MarioCam.presentYaw);
@@ -471,6 +471,9 @@ local function billboardMatrix(px, py, y, mirror)
   local yaw = cardYaw()
   if yaw ~= 0 then m = Mat4.mul(m, Mat4.rotateY(yaw)) end
   m = Mat4.mul(m, Mat4.rotateX(cardPitch() - math.pi / 2))
+  -- a swimmer ROCKS: a small roll about the feet, on the swell's own
+  -- tempo, so the card is a body on water and not a picture cut in half
+  if roll and roll ~= 0 then m = Mat4.mul(m, Mat4.rotateZ(roll)) end
   if mirror then m = Mat4.mul(m, Mat4.scale(-1, 1, 1)) end
   return Mat4.mul(m, Mat4.translate(-8, 0, 0))
 end
@@ -538,7 +541,7 @@ end
 -- `lift` raises the figure off the ground plane (ledge hops arc UP in 3D,
 -- where the 2D path could only slide the sprite north).
 local function drawEntity(sprite, px, py, facing, phase, flip, gh, colors,
-                          lift, waterline)
+                          lift, waterline, swim)
   local def = sprite.def
   local tex = sprite:resolveImage()
   if colors and not def.trueColor then
@@ -588,7 +591,14 @@ local function drawEntity(sprite, px, py, facing, phase, flip, gh, colors,
     Voxel3D.coatSheet = { iw, ih }
     Voxel3D.coatTop = fy / ih
   end
-  Voxel3D.draw(mesh, tex, billboardMatrix(px, py, y, mirror),
+  -- only a body IN WATER rocks: `waterline` is also the cut tall grass and
+  -- settled snow make, and a walker in a meadow does not sway
+  local roll = 0
+  if swim then
+    local t = (love.timer and love.timer.getTime and love.timer.getTime()) or 0
+    roll = math.sin(t * 1.8 + (px or 0) * 0.05) * 0.07
+  end
+  Voxel3D.draw(mesh, tex, billboardMatrix(px, py, y, mirror, roll),
                billboardPull(),
                ShadowMap.snug(Voxel3D.casterMatrix(px, py, y, mirror)))
   return true
@@ -847,6 +857,7 @@ local function posesOf(state, spriteColors)
       gh = entityGround(g.map or state.map, g.npc, gpx, gpy) + hop,
       lift = onWater and 0 or (g.npc.py - vy),
       waterline = wl,
+      onWater = onWater,
       sink = sink,
       ent = g.npc,
       colors = spriteColors(g.map or state.map),
@@ -919,6 +930,7 @@ local function posesOf(state, spriteColors)
         gh = entityGround(state.map, e, drawPx, drawPy) + hop,
         lift = onWater and 0 or (drawPy - vy),
         waterline = wl,
+        onWater = onWater,
         sink = sink,
         ent = e,
         colors = colors,
@@ -1875,7 +1887,7 @@ function VoxelScene.render(state, w, h, vw, vh, paletteFor)
     end
     Voxel3D.wet = w
     drawEntity(p.sprite, p.px, p.py, p.facing, p.phase, p.flip, p.gh,
-               p.colors, p.lift, p.waterline)
+               p.colors, p.lift, p.waterline, p.onWater)
   end
   Voxel3D.coat = 0
   Voxel3D.wet = 0

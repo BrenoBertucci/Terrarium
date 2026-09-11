@@ -887,6 +887,18 @@ Weather.SNOW = { 0.97, 0.98, 1.00 }
 Weather.FLAKE_SHEET = "assets/weather/snowflake.png"
 Weather.FLAKE_FRAME = 32
 Weather.FLAKE_SCALE = 1.05     -- world px of half-card per unit of size
+-- ------- what a flake does when it ARRIVES
+--
+-- It used to go out in half a second where it lay, which is snow being
+-- deleted at a plane. Now it JOINS the cover: the drawing turns into a
+-- pinch of white that spreads and sinks over a couple of seconds, and a
+-- share of the landings heap the snow field where they fell -- so under a
+-- fall the ground is visibly gathering, grain by grain, and a trail is
+-- filled by the same snow you watched come down on it.
+Weather.FLAKE_SETTLE = 2.2      -- seconds a landed flake takes to join the cover
+Weather.FLAKE_HEAP = 0.06       -- rim heaped per landing that heaps
+Weather.FLAKE_HEAP_R = 2.4      -- world px it heaps over
+Weather.FLAKE_HEAP_SHARE = 0.35 -- share of landings that heap (cost cap)
 Weather.lastFlakeBatches = -1
 local flakeSheet = nil         -- nil untried, false missing
 local flakeBuilder = nil
@@ -2539,11 +2551,20 @@ local function tick(dt)
       -- town's raised paving is sixteen pixels underground
       if m.y <= (m.yLand or 0) then
         m.y = m.yLand or 0
-        -- settle: a flake that has arrived stops moving and goes out over
-        -- a moment, so the ground edge is snow arriving rather than snow
-        -- being deleted at a plane
-        m.settled = (m.settled or 0) + dt
-        if m.settled > 0.5 then dead = true end
+        -- settle: a flake that has arrived stops moving and joins the
+        -- cover over a couple of seconds (see FLAKE_SETTLE); on the frame
+        -- it lands, a share of them heap the field where they fell
+        if not m.settled then
+          m.settled = 0
+          if Weather.FLAKE_HEAP > 0 and ((m.seed or 0) * 7.13) % 1 < Weather.FLAKE_HEAP_SHARE then
+            local okS, SnowField = pcall(V.require, "SnowField")
+            if okS and SnowField and SnowField.heap then
+              pcall(SnowField.heap, m.x, m.z, Weather.FLAKE_HEAP_R, Weather.FLAKE_HEAP)
+            end
+          end
+        end
+        m.settled = m.settled + dt
+        if m.settled > Weather.FLAKE_SETTLE then dead = true end
       end
     elseif m.kind == "eject" then
       -- a thrown drop, on nothing but gravity: this is the one place in
@@ -3789,6 +3810,16 @@ local flakeField = {
   get = function(_, i) return motes[i] end,
 }
 
+-- the white pinch a landed flake becomes: the wind pack's soft puff
+local puffImg = nil
+local function puffImage()
+  if puffImg ~= nil then return puffImg or nil end
+  local ok, WindFX = pcall(V.require, "WindFX")
+  local pack = ok and WindFX and WindFX.pack and WindFX.pack()
+  puffImg = (pack and (pack.puff or pack.grit)) or false
+  return puffImg or nil
+end
+
 function Weather.drawWorldFlakes()
   local sheet = flakeSprites()
   if not sheet or #motes == 0 then Weather.lastFlakeBatches = 0 return 0 end
@@ -3802,9 +3833,21 @@ function Weather.drawWorldFlakes()
   local frames = math.max(1, math.floor(sheet:getWidth() / Weather.FLAKE_FRAME))
   local describe = function(m)
     if m.kind ~= "flake" then return nil end
+    if m.settled then
+      -- on the ground: a pinch of white, spreading and sinking as it
+      -- joins the cover, lying flat rather than the drawing standing up
+      local pf = puffImage()
+      if pf then
+        local k = m.settled / Weather.FLAKE_SETTLE
+        local a = 0.82 * (1 - k * k) * mPower
+        if a <= 0.02 then return nil end
+        local half = Weather.FLAKE_SCALE * (m.size or 1) * (0.8 + 0.7 * k)
+        return pf, 0, 0, 1, 1, half, half * 0.5, 0, 0.97, 0.98, 1.0, a
+      end
+    end
     local above = m.y - (m.yLand or 0)
     local fade = math.min(1, m.t * 3, (above + 2) / 6)
-    if m.settled then fade = fade * math.max(0, 1 - m.settled / 0.5) end
+    if m.settled then fade = fade * math.max(0, 1 - m.settled / Weather.FLAKE_SETTLE) end
     local a = 0.95 * fade * mPower
     if a <= 0.02 then return nil end
     -- which drawing: the flake's own seed, fixed for its life
@@ -3972,7 +4015,7 @@ function Weather.draw(project, scale, w, h)
         local above = m.y - (m.yLand or 0)
         local fade = math.min(1, m.t * 3, (above + 2) / 6)
         if m.settled then
-          fade = fade * math.max(0, 1 - m.settled / 0.5)
+          fade = fade * math.max(0, 1 - m.settled / Weather.FLAKE_SETTLE)
         end
         -- ------- a flake is a SOFT DOT, not a chip
         --

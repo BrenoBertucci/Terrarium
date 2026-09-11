@@ -30,6 +30,92 @@ Tags and packages:
 
 **Beta para testes e nada mais.**
 
+### A neve volta sobre o rastro, e o floco que pousa vira neve
+
+- **O rastro é coberto aos poucos pela nevasca.** `SnowField.FILL_SNOWING`
+  de 420 s para 70 s: sair andando, virar, e as pegadas já estão
+  amaciando, as mais fundas por último — texel a texel, pela revisita
+  preguiçosa que já existia. Sem neve caindo continua permanente
+  (`FILL_STILL = 0`).
+- **O floco que chega junta-se à cobertura** em vez de sumir em meio
+  segundo: vira um pisco branco deitado que se espalha e afunda em 2,2 s
+  (`Weather.FLAKE_SETTLE`, puff do pack do vento), e um terço dos pousos
+  amontoa o campo de neve onde caiu (`SnowField.heap`, 0,06 em 2,4 px) —
+  sob a nevasca o chão vai juntando grão a grão, e é a mesma neve que
+  enche o rastro.
+- **A neve cobre até o pé, não meio corpo:** `SnowField.SINK_PX` 5 → 2; o
+  colar de neve nas pernas encolhe junto (sua altura segue o afundamento).
+- **Neve pisada é neve compacta, não grama:** a pegada escurece para um
+  azul-cinza de neve socada antes de chegar ao chão (ver o bloco de neve
+  do `Voxel3D`).
+
+### Quem nada arrasta a água: esteira em V, proa, rastro de espuma, splash e gotejo
+
+- `lib/WakeFX.lua` (novo): rastreia velocidade e rumo de todo mundo que
+  está na água (`e.surfing` — jogador em Surf e roamers aquáticos — e
+  roamers `kind == "water"`) e entrega até 8 nadadores por frame ao shader
+  da lâmina (`Voxel3D.wake`, uniforms `wakeN/wakeP/wakeS`, bloco só de
+  PIXEL). O fragment da água pinta, como a foto de um barco visto de cima:
+  o **colar de espuma** em volta do corpo, a **lavagem** branca e turbulenta
+  reta atrás (uma faixa da largura do corpo, mosqueada, esmaecendo em
+  alguns corpos de distância), os **braços do V** de Kelvin saindo dela, mais
+  finos, e a **proa** empurrada à frente — tudo escalado por quanto de
+  esteira o nadador ainda tem (cresce ao mover, dissolve ao parar em vez de
+  cortar). Anda na ondulação e na luz da hora porque é a própria lâmina.
+- **O nadador não é mais um sprite cortado ao meio:** o card ROLA pelos pés
+  no tempo da ondulação (`Mat4.rotateZ`, novo; `roll` em
+  `billboardMatrix`, ligado a um flag `onWater` da pose — não ao
+  `waterline`, que a grama alta e a neve também usam e fazia todo mundo
+  balançar em terra), e borrifos silenciosos saltam da proa enquanto ele
+  avança (`StepFX.splashAt(..., quiet)`), além do colar de espuma no corte.
+- **Rastro de espuma** que faz curva: motes `foam` no campo do `StepFX` a
+  cada 7 px de deslocamento, nos dois bordos da popa, deitados na superfície
+  (`Water.surfaceAt`), sem vento, sumindo em ~1,5 s.
+- **Entrar na água** dispara o splash de passo em profundidade cheia (o
+  mesmo da poça) com som; **sair** deixa a figura gotejando por alguns
+  segundos (`RainOnFX.soak`, as mesmas gotas da chuva).
+- Probe: `tests/wake_probe.lua` (Route 25: 6 roamers nadando com esteira
+  na lâmina, 134 espumas; jogador surfando com esteira, 1 splash ao entrar,
+  wet 0,82 ao sair).
+
+### O Town Map refeito: Kanto como a arte clássica desenha, em 3D
+
+- **Construído da própria arte clássica**, não do grafo de conexões. O
+  engine traz os 47 locais com posição na grade 16x16
+  (`field.townMap.locations`) e o tilemap 20x18 da figura original
+  (`field.townMap.background.map`); cada id de tile significa uma coisa
+  (mar, terra, corredor de rota, quadrado de cidade, marca de caverna,
+  diagonal de costa, tracejado de rota marítima). `lib/WorldMap3D.lua` lê
+  isso, amplia 8x, suaviza a costa (SDF + ruído), ergue a terra, empilha
+  montanhas nas marcas de caverna (Mt. Moon, Rock Tunnel, Victory Road),
+  planta a Viridian Forest e a Safari Zone, deixa as rotas brancas como os
+  corredores, e monta cada cidade com casinhas **na cor do nome** da
+  cidade, Centro (telhado vermelho), Mart (azul), Ginásio; Silph Co. com
+  farol, Torre Pokémon, Power Plant, Sea Cottage, vulcão em Cinnabar, ilhas
+  Seafoam, S.S. Anne balançando no porto. O mapa antigo não tinha Mt. Moon,
+  Rock Tunnel, Viridian Forest, Victory Road, Indigo Plateau, Seafoam, Power
+  Plant, Safari Zone nem a Torre — nenhum é mapa externo — e por isso não
+  parecia Kanto.
+- **Animações:** mar com os três trens de onda do `Water.lua` e anel de
+  espuma na costa, sombras de nuvem cruzando a terra, luz da hora do
+  `DayNight` (noite azul, janelas acesas, farol da Silph piscando), câmera
+  com voo de entrada, respiração e balanço na vista fechada, rota do
+  objetivo em tracejado que **marcha** pelo caminho real (BFS sobre as
+  estradas da figura), beacon pulsante no jogador e no objetivo.
+- **Funcionalidades:** card do local selecionado (tipo, visitado, Fly
+  disponível, Centro/Mart, ginásio com líder e insígnia conquistada),
+  painel de objetivo com 8 pinos de insígnia e os próximos passos, banner do
+  nome (com "To " no Fly e "'s NEST" no Area), bússola, dicas por modo, e o
+  **mapa clássico como inset** na paleta SGB do engine com jogador, cursor e
+  objetivo. FLY (A voa) e AREA da Pokédex (ninhos pulsando) respeitados.
+- **Linha `MAP: 3D / CLASSIC`** no menu: CLASSIC devolve a tela 160x144
+  original do engine, intocada.
+- **Tudo em inglês US** (`STRINGS` em um lugar só; `WorldMapQuest`
+  traduzido).
+- Probe: `tests/worldmap_new_probe.lua` (build, 47 lugares, shaders,
+  rota do objetivo, strings, Fly, Area, Classic por paleta, fotos) e
+  `tests/worldmap_discover_probe.lua` (o que o Town Map do engine carrega).
+
 ### As poças refeitas: campo de profundidade, shader próprio, nunca no lago
 
 - **Não são mais adesivos.** As três tiras de 16x16 em três tamanhos (13, 20,

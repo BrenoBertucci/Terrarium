@@ -70,6 +70,12 @@ StepFX.KINDS = {
   -- boot sent it, not where the wind is blowing.
   drop = { speed = 0.05, bob = 0, lowClamp = 0.1, highClamp = 40,
            curlA = 0, curlB = 0, mass = 3.0, area = 0.30 },
+  -- ------- FOAM a swimmer leaves on the water (lib/WakeFX.lua)
+  --
+  -- Lies where it was laid: no wind, no lift, no bob -- foam is on the
+  -- surface and the surface is what moves. Fades out in about a second.
+  foam = { speed = 0.0, bob = 0, lowClamp = 0.1, highClamp = 60,
+           curlA = 0, curlB = 0, mass = 4.0, area = 0.5 },
 }
 
 StepFX.MAX = 64            -- hard field cap; PFX scales the RATE, not this
@@ -148,7 +154,7 @@ local function poolUnder(x, z)
   return (ok and tonumber(d)) or 0
 end
 
-local function splash(x, z, mx, mz, depth)
+local function splash(x, z, mx, mz, depth, quiet)
   local mul = Quality.particles()
   local ground = WindFX.groundAt(x, z)
   local n = StepFX.DROPS_MIN + math.floor(depth * StepFX.DROPS_DEPTH + 0.5)
@@ -179,10 +185,48 @@ local function splash(x, z, mx, mz, depth)
   end
   StepFX.splashes = StepFX.splashes + 1
   StepFX.lastSplashDepth = depth
+  if quiet then return end
   local okS, AmbientSound = pcall(V.require, "AmbientSound")
   if okS and AmbientSound and AmbientSound.playSplash then
     pcall(AmbientSound.playSplash, x, z, depth)
   end
+end
+
+-- A splash asked for from outside: a body going into deep water
+-- (lib/WakeFX.lua). Full depth, no stride.
+function StepFX.splashAt(x, z, depth, quiet)
+  splash(x, z, 0, 0, math.max(0, math.min(1, depth or 1)), quiet)
+end
+
+-- A foam puff on the water surface, for the wake trail.
+StepFX.foamCount = 0
+function StepFX.foam(x, z, size)
+  if field:full() then return false end
+  local m = field:claim()
+  if not m then return false end
+  local y = nil
+  local okW, Water = pcall(V.require, "Water")
+  if okW and Water and Water.surfaceAt then
+    local okS, s = pcall(Water.surfaceAt, x, z)
+    if okS and tonumber(s) then y = s + 0.45 end
+  end
+  m.kind = "foam"
+  m.x, m.z = x, z
+  m.y = y or (WindFX.groundAt(x, z) + 0.4)
+  m.t, m.ttl = 0, 1.2 + rand() * 0.6
+  m.seed = rand() * 6.2831
+  m.fast = 1
+  m.lift = 0
+  m.spin = (rand() * 2 - 1) * 0.6
+  m.frame, m.flip, m.front = 0, 1, false
+  m.size = size or 1
+  m.tint = { 0.95, 0.98, 1.0 }
+  m.ang = 0
+  m.vx = (rand() * 2 - 1) * 2
+  m.vz = (rand() * 2 - 1) * 2
+  StepFX.foamCount = StepFX.foamCount + 1
+  StepFX.emitted = StepFX.emitted + 1
+  return true
 end
 
 local function footfall(x, z, mx, mz)
@@ -378,6 +422,7 @@ local CARD = {
   kick = { 1.05, 1.0, 1.0 },
   dust = { 1.80, 1.2, 1.1 },
   drop = { 0.95, 0.8, 1.35 },   -- taller than wide: a drop, not a grain
+  foam = { 1.9, 1.3, 0.75 },    -- a flat patch on the water
 }
 
 local function drawWorldBody()
@@ -388,12 +433,12 @@ local function drawWorldBody()
   builder = builder or ParticleMesh.newBuilder(StepFX.MAX)
 
   local describe = function(m)
-    local img = (m.kind == "dust") and (pack.puff or pack.grit) or pack.grit
+    local img = (m.kind == "dust" or m.kind == "foam") and (pack.puff or pack.grit) or pack.grit
     if not img then return nil end
     -- fast in (a step is sudden), long settle-out (dust dies by fading)
     local fade = math.min(1, m.t * 6, (m.ttl - m.t) * 1.6)
     -- water is bright and hard-edged; it does not fade the way dust does
-    local a = (m.kind == "drop" and 0.92 or 0.62) * fade
+    local a = (m.kind == "drop" and 0.92 or (m.kind == "foam" and 0.78 or 0.62)) * fade
     if a <= 0.02 then return nil end
     local c = CARD[m.kind] or CARD.kick
     local base = c[1] * (m.size or 1)

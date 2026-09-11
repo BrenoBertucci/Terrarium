@@ -170,6 +170,8 @@ local LedgeKit = V.require("LedgeKit")
 local Weather = V.require("Weather")
 local Sky = V.require("Sky")
 local GroundFX = V.require("GroundFX")
+local WorldMap3D = V.require("WorldMap3D")
+local WakeFX = V.require("WakeFX")
 local Ecology = V.require("Ecology")
 local AmbientSound = V.require("AmbientSound")
 local Interiors = V.require("Interiors")
@@ -410,6 +412,9 @@ mod.content.render_pipelines:register(PIPE_VOXEL, {
     -- this frame's; its own field, because WindFX clears when the wind
     -- drops under FLOOR and a footstep makes dust in dead calm.
     StepFX.update(dt, Voxel.active())
+    -- and what the swimmers do to the water: the wake the sheet paints,
+    -- the foam trail, the splash in and the drip out (lib/WakeFX.lua)
+    WakeFX.update(dt, Voxel.active())
     -- and what comes down off the roofs and the trees: slabs letting go of
     -- the eaves on their own, crowns shaken by a bump or a gust. Behind
     -- GroundFX (it reads the cover that tick wrote) and behind Wind for
@@ -1319,6 +1324,17 @@ local SETTINGS = {
     .. "map change). OFF is nothing. Drops detail on low RES. Purely HUD -- "
     .. "nothing here writes collision, flags or scripts.",
     full = true },
+  -- The TOWN MAP item (and FLY, and the Pokedex AREA). 3D is Kanto as a
+  -- diorama built from the classic picture's own data; CLASSIC is the
+  -- Game Boy screen exactly as the engine draws it.
+  { WorldMap3D.setting,
+    "The TOWN MAP. 3D builds Kanto as a diorama from the classic map's own "
+    .. "data -- every town, route, cave and landmark where the Game Boy "
+    .. "picture puts them -- with the sea moving, clouds crossing the land, "
+    .. "the hour's light, your objective marked and routed along the roads, "
+    .. "a card for the selected place, and the classic map as an inset. "
+    .. "CLASSIC is the original 160x144 screen, untouched. FLY and the "
+    .. "Pokedex AREA work the same on both." },
 }
 
 local schema = {}
@@ -1991,7 +2007,7 @@ StartMenuXY.install()
 -- at zero present calls with the map open (tests/worldmap_probe4.lua) -- so
 -- there is nothing to paint from. It installs its own two wraps instead
 -- (src.ui.TownMap.new and Renderer.endFrame); see lib/WorldMap3D.lua.
-V.require("WorldMap3D").install()
+WorldMap3D.install()
 
 -- ------- the battle text box and its command buttons
 --

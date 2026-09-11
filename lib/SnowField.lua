@@ -123,7 +123,12 @@ SnowField.WEIGHT = { player = 1.0, npc = 0.85, mon = 0.55, ghost = 0 }
 -- Seconds of full-power snowfall to bury a fresh trench level. Nothing
 -- else erases one (FILL_STILL at or below zero is "never"), and the thaw
 -- clears the map outright.
-SnowField.FILL_SNOWING = 420
+--
+-- Seventy seconds, down from seven minutes: a trail is meant to be SEEN
+-- going under -- walk out, turn round, and the prints you left are
+-- already softening, the deepest last. Seven minutes was a permanence
+-- nobody could tell from forever. With the sky still, it IS forever.
+SnowField.FILL_SNOWING = 70
 SnowField.FILL_STILL = 0
 
 -- Below this a texel is level snow again and is dropped.
@@ -141,9 +146,10 @@ SnowField.BLOCK = 32
 -- ------- how far a walker SINKS
 --
 -- World pixels of the card hidden at full cover. A sixteen-pixel sprite is
--- knee-deep at five and buried at twelve: the whole point of the request
--- ("cover part of the player, not all") is the first number.
-SnowField.SINK_PX = 5
+-- knee-deep at five and buried at twelve; TWO is the boots and no more --
+-- "up to the feet, not most of the body" was the second request, and the
+-- collar below is cut to the same height.
+SnowField.SINK_PX = 2
 -- The cover at which anything starts to sink or print at all: a dusting
 -- neither hides a boot nor holds a print.
 SnowField.FROM = 0.12
