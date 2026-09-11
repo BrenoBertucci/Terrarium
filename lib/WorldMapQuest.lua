@@ -83,9 +83,9 @@ local function badge(save, id) return inv(save, id) end
 
 -- ------------------------------------------------------------------ the text
 --
--- Portuguese, because that is what this build speaks -- its own strings come
--- back as "INSÍGNIAS" and "Você não tem a INSÍGNIA ROCHEDO!". One table, so a
--- build in another language is a translation and not a rewrite.
+-- English (US), the language of the ROM's own strings and of the screen
+-- this feeds. One table, so a build in another language is a translation
+-- and not a rewrite.
 --
 -- `title` is the instruction and `detail` is where to look once you are
 -- there: the marker gets you to the town, and the town is not the hard part.
@@ -102,94 +102,94 @@ local function badge(save, id) return inv(save, id) end
 WorldMapQuest.CHAIN = {
   {
     id = "pokedex", target = "PALLET_TOWN",
-    title = "Pegue a POKéDEX com o Prof. Carvalho",
-    detail = "No laboratório dele, em Pallet.",
+    title = "Get the POKéDEX from PROF. OAK",
+    detail = "At his lab in Pallet Town.",
     done = function(s) return flag(s, "EVENT_GOT_POKEDEX") end,
   },
   {
     id = "parcel", target = "PALLET_TOWN",
-    title = "Entregue o Pacote do Carvalho",
-    detail = "Compre-o no mercado de Viridian e leve ao laboratório.",
+    title = "Deliver OAK's PARCEL",
+    detail = "Pick it up at the Viridian Mart and bring it to the lab.",
     -- holding the parcel IS the objective: it is handed over, not consumed
     done = function(s) return not inv(s, "OAKS_PARCEL") end,
   },
   {
     id = "brock", target = "PEWTER_CITY",
-    title = "Derrote BROCK, o Líder de Pewter",
-    detail = "Ginásio de Pewter. Vale a INSÍGNIA ROCHEDO.",
+    title = "Defeat BROCK, the Pewter Gym Leader",
+    detail = "Pewter Gym. Earns the BOULDER BADGE.",
     done = function(s) return badge(s, "BOULDERBADGE") end,
   },
   {
     id = "misty", target = "CERULEAN_CITY",
-    title = "Derrote MISTY, a Líder de Cerulean",
-    detail = "Ginásio de Cerulean. Vale a INSÍGNIA CASCATA.",
+    title = "Defeat MISTY, the Cerulean Gym Leader",
+    detail = "Cerulean Gym. Earns the CASCADE BADGE.",
     done = function(s) return badge(s, "CASCADEBADGE") end,
   },
   {
     id = "ssanne", target = "VERMILION_CITY",
-    title = "Embarque no S.S. ANNE e pegue o MO CORTE",
-    detail = "O navio no porto de Vermilion. Sai depois que você desce.",
+    title = "Board the S.S. ANNE and get HM01 CUT",
+    detail = "The ship docked at Vermilion. It sails once you get off.",
     -- only while the ticket is in hand and the HM is not
     done = function(s) return inv(s, "HM_CUT") or not inv(s, "S_S_TICKET") end,
   },
   {
     id = "surge", target = "VERMILION_CITY",
-    title = "Derrote o TEN. SURGE, o Líder de Vermilion",
-    detail = "Ginásio de Vermilion. Vale a INSÍGNIA TROVÃO.",
+    title = "Defeat LT. SURGE, the Vermilion Gym Leader",
+    detail = "Vermilion Gym. Earns the THUNDER BADGE.",
     done = function(s) return badge(s, "THUNDERBADGE") end,
   },
   {
     id = "erika", target = "CELADON_CITY",
-    title = "Derrote ERIKA, a Líder de Celadon",
-    detail = "Ginásio de Celadon. Vale a INSÍGNIA ARCO-ÍRIS.",
+    title = "Defeat ERIKA, the Celadon Gym Leader",
+    detail = "Celadon Gym. Earns the RAINBOW BADGE.",
     done = function(s) return badge(s, "RAINBOWBADGE") end,
   },
   {
     id = "scope", target = "CELADON_CITY",
-    title = "Recupere o ESCOPO SILPH do Time Rocket",
-    detail = "O esconderijo fica sob o Salão de Jogos de Celadon.",
+    title = "Recover the SILPH SCOPE from Team Rocket",
+    detail = "The hideout is under the Celadon Game Corner.",
     done = function(s) return inv(s, "SILPH_SCOPE") end,
   },
   {
     id = "flute", target = "LAVENDER_TOWN",
-    title = "Liberte a Torre Pokémon e salve o SR. FUJI",
-    detail = "Ele lhe dá a FLAUTA POKé, que acorda o SNORLAX.",
+    title = "Free the POKéMON TOWER and rescue MR. FUJI",
+    detail = "He gives you the POKé FLUTE, which wakes SNORLAX.",
     done = function(s) return inv(s, "POKE_FLUTE") end,
   },
   {
     id = "koga", target = "FUCHSIA_CITY",
-    title = "Derrote KOGA, o Líder de Fuchsia",
-    detail = "Acorde o SNORLAX da Rota 12 ou 16 para chegar lá.",
+    title = "Defeat KOGA, the Fuchsia Gym Leader",
+    detail = "Wake the SNORLAX on Route 12 or 16 to get there.",
     done = function(s) return badge(s, "SOULBADGE") end,
   },
   {
     id = "surf", target = "FUCHSIA_CITY",
-    title = "Ache o MO SURFE na Zona Safári",
-    detail = "Na casa secreta, no fundo da Zona Safári.",
+    title = "Find HM03 SURF in the Safari Zone",
+    detail = "In the Secret House, deep in the Safari Zone.",
     done = function(s) return inv(s, "HM_SURF") end,
   },
   {
     id = "sabrina", target = "SAFFRON_CITY",
-    title = "Liberte a SILPH CO. e derrote SABRINA",
-    detail = "Onze andares de Rocket. Vale a INSÍGNIA PÂNTANO.",
+    title = "Free SILPH CO. and defeat SABRINA",
+    detail = "Eleven floors of Rockets. Earns the MARSH BADGE.",
     done = function(s) return badge(s, "MARSHBADGE") end,
   },
   {
     id = "secret", target = "CINNABAR_ISLAND",
-    title = "Ache a CHAVE SECRETA na Mansão Pokémon",
-    detail = "A mansão em ruínas de Cinnabar. Ela abre o ginásio.",
+    title = "Find the SECRET KEY in the Pokémon Mansion",
+    detail = "The ruined mansion on Cinnabar. It opens the Gym.",
     done = function(s) return inv(s, "SECRET_KEY") or badge(s, "VOLCANOBADGE") end,
   },
   {
     id = "blaine", target = "CINNABAR_ISLAND",
-    title = "Derrote BLAINE, o Líder de Cinnabar",
-    detail = "Ginásio de Cinnabar. Vale a INSÍGNIA VULCÃO.",
+    title = "Defeat BLAINE, the Cinnabar Gym Leader",
+    detail = "Cinnabar Gym. Earns the VOLCANO BADGE.",
     done = function(s) return badge(s, "VOLCANOBADGE") end,
   },
   {
     id = "giovanni", target = "VIRIDIAN_CITY",
-    title = "Derrote GIOVANNI, o Líder de Viridian",
-    detail = "O ginásio que estava fechado desde o começo.",
+    title = "Defeat GIOVANNI, the Viridian Gym Leader",
+    detail = "The Gym that has been locked since the start.",
     done = function(s) return badge(s, "EARTHBADGE") end,
   },
   {
@@ -198,8 +198,8 @@ WorldMapQuest.CHAIN = {
     -- goes to the last place that IS on the map and the text carries the
     -- rest. See WorldMap3D.placeFor.
     id = "league", target = "ROUTE_22", fallback = "VIRIDIAN_CITY",
-    title = "Atravesse a ESTRADA DA VITÓRIA e desafie a ELITE DOS QUATRO",
-    detail = "Oeste de Viridian, pela Rota 22 e o portão da Rota 23.",
+    title = "Cross VICTORY ROAD and challenge the ELITE FOUR",
+    detail = "West of Viridian, through Route 22 and the Route 23 gate.",
     done = function(s)
       local held, total = WorldMapQuest.badges(s)
       return total > 0 and held >= total and flag(s, "EVENT_BEAT_CHAMPION")
