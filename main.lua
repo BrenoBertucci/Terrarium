@@ -166,6 +166,7 @@ local GhostFX = V.require("GhostFX")
 local TowerKit = V.require("TowerKit")
 local Crypt = V.require("Crypt")
 local CryptKit = V.require("CryptKit")
+local Shop = V.require("Shop")
 local LedgeKit = V.require("LedgeKit")
 local Weather = V.require("Weather")
 local Sky = V.require("Sky")
@@ -1067,6 +1068,33 @@ local SETTINGS = {
     .. "and the ANIME row's cel step stand aside while this is on. OFF "
     .. "lights the crypt the way the streets are lit. Only inside the "
     .. "Pokemon Tower and Agatha's room, and only with the CRYPT row on NEW.",
+    full = true },
+  -- `full = true` like CRYPT: what a Poke Mart is inside is the look of the
+  -- place, not a knob on the camera. Missing from this table for a while --
+  -- lib/Shop.lua defined both rows but nothing ever registered them, so
+  -- SHOP-FX had no OFF a player could reach and the mart's floor kept
+  -- asking the RTX row for at least its AO rung (see RayFX.lua) no matter
+  -- what RTX was set to.
+  { Shop.setting,
+    "What the inside of a Poke Mart is. NEW stands the room in materials: "
+    .. "eight fluorescent tubes as the scene's own point lights, photographed "
+    .. "steel and laminate on the counters and shelving, a tiled floor "
+    .. "(lib/FloorArt.lua), and the room's own ambient held down and cooled "
+    .. "a little so the tubes have something to push against. CLASSIC is "
+    .. "lib/RoomKit.lua's old fixtures, flat-lit like every other interior.",
+    full = true },
+  -- `full = true` like CRYPT-FX: the shader's share of the room, and the
+  -- costlier half -- exactly as CRYPT-FX is for the crypt.
+  { Shop.fxSetting,
+    "The Poke Mart's light, in the shader. ON rakes the tubes' relief "
+    .. "across the shelving, lays a sheen on the tiled floor, and blooms "
+    .. "the diffusers so a tube reads as a light rather than a pale "
+    .. "rectangle -- and asks the RTX row for at least its AO rung, so the "
+    .. "room keeps the contact shadow at the foot of every fixture (RTX is "
+    .. "still free to go higher; this floor only ever raises it, never "
+    .. "lowers it). OFF lights the mart the way the streets are lit and "
+    .. "stops asking RTX for anything -- an RTX OFF choice is then honoured "
+    .. "inside a mart too. Only with the SHOP row on NEW.",
     full = true },
   -- `full = true` like TOWER: what a ledge is made of is the look of every
   -- route, not a knob on the camera. Remeshes on its own step, like TREES.
