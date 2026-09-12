@@ -31,7 +31,13 @@ StartMenuMap.LABEL = "MAPA"
 -- The row this one goes under, matched case-insensitively against the menu's
 -- own labels. A build whose ITENS row is spelled differently gets the row
 -- appended at the end instead of not at all -- see insertAt.
-StartMenuMap.AFTER = "ITENS"
+--
+-- A list, not one string: this build's own start menu prints "ITEM"
+-- (src/ui/StartMenu.lua), singular, in English -- "ITENS" alone never
+-- matched it, so the row always fell through to "append at the end"
+-- instead of landing under ITEM. Both spellings are kept so a save
+-- running under an actual Portuguese translation still matches too.
+StartMenuMap.AFTER = { "ITEM", "ITENS" }
 
 -- Whether the row appears only when the town map is actually carried.
 --
@@ -73,10 +79,11 @@ end
 -- the last -- an index outside the list is a menu that crashes on open, and
 -- this is the menu the player opens most.
 function StartMenuMap.insertAt(items)
-  local want = StartMenuMap.AFTER:lower()
+  local want = {}
+  for _, w in ipairs(StartMenuMap.AFTER) do want[w:lower()] = true end
   for i = 1, #items do
     local label = items[i] and items[i].label
-    if type(label) == "string" and label:lower() == want then return i + 1 end
+    if type(label) == "string" and want[label:lower()] then return i + 1 end
   end
   return #items + 1
 end
@@ -126,6 +133,23 @@ function StartMenuMap.install()
     -- The menu sizes and scrolls off its own list. maxVisible and the cursor
     -- clamp are the two things a longer list can break, and the class already
     -- has the answer to the second -- so ask it rather than reimplementing it.
+    --
+    -- The BOX HEIGHT is not one of the things the class fixes on its own,
+    -- though: `th` is set once, in Menu.new, from the item count at
+    -- construction (src/ui/Menu.lua, `visible * rowStep + 2`). This row
+    -- is inserted AFTER that math already ran, so without recomputing it
+    -- here the frame stays sized for one row fewer than the list now holds
+    -- -- the topmost item then prints above the frame's own top edge
+    -- instead of inside it. Same formula the class uses, applied only to
+    -- the one screen this file ever touches (src.ui.StartMenu), so a
+    -- caller elsewhere that passed its own fixed `opts.th` is never in
+    -- scope to second-guess.
+    if type(menu.rowStep) == "number" then
+      local visible = (menu.maxVisible
+                        and math.min(menu.maxVisible, #menu.items))
+        or #menu.items
+      menu.th = visible * menu.rowStep + 2
+    end
     if menu.clampScroll then pcall(menu.clampScroll, menu) end
     return menu
   end
