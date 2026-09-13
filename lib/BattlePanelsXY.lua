@@ -347,7 +347,7 @@ end
 -- drawn second, the rest of the canvas left transparent. That emptiness is
 -- the fix for the slab: the quad in the world stays one size and the
 -- visible panel inside it is exactly as big as what it has to say.
-local function drawMsgFace(slot, B, msgLines, uFrac, showCaret)
+local function drawMsgFace(slot, B, msgLines, uFrac, showCaret, typing)
   local g = love.graphics
   local W, H = BattlePanelsXY.MSG_FACE_W, BattlePanelsXY.MSG_FACE_H
   if not slot.canvas then
@@ -439,21 +439,27 @@ local function drawMsgFace(slot, B, msgLines, uFrac, showCaret)
       ly = ly + lineH
     end
     -- the advance arrow, the Game Boy's own: while the typewriter runs
-    -- it rides the end of the line (the caret's old post) and blinks;
-    -- settled, it waits at the bottom-right corner, where every Gen 1
-    -- box put it. `uFrac` (the old underline's clock) times the settle.
+    -- it rides the end of the line (the caret's old post) and blinks --
+    -- ON or gone, never anywhere else; settled, it waits at the
+    -- bottom-right corner, where every Gen 1 box put it. `showCaret` is
+    -- only the BLINK PHASE during typing, so it must never by itself pick
+    -- between the two positions (that read as one arrow hopping between
+    -- them every blink) -- `typing` alone decides the position, `uFrac`
+    -- (the old underline's clock) times the settle once it is done.
     if n > 0 then
       local s = math.max(10, lineH * 0.34)
-      if showCaret then
-        local last = msgLines[n]
-        local tw
-        if C then
-          tw = C.textWidth(last) * ck
-        else
-          tw = BattleHudXY.textWidth(last) * (th / 84)
+      if typing then
+        if showCaret then
+          local last = msgLines[n]
+          local tw
+          if C then
+            tw = C.textWidth(last) * ck
+          else
+            tw = BattleHudXY.textWidth(last) * (th / 84)
+          end
+          advanceArrow(g, px + padX + tw + 10 + s * 0.6,
+                       ly - lineH + lineH * 0.42, s, { 1, 1, 1, 1 })
         end
-        advanceArrow(g, px + padX + tw + 10 + s * 0.6,
-                     ly - lineH + lineH * 0.42, s, { 1, 1, 1, 1 })
       else
         local settle = math.max(0, math.min(1, uFrac or 1))
         advanceArrow(g, px + pw - padX * 0.55 - s * 0.6,
@@ -585,9 +591,10 @@ local function msgPanel(shot, R, B, msgLines, battle)
   if #msgLines > 0 or not S.msg.canvas then
     local key = table.concat(msgLines, "\n")
                 .. ":" .. tostring(math.floor(uFrac * 16))
+                .. (typing and "T" or "-")
                 .. (caretOn and "C" or "-")
     if S.msg.key ~= key then
-      local ok = pcall(drawMsgFace, S.msg, B, msgLines, uFrac, caretOn)
+      local ok = pcall(drawMsgFace, S.msg, B, msgLines, uFrac, caretOn, typing)
       if not (ok and S.msg.canvas) then return nil end
       S.msg.key = key
     end
@@ -626,13 +633,8 @@ function BattlePanelsXY.menu(battle, shot, msgLines)
   local R = Fan.rig(shot)
   if not R then return false end
 
-  local mx, my = msgPanel(shot, R, B, msgLines or {}, battle)
-  if not mx then return false end
-
   local sel = tonumber(battle.menuIndex) or 1
   local pop = B.popScale("menu", sel)
-  local dbg = { phase = "menu", sel = sel, msg = { mx, my },
-                cx = {}, cy = {}, wx = {}, wy = {}, wz = {} }
 
   -- where each command sits: FIGHT alone on top, the pack's own bottom
   -- order underneath (see BattleBoxXY.BOTTOM_ORDER for why it is not the
@@ -648,6 +650,31 @@ function BattlePanelsXY.menu(battle, shot, msgLines)
                  BattlePanelsXY.ROW_UP, BattlePanelsXY.SMALL_W,
                  BattlePanelsXY.BTN_FACE_W, BattlePanelsXY.BTN_FACE_H }
   end
+
+  -- All or nothing, like the fan -- half a menu is worse than the flat
+  -- one. That only holds if NOTHING has hit the screen yet when a chip's
+  -- art fails, so every face is built (or found wanting) here, before
+  -- msgPanel below commits its own draw -- a canvas build has no visible
+  -- side effect, but msgPanel's hangPanel call does.
+  for i = 1, 4 do
+    local cmd = B.COMMANDS[i]
+    local p = place[i]
+    if not (cmd and p) then return false end
+    local slot = S.btns[i]
+    if not slot then slot = {}; S.btns[i] = slot end
+    local key = cmd.art .. (i == sel and ":S" or ":-")
+    if slot.key ~= key then
+      local okF = pcall(drawButtonFace, slot, B, cmd, i == sel, p[4], p[5])
+      if not (okF and slot.canvas) then return false end
+      slot.key = key
+    end
+  end
+
+  local mx, my = msgPanel(shot, R, B, msgLines or {}, battle)
+  if not mx then return false end
+
+  local dbg = { phase = "menu", sel = sel, msg = { mx, my },
+                cx = {}, cy = {}, wx = {}, wy = {}, wz = {} }
 
   -- menu-open deal: first time this phase, or a reentry gap like the fan
   local now = (love.timer and love.timer.getTime and love.timer.getTime()) or 0
@@ -673,15 +700,7 @@ function BattlePanelsXY.menu(battle, shot, msgLines)
   for _, i in ipairs(order) do
     local cmd = B.COMMANDS[i]
     local p = place[i]
-    if not (cmd and p) then return false end
     local slot = S.btns[i]
-    if not slot then slot = {}; S.btns[i] = slot end
-    local key = cmd.art .. (i == sel and ":S" or ":-")
-    if slot.key ~= key then
-      local okF = pcall(drawButtonFace, slot, B, cmd, i == sel, p[4], p[5])
-      if not (okF and slot.canvas) then return false end
-      slot.key = key
-    end
 
     local raw = (now - S.dealAt - (dealOf[i] or 0) * BattlePanelsXY.DEAL_STAGGER)
                 / BattlePanelsXY.DEAL_TIME

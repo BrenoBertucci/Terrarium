@@ -26,6 +26,42 @@ Tags and packages:
 
 ## Unreleased
 
+### COMBAT grows to four levels -- DINAMICA, CLASSICA, MINIMA, DESLIGADA -- to make room for other battle UIs
+
+Added mainly so a different battle-UI mod (Kanto Gear, for one) has a
+clean level to build on top of: DESLIGADA hands the whole battle screen
+over with nothing of this mod's own left drawn on it, and MINIMA keeps
+just the passive reading (names, HP, EXP) while leaving the interactive
+command menu for whoever wants to draw their own.
+
+- **`lib/BattleDynamic.lua` now recognizes four states.** DINAMICA is
+  unchanged: the full X/Y costume, moving camera and floating panels
+  included. CLASSICA is exactly the still fight it already was --
+  corner-pinned name/HP/EXP capsules, flat box. MINIMA (new) keeps that
+  same name/HP/EXP reading and the message text ("Um RATTATA selvagem
+  apareceu!" and the like), but draws neither the command menu nor the
+  move-selection screen -- not its own, and not the engine's either --
+  leaving the phase free for another mod to draw. DESLIGADA (new) draws
+  nothing at all: no box, no HUD, no menu -- just the 3D scene, the
+  models, and hit FX, which stay on their own independent switch (they
+  never depended on this row to begin with).
+- **Two DINAMICA-only bugs fixed along the way, found while building the
+  above:**
+  - `lib/BattlePanelsXY.lua`'s command menu could draw two boxes in the
+    same scene -- the floating one and the flat one underneath it --
+    because the message panel had already gone to the screen before the
+    four command chips finished preparing; if any one of them failed,
+    the whole function reported failure and the flat box drew on top of
+    what was already there. The four chips are now prepared before the
+    message panel touches the screen.
+  - The advance arrow on that same panel hopped between two positions
+    instead of blinking in one, because the caret's blink PHASE was
+    also deciding the caret's POSITION. A separate `typing` flag now
+    decides the position; the blink only decides whether it is visible.
+  - `assets/battlexy/b2w2/name_font.png`'s `!` cell was a copy of the
+    `?` cell, which read as a spiral (easy to misread as `@`) in any
+    message ending with one. Repainted with a real bar-and-dot `!`.
+
 ### The snow came off the drawing
 
 - **It was being painted INTO the sprite.** The snow on everybody's hat and
