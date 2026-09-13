@@ -307,13 +307,18 @@ local function drawButtonFace(slot, B, cmd, selected, W, H)
 
     -- the label, the game's own word, right of the ball, shrunk to fit
     -- the capsule's flat middle -- in Unova's font when the sheet is
-    -- loaded, with a shadow for depth on the smoked glass
+    -- loaded, with a shadow for depth on the smoked glass.
+    -- `cmd.label` is a FUNCTION (see BattleBoxXY.lua's `label()`), so its
+    -- fallback text can follow Lang.setting instead of being fixed at
+    -- load time -- calling it once here is what BattleBoxXY.button does
+    -- too.
+    local text = cmd.label()
     local C = capsule()
     local left = ballX + d * 0.5 + bh * 0.22
     local maxw = bx + bw - bh * 0.45 - left
     if C then
       local kk = (bh * 0.50) / 9
-      local tw = C.textWidth(cmd.label) * kk
+      local tw = C.textWidth(text) * kk
       if tw > maxw and tw > 0 then
         kk = kk * maxw / tw
         tw = maxw
@@ -321,18 +326,18 @@ local function drawButtonFace(slot, B, cmd, selected, W, H)
       local lx = left + (maxw - tw) * 0.5
       local lyy = by + (bh - 9 * kk) * 0.5
       g.setColor(0, 0, 0, 0.7)
-      C.text(cmd.label, lx + 3, lyy + 3, kk)
+      C.text(text, lx + 3, lyy + 3, kk)
       g.setColor(1, 1, 1, selected and 1 or 0.9)
-      C.text(cmd.label, lx, lyy, kk)
+      C.text(text, lx, lyy, kk)
       g.setColor(1, 1, 1, 1)
     else
       local th = bh * 0.46
-      local tw = BattleHudXY.textWidth(cmd.label) * (th / 84)
+      local tw = BattleHudXY.textWidth(text) * (th / 84)
       if tw > maxw and tw > 0 then
         th = th * maxw / tw
         tw = maxw
       end
-      outlineText(cmd.label, left + (maxw - tw) * 0.5, by + (bh - th) * 0.5,
+      outlineText(text, left + (maxw - tw) * 0.5, by + (bh - th) * 0.5,
                   th, { 1, 1, 1, selected and 1 or 0.9 })
     end
   end)
