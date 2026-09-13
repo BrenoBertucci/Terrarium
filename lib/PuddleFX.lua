@@ -17,7 +17,7 @@
 --
 -- "They burst and only the outline shows": the sprite's body was painted
 -- at 0.22 of a sky tone that was itself taken to 0.34, and its one-pixel
--- rim at 1.0. Under the RTX row the reflection replaced the body and the
+-- rim at 1.0. Under the SCREEN FX row the reflection replaced the body and the
 -- bright rim was the only pixel left that said "puddle".
 --
 -- ------- what this is instead
@@ -53,7 +53,7 @@
 --   looks up into the dome, and the colour is the palette's own bands --
 --   the horizon where the ray is shallow, the zenith where it is steep.
 --   A puddle at sunset is orange because the sky is; at night it is the
---   night's blue. Under the RTX row the screen pass replaces this with a
+--   night's blue. Under the SCREEN FX row the screen pass replaces this with a
 --   real reflection (the alpha tag is still stamped, see GroundFX), and
 --   without it this IS the reflection.
 --

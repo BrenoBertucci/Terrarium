@@ -53,7 +53,7 @@ local Carry = {}
 --
 -- MAX leads both, because that is what these rows are for and a setting whose
 -- default is "the limit you already had" is a setting nobody finds -- the
--- same argument the RTX row's default is made on. Cycling walks DOWN from
+-- same argument the SCREEN FX row's default is made on. Cycling walks DOWN from
 -- there through the vanilla number and back round, so the original behaviour
 -- is always one stop away and is never something you have to go looking for.
 Carry.setting = ModSetting.new("bag", "BAG",

@@ -158,7 +158,7 @@ function Diag.lines()
   end
 
   local RayFX = mod("RayFX")
-  add(("RTX      %s -> %s   PFX %s")
+  add(("SCREENFX %s -> %s   PFX %s")
         :format(rowOf("RayFX", "setting"),
                 RayFX and tostring(try(RayFX.level) or "?") or "?",
                 rowOf("Quality", "particleSetting")))

@@ -166,7 +166,7 @@ Crypt.STONE = { dir = "assets/stone/",
                 -- light and not only under a flame (see `stoneHemi`)
                 hemi = 0.60 }
 
--- RayFX's ambient occlusion, asked for whatever the RTX row says (at least
+-- RayFX's ambient occlusion, asked for whatever the SCREEN FX row says (at least
 -- the `ao` rung), and harder and closer than the streets': a crypt is
 -- corners, and the shading in them is what makes the stone solid.
 -- The walls now stand their stones in DEPTH (lib/CryptKit.lua: proud

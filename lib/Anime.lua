@@ -13,7 +13,7 @@
 --           by it (see Voxel3D's effect(), the ANIME_CEL block). It costs
 --           arithmetic, no fetch, no target, no draw -- so it is the one
 --           piece that works at every rung of everything else, including
---           with RTX switched off entirely.
+--           with SCREEN FX switched off entirely.
 --
 --   RIM     one dot product against a normal that ALREADY EXISTS. The
 --           screen-space pass recovers a per-pixel normal out of four
@@ -26,12 +26,12 @@
 --           is what keeps a floor seen at a grazing angle from coming out
 --           as a solid black field. See animeEdge in RayFX.
 --
--- ------- why RIM and LINE need the RTX row and CEL does not
+-- ------- why RIM and LINE need the SCREEN FX row and CEL does not
 --
 -- Both live in the screen-space pass, and that pass reads a depth buffer
--- that only EXISTS when the RTX row is above OFF: Voxel3D.beginScene
+-- that only EXISTS when the SCREEN FX row is above OFF: Voxel3D.beginScene
 -- attaches a readable depth texture on RayFX.wanted() and a plain
--- write-only one otherwise, so with RTX OFF there is no depth to tap and no
+-- write-only one otherwise, so with SCREEN FX OFF there is no depth to tap and no
 -- normal to recover. FULL therefore draws as CEL there, silently, which is
 -- the contract every other feature in this mod follows -- it declines
 -- cleanly rather than half-working, and it never turns a render target back

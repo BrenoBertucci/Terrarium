@@ -2889,7 +2889,7 @@ local presentName = nil
 -- for a stencil clear exactly as it always has. The ALLOCATION can fail, in
 -- which case the pass falls back to the internal buffer and RayFX quietly
 -- finds nothing to read. And the whole thing is skipped when nothing wants
--- it: with RTX at OFF this allocates nothing and the frame is the one it
+-- it: with SCREEN FX at OFF this allocates nothing and the frame is the one it
 -- always was.
 local DEPTH_FORMATS = { "depth24stencil8", "depth24", "depth32f", "depth16" }
 local depthOK = nil            -- nil = untried, false = this driver will not
@@ -3764,7 +3764,7 @@ function Voxel3D.beginScene(w, h, cx, cy, vw, vh, sky, slot)
   -- kind could not be bound, which is a driver fact rather than a frame's.
   -- ------- AND A SECOND CALLER FOR THE READABLE DEPTH BUFFER
   --
-  -- It used to be RayFX alone, so at RTX OFF nothing was allocated and
+  -- It used to be RayFX alone, so at SCREEN FX OFF nothing was allocated and
   -- nothing could read the frame's own depth. The weather wants it for a
   -- different reason: its impacts and its shafts are drawn as SCREEN-SPACE
   -- quads through their own shader (they are procedural rings, jets and
@@ -4618,7 +4618,7 @@ local stampBlend, stampAlphaMode = nil, nil
 -- untagged copy of its layer.
 --
 -- Gated on the readable depth buffer, which is exactly the frame's answer to
--- "will a screen pass run at all" (see endScene): at RTX OFF nothing is
+-- "will a screen pass run at all" (see endScene): at SCREEN FX OFF nothing is
 -- allocated, nobody reads alpha, and the tag is a draw call spent on a byte
 -- no one looks at. It is also the honest guard for a driver that refused the
 -- depth format -- there, too, RayFX finds nothing to read.

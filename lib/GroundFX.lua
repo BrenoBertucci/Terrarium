@@ -503,7 +503,7 @@ local chunks = {}             -- key -> mesh or false
 -- sixteen-pixel cell is invisible at every pitch this camera has, and it
 -- settles the fight. Puddles sit lowest because water lies in the low
 -- spot; the wet prints float over them (see PRINT below). The puddles'
--- height is no longer their identity for the RTX row -- the stamp in
+-- height is no longer their identity for the SCREEN FX row -- the stamp in
 -- draw3D marks them in the frame's alpha (Voxel3D.PUDDLE_TAG) -- so
 -- moving it breaks nothing but the depth fight it exists to win.
 GroundFX.PUDDLE = 0.7
@@ -1362,7 +1362,7 @@ function GroundFX.draw3D(scene)
     local r, g, b = skyHue()
     -- Basins first (low spots, gutters): they are already showing while
     -- the rest of the street is only damp. Films wait for a real soak.
-    -- the one layer that WRITES depth, and the only reason is that the RTX
+    -- the one layer that WRITES depth, and the only reason is that the SCREEN FX
     -- row reads the depth buffer to find where a puddle's own plane is: a
     -- puddle that is not in there reflects off the road it lies on
     -- (Voxel3D.beginDecals)

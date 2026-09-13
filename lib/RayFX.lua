@@ -122,9 +122,25 @@ local RayFX = {}
 -- context, OFF on a tile-based mobile one.  Everything below it in the
 -- ladder is unchanged, so a save that says "rt", "ao", "off" or "max" still
 -- resolves to itself and the row still cycles the same direction.
-RayFX.setting = ModSetting.new("rayfx", "RTX",
+--
+-- ------- WHY THE ROW IS CALLED SCREEN FX AND NOT RTX
+--
+-- It was "RTX" for a long time, and the name was a lie by association:
+-- nothing here is ray tracing in the sense that word sells -- no hardware
+-- RT cores, no bounces against the world's geometry, no light transport.
+-- Every effect is a march across the depth buffer the 3D pass already
+-- filled, which is screen-space work and nothing else. A player who
+-- reads "RTX" and expects the reflections a raytraced game gives is being
+-- promised something the row cannot do; a player on a phone who reads
+-- "RTX" and switches it off "because my phone has no RTX" is being kept
+-- from a row that runs fine there at AO. SCREEN FX says what it is. The
+-- stored key stays "rayfx" and the stored values stay the same words, so
+-- an old save resolves to the same rung it always did; only the labels
+-- the player sees change ("RT" reads as "SSR": screen-space reflections,
+-- which is the effect that rung adds).
+RayFX.setting = ModSetting.new("rayfx", "SCREEN FX",
                                { "auto", "rt", "ao", "off", "max" },
-                               { "AUTO", "RT", "AO", "OFF", "MAX" })
+                               { "AUTO", "SSR", "AO", "OFF", "MAX" })
 
 -- ------- the dials
 --
@@ -1107,7 +1123,7 @@ local shaders = {}
 local outs = {}
 
 -- A scene may ask for AT LEAST a rung (the crypt asks for `ao`: its
--- materials want the corners shaded whatever the RTX row says); nil asks
+-- materials want the corners shaded whatever the SCREEN FX row says); nil asks
 -- for nothing. Never lowers what the row has.
 RayFX.floor = nil
 local RUNG = { off = 0, ao = 1, rt = 2, max = 3 }
@@ -1158,7 +1174,7 @@ function RayFX.row()
   return RayFX.setting:row()
 end
 
--- Keyed by the RTX rung AND the anime rung, because the two pick different
+-- Keyed by the SCREEN FX rung AND the anime rung, because the two pick different
 -- source. One key per rung was enough while this pass had one axis; with
 -- two, reusing the rung's entry would hand back whichever variant happened
 -- to be compiled first and the ANIME row would appear to do nothing until a
@@ -1176,7 +1192,7 @@ local function getShader(level)
     end
     if level == "max" then src = src .. "#define RT_SHAFTS 1\n" end
     -- The rim and the line are compiled in only here, which is what makes
-    -- "FULL needs RTX" true by construction rather than by a check: this
+    -- "FULL needs SCREEN FX" true by construction rather than by a check: this
     -- function is only ever reached from apply(), and apply() has already
     -- returned on OFF. There is no rung where the block exists and the
     -- depth buffer does not.
