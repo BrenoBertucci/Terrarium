@@ -1199,7 +1199,19 @@ local function getShader(level)
     if Anime.screen() then src = src .. "#define RT_ANIME 1\n" end
     -- Long compile used to stall the UI thread long enough that Windows
     -- logged Application Hang 1002 and killed gen1recomp on boot.
-    if love and love.event and love.event.pump then pcall(love.event.pump) end
+    --
+    -- The guard is ONE pcall using rawget -- the lib/StreetLamps.lua /
+    -- lib/Trees3D.lua lesson applies here too: the mod sandbox's love
+    -- facade RAISES ON FIELD ACCESS for a blocked module ("love.event is
+    -- not available to mods"), so a plain `love.event` in a truthiness
+    -- check throws before the guard can even decide. rawget reads the
+    -- facade's own backing table instead of going through its __index,
+    -- so it comes back nil (skipping the pump, harmlessly) under the
+    -- sandbox and finds the real module when love.event isn't facaded.
+    pcall(function()
+      local ev = love and rawget(love, "event")
+      if ev and ev.pump then ev.pump() end
+    end)
     local ok, sh = pcall(love.graphics.newShader, src .. SHADER)
     shaders[key] = (ok and sh) or false
     -- kept for the same reason Voxel3D keeps its own: a rung that will not
