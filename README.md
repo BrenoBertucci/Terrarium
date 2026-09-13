@@ -154,7 +154,7 @@ rolls its dice precisely as it always did.**
 
 | row | what it is |
 | --- | --- |
-| **RTX** | a screen-space row walked through the depth buffer the 3D pass already filled: ambient occlusion in corners the sky cannot reach, reflections marched across the water's own swell, light shafts toward the sun. OFF is byte-for-byte the old frame. |
+| **SCREEN FX** (was RTX) | not ray tracing: a screen-space row walked through the depth buffer the 3D pass already filled: ambient occlusion in corners the sky cannot reach, reflections marched across the water's own swell, light shafts toward the sun. OFF is byte-for-byte the old frame. |
 | **CITY** | PokÃ©mon loose in the streets of every town, and civilian NPCs that glance as you pass |
 | **ROUTINES / SHELTER** | civilians look around, turn toward the sign they are standing beside, talk in pairs â€” and walk to the nearest doorway when a shower comes down hard |
 | **WEATHER** | rain and snow, folded into the light rather than drawn over it |
@@ -285,6 +285,24 @@ at the top of this file.
 **Letter hotkeys (TERRARIUM):** `v` VOXEL | `g` V-GRID | `t` T-SHIFT | `c` V-CURVE | `m` SM64CAM | `b` 3D-BTL | `n` WILD | `p` MAP. Upstream still uses digits.
 `c` V-CURVE | `b` 3D-BTL | `n` WILD | `p` MAP. Upstream still uses digits.
 
+### Porygonal â€” 3D overworld characters
+
+[Porygonal](https://github.com/CurlyG004/porygonal-overworld-characters) puts
+modelled characters in the world, but it draws none of them itself: it hooks
+whichever 3D renderer mod it recognises and replaces the cast through that
+renderer's own draw calls. It recognises renderers **by exact mod id**, so it
+did not know this fork existed.
+
+[`compat/porygonal/`](compat/porygonal/README.md) is the adapter that makes the
+pair work, plus the probe that measures it. It is meant to go upstream; until
+it does:
+
+```bash
+python compat/porygonal/make_adapter.py && python compat/porygonal/install.py
+```
+
+Nothing in `lib/` or `main.lua` changed for it.
+
 ## YouTube / videos
 
 If you want to make YouTube videos with **builds newer than the public
@@ -320,6 +338,7 @@ for anything else.
 | `tests/` | twenty self-contained probes that drive the real game and write numbers |
 | `assets/` | original art, CC0 audio, and the building/voxel documentation |
 | `tools/` | authoring scripts â€” they run by hand, not at play time |
+| [`compat/porygonal/`](compat/porygonal/README.md) | the renderer adapter that lets Porygonal put its 3D characters in this diorama |
 
 ---
 
