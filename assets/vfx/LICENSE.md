@@ -220,6 +220,7 @@ redistribution the terms forbid. Credit is given here and in the mod's README.
 | Wind Spell Effect 02 | https://pimen.itch.io/wind-spell-effect (`Wind Effect 02.rar`, 9.1 kB) | `Pull in.png` → `wind_whirl.png` | 7 of 48×48 |
 | Smoke n Dust 03 | https://pimen.itch.io/smoke-n-dust-03 (`Smoke N Dust 03.rar`, 8.8 kB) | `VFX 1.png` → `wind_kick.png` | 9 of 80×64 |
 | | | `VFX 5.png` → `wind_wetpuff.png` | 6 of 32×32 |
+| | | `VFX 4.png` → `snow_burst.png` | 7 of 64×64 |
 | Windy Leaves particle fx (EdgeLoopRepeat) | https://rs-pixel-store.itch.io/falling-leaf-fx (`ELR-WindyLeafs.zip`, 1.3 kB) | `ELR_FallLeaf.png` + `ELR_SpringlLeaf.png` + `ELR_WinterlLeaf.png` → `wind_leaf.png` | 3 × 5 of 16×16, one strip |
 
 EdgeLoopRepeat's terms are the same class as Pimen's ("permission to use it in
@@ -229,6 +230,13 @@ by the same exception.
 Rebuilt from the packs in `tools/_vfx_dl/pimen` and `tools/_vfx_dl/elr_leaves`
 by `tools/install_pimen_wind.py`: one row per strip, blank frames dropped,
 pixels untouched (no resampling, no recolour — the green is Pimen's).
+
+`snow_burst.png` was cut later, by `tools/cut_snow_burst.py`, out of the same
+already-downloaded Smoke n Dust 03 — the one strip in that pack nobody had
+used. It is the powder a boot throws in a drift (lib/StepFX.lua). Same trim,
+same untouched pixels; it is tinted at draw time, never in the file. Packs
+`Smoke n Dust 02` and `04` were looked at for this and are paid; nothing was
+bought.
 
 Inspected and left out, same day: NYKNCK *Wind - Pixel Art* (credit required;
 16 frames of two grey dashes crossing a 512² canvas — the very specks this

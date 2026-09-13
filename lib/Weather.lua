@@ -1926,6 +1926,46 @@ function Weather.figureDrip(x, z, top, size)
   return true
 end
 
+-- ------- and the snow that comes OFF one
+--
+-- The same argument as the drops above, for the other sky. The snow on a
+-- walker used to be white mixed into the card's own texels along the
+-- drawing's top edges; it is a quad standing on those edges now
+-- (SnowField.cap), and what LEAVES them is this: a clump letting go of a
+-- hat or a shoulder and tumbling down in front of the card.
+--
+-- It is the fall's own flake mote, so a clump off a shoulder lands, settles
+-- and heaps into the cover through the same code a flake out of the sky
+-- does -- and it is deliberately a heavier one. A flake drifts because it
+-- is enormous for its weight; a clump that has been sitting on somebody is
+-- packed, so it drops nearly straight, wanders little, and gets there.
+Weather.FIGURE_FLAKE_FALL = 3.1    -- multiplier on a sky flake's descent
+Weather.FIGURE_FLAKE_WOB = 0.22    -- and on its wander
+Weather.figureFlakes = 0
+
+function Weather.figureFlake(x, z, y, size)
+  if failed then return false end
+  local Game = game()
+  local ow = Game and Game.overworld
+  if not (ow and ow.map) then return false end
+  if Weather.moteCount("flake") >= flakeCap() then return false end
+  local yLand = select(1, surfaceAtFast(ow, x, z))
+  local d = rand() ^ 1.6
+  motes[#motes + 1] = {
+    kind = "flake", x = x, z = z,
+    y = yLand + (tonumber(y) or 14),
+    yLand = yLand,
+    seed = rand() * 6.2831, t = 0, ttl = 30,
+    fall = (6.5 + d * 5.5) * Weather.FIGURE_FLAKE_FALL,
+    rate = 0.7 + rand() * 2.2,
+    wob = (2.6 + rand() * 7.5) * Weather.FIGURE_FLAKE_WOB,
+    vx = 0, vz = 0,
+    size = (0.65 + d * 1.05) * (tonumber(size) or 1),
+  }
+  Weather.figureFlakes = Weather.figureFlakes + 1
+  return true
+end
+
 local function shaftBudget()
   local s = 1
   local ok, n = pcall(Quality.scale)
@@ -2613,9 +2653,9 @@ function Weather.update(dt)
   -- ------- ASK FOR THE FRAME'S DEPTH, BUT ONLY WHILE IT IS RAINING
   --
   -- The readable depth buffer is a whole extra attachment, and until now
-  -- only RayFX ever wanted one -- at RTX OFF the pass allocated nothing.
+  -- only RayFX ever wanted one -- at SCREEN FX OFF the pass allocated nothing.
   -- Rather than make that unconditional, the weather asks per frame and
-  -- only while it has something to draw, so a clear sky at RTX OFF costs
+  -- only while it has something to draw, so a clear sky at SCREEN FX OFF costs
   -- exactly what it always did. Set in UPDATE rather than in draw because
   -- beginScene binds its attachments before anything is painted.
   do

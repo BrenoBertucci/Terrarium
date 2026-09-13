@@ -313,6 +313,10 @@ local function loadImgs()
   local whirl = one("wind_whirl.png")
   local kick = one("wind_kick.png")
   local wetpuff = one("wind_wetpuff.png")
+  -- the powder a boot throws in a drift (lib/StepFX.lua, cut by
+  -- tools/cut_snow_burst.py). It lives in this pack rather than in StepFX
+  -- for the reason the dust does: one load, one texture identity.
+  local snowburst = one("snow_burst.png")
   local swirlQ, swirlN = nil, 0
   if swirl then
     local fh = swirl:getHeight()
@@ -341,7 +345,7 @@ local function loadImgs()
     leaves = leaves, leafQ = leafQ, leafN = leafN,
     -- the sheets, under the names WindFX.SHEETS[*].img use
     leaf = leaf, breath = breath, curl = curl, whirl = whirl, kick = kick,
-    wetpuff = wetpuff,
+    wetpuff = wetpuff, snowburst = snowburst,
     -- overlay-path quads for them, built on first use
     sheetQ = {},
   }

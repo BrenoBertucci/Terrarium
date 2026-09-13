@@ -56,7 +56,7 @@ menu.
 | the mon pack (always on when `assets/mons` is present) | the Pokemon standing on the field wear their Generation 5 (Black/White) sprites, front and back, in full colour, instead of the Game Boy pic through a palette. ADVANCED and the other COLORS modes do not touch them; the hour's light does. Trainer pics stay the engine's |
 | the **BACK SPRITES** options row | OFF / ON — your own Pokémon seen from behind, the series' shot: ON stands it on its tile in the arena wearing its back art, grown to a foreground hero (`OverworldBattle.BACK_HERO`) under the same light and shadow as the foe, with the move cards and the panels floating in front of it; OFF stands it on the map facing the foe, at the foe's own scale. Only on the menu while **3D-BTL** is on, because it decides nothing without it |
 | the **DAYTIME** options row | SYNC / DAY / NIGHT / DUSK / DAWN / CYCLE — what time it is outdoors, on the diorama *and* on the flat 2D world; held at SYNC (and off the menu) while VOXEL is FULL |
-| the **RTX** options row | RT / AO / OFF / MAX — the screen-space pass; see below |
+| the **SCREEN FX** options row (was **RTX**) | AUTO / SSR / AO / OFF / MAX — the screen-space pass. Not ray tracing, and no RTX hardware involved; see below |
 | the **AMBIENT** options row | ON / OFF — butterflies and ground birds by day (the birds startle and fly off when you get close), dragonflies over the water, fireflies through the night, a flock crossing the sky, leaves on the wind — and civilian NPCs glance at you as you pass. Trainers never turn: their facing is their line of sight |
 | the **WEATHER** options row | AUTO / OFF / RAIN / SNOW — occasional showers, with the whole sky going over with them; snow through the winter of the SYNC clock. See below |
 | the **GROUND** options row | ON / OFF — what the weather leaves behind: puddles that gather through a shower and are still there afterwards, snow that settles in drifts, and footprints behind everybody walking on it. Only on the menu while **WEATHER** is on. See below |
@@ -643,7 +643,7 @@ low spot, and a street stippled with small pools is not what a wet street
 looks like. They wear the **sky's own colour** — the horizon band, normalised
 so only the hue carries — because a puddle is a piece of the sky lying on the
 ground, and one that stayed grey through a sunset would be the only thing on
-screen not taking part in the evening. With the **RTX** row at RT or MAX they
+screen not taking part in the evening. With the **SCREEN FX** row at SSR or MAX they
 also *reflect*: the same ray march across the same depth buffer the ponds
 get, so a pool on the road carries the hedge beside it.
 
@@ -713,9 +713,34 @@ the card a swimmer's waterline uses, with a low white collar drawn in front of
 the legs so the figure stands *in* the drift rather than in a hole. While it
 is coming down, the flakes that land on a figure lie along its **top edges**
 — the hat, the shoulders, a Pokémon's ears — and slide off over half a minute
-after the sky clears or the moment you step indoors. A boot in a drift throws
-a pinch of white powder the way it throws dust off a dry road, and a tuft of
-grass bows under what has settled on it (see the WIND row).
+after the sky clears or the moment you step indoors, in clumps that tumble
+down in front of them and land at their feet. Not *under* a crown and not in
+a doorway: the snow stops on a figure where the sky does, the same two
+questions the rain asks.
+
+That snow is a **thing lying on the drawing**, never white mixed into the
+drawing's own pixels — one small quad per column of the frame, resting on
+that column's topmost opaque row, so it fits a hat, a pair of shoulders or a
+pair of ears without being told what shape any of them are. (Painting it into
+the texels is what it used to do, and at a full fall it bleached the figure
+into a white blob with its outline eaten off. `SnowOnFX.PAINT` keeps the old
+look one flag away.) A tuft of grass bows under what has settled on it (see
+the WIND row).
+
+**And a boot in a drift throws the snow up.** Not the pinch of white dust a
+dry road throws — that is what it used to be, and powder the same white as
+the field it came out of cannot be seen at all. It is a clump at ground level
+that blooms outward into a cloud of separate specks and thins out, thrown
+higher and wider than dust and a shade cooler than the ground, so a walk
+across a fresh drift leaves a trail of them behind the trench.
+
+**With a 3D character mod driving the character pass** (Porygonal, through
+[`compat/porygonal/`](compat/porygonal/README.md)), the snow on the figures it
+replaced is the kick off their boots and nothing else — no cap, no collar.
+Both are built to a card, and a solid body is not that shape; snow lying on
+one wants that body's geometry, which is its own piece of work. The wild
+Pokémon are untouched by that mod and still drawn as cards, so they keep all
+of it: snow on the Slowpoke, none on the trainer.
 
 The fall itself is denser than it was — three hundred flakes tumbling on
 their own helices through the same wind the grass reads — and each flake
@@ -1180,11 +1205,18 @@ sheet sits exactly where the old plane sat.
 Cost: every water pixel is now shaded twice (the bed, then the sheet over
 it), plus one quad per water tile in a group of its own culled with the
 terrain and bank walls a few pixels taller. Measured on the i3 + UHD at
-FULL and RTX MAX, on the two wettest shots (the Route 25 lake, the Route
+FULL and SCREEN FX MAX, on the two wettest shots (the Route 25 lake, the Route
 21 sea): about a tenth to a seventh slower than the flat water was --
-and RES 1/2 or RTX RT gives it all back. Land is untouched.
+and RES 1/2 or SCREEN FX SSR gives it all back. Land is untouched.
 
-## Fake ray tracing — the RTX row
+## Screen-space effects — the SCREEN FX row
+
+The row was called **RTX** up to 1.36.0-beta. It is not ray tracing and
+never was: the name promised the reflections a raytraced game gives, and
+on a phone it read as "my GPU has no RTX, switch it off". The stored
+setting is the same, so an old save lands on the same rung; only the
+words changed. The old **RT** rung is now **SSR** — screen-space
+reflections, which is what it adds.
 
 Everything on this row is a **ray marched across the depth buffer the 3D
 pass has already filled**. Nothing traces the world: there is no
@@ -1197,7 +1229,7 @@ fetches rather than triangles — the world is drawn exactly once either way.
 | rung | what it marches |
 | --- | --- |
 | **AO** | *ambient occlusion.* Eight neighbours in a ring, each asked whether it stands above this point's own surface plane. Where many do, the point is in a corner and the sky is boxed out of it — so doorways, the foot of every wall and the gap between two trees darken. |
-| **RT** | AO, plus **the water reflects.** The ray leaves the surface along the swell's *own* analytic normal — the same two crossing wave trains the vertex shader displaced it by — and is marched until it lands on something, which is then read straight out of the colour buffer. So a pond reflects the tree beside it, and the reflection travels with the crest carrying it. |
+| **SSR** | AO, plus **the water reflects.** The ray leaves the surface along the swell's *own* analytic normal — the same two crossing wave trains the vertex shader displaced it by — and is marched until it lands on something, which is then read straight out of the colour buffer. So a pond reflects the tree beside it, and the reflection travels with the crest carrying it. |
 | **MAX** | both, plus **light shafts.** Every pixel marches toward the sun's own disc — the same one the sky hangs — counting how much of that line is open air. A clear run gets the whole beam, a roof in the way gets none, and the boundary between them is a god ray. |
 | **OFF** | nothing, and nothing allocated: the pass does not even ask for the readable depth buffer the others read. |
 

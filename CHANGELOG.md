@@ -26,6 +26,202 @@ Tags and packages:
 
 ## Unreleased
 
+### The snow came off the drawing
+
+- **It was being painted INTO the sprite.** The snow on everybody's hat and
+  shoulders was white mixed into the card's own texels by the scene shader
+  (Voxel3D's coat block: a texel whose upstairs neighbour is transparent,
+  plus the frame's own top row, rationed by a hash). That is the same
+  construction the rain's rivulets used before they were taken out for the
+  same reason, and it reads the same way -- the PICTURE goes white rather
+  than the person. At a full fall the player was a featureless white blob
+  with the ink outline eaten off them; on anything not shaped like a person
+  -- Pikachu, a roamer -- it landed wherever the art happened to have a top
+  edge, which is nowhere in particular.
+- **`lib/SnowOnFX.lua` is the sibling of `lib/RainOnFX.lua`**, and it keeps
+  that file's contract to the letter: `PAINT` is `false`, the old look one
+  flag away, and the number drives things that are not the sprite. With it
+  off the whole coat block is skipped -- two texture reads per fragment of
+  every character, gone with it.
+- **The CAP.** One small quad per COLUMN of the frame, lying on that
+  column's own topmost opaque row. Per column is what fits a body it was
+  never told about: it traces a hat, a pair of shoulders, a pair of ears.
+  The profile is read once per (sheet, frame) from the sheet the game
+  already decoded, and it is a measurement of where the art's top edge is
+  -- nothing samples a colour.
+- **Three things had to be true before it read as snow and not as an
+  object**, each of them found by looking at the picture rather than at the
+  code. It has to be made of RUNS of columns and not single ones (a column
+  is a pixel wide and so is the ink line, so per-column quads came out as a
+  row of outlines with no snow left inside them). It has to lie DOWN over
+  the silhouette's top rows rather than stand above them (anything standing
+  proud of the outline gets an ink line drawn round it by the screen-space
+  pass, so version one was an outlined crown hovering over everybody). And
+  a head is as deep as it is wide, so `CAP_DROP` has to be small or the
+  snow wraps down both sides of the face as a ring.
+- **The SHED.** Clumps letting go of that cap and tumbling down in front of
+  the card -- Weather's own flake mote at a heavier fall
+  (`Weather.figureFlake`), so snow off a shoulder lands, settles and heaps
+  into the cover through the same code snow out of the sky does.
+- **Per figure, not per map.** The old coat was one number for everybody,
+  including the ones standing under a crown and the ones the Shelter row
+  walked into a doorway. This asks the same two questions the rain asks, so
+  the snow stops where the sky does. Anything the update never walks (a
+  ghost on a neighbour map) falls back to the map-wide number, which is
+  what it wore before.
+- **The collar stopped reading as a concrete step.** It and the cap were
+  sampling the deformation field, which is indexed by world XZ -- and the
+  XZ under a walker is the most trodden texel on the map, so both little
+  cards were being lit as the floor of the walker's own boot print.
+  Measured at luminance 88 against 136 for the snow a foot away; on the
+  level-snow stand-in it is 144 against 167. The trench belongs on the
+  ground, which the terrain pass already draws it on.
+- **And the snow a walker kicks up is visible now.** It always fired -- 45
+  motes alive at the peak, measured -- and could not be SEEN: near-white
+  powder at 0.62 alpha over a field of near-white snow is no contrast at
+  all, the same trap the rain's additive light over white paving fell into.
+  Powder is cooler and darker than the ground now (what you see of snow in
+  the air is its shaded side), it is thrown higher and wider than dust so
+  it clears the body instead of coming up behind it, and it takes the soft
+  PUFF sprite rather than the hard grit one.
+- **A snowy footfall also throws a CLIP now, and that is what you see.**
+  Two authored stamps tinted white are what dust off a dry road is, not
+  what powder off a drift is; at a footstep's scale they read as a couple
+  of commas by the boots. `assets/vfx/snow_burst.png` is a clump at ground
+  level that blooms outward into a cloud of separate specks -- Pimen's
+  Smoke n Dust 03 VFX 4, the one strip of that already-downloaded pack
+  nobody had used, cut by `tools/cut_snow_burst.py` and carried in the
+  shared pack beside the wind's. Provenance and terms are in
+  `assets/vfx/LICENSE.md`; Smoke n Dust 02 and 04 were looked at for this
+  and are paid, and nothing was bought.
+- **The burst does not write depth, and that is not a detail.** A fragment
+  that writes depth is a silhouette, and the screen-space pass draws an ink
+  line round every silhouette -- written, each puff came out as a white
+  blob with a hard black rim, a cut-out sticker lying on the snow. StepFX
+  draws in two passes now: the grain, the spray and the foam write depth as
+  they always have, the powder does not, which is the same choice the
+  breath, the hearth's smoke and the falling flakes already make. The depth
+  TEST stays, so a burst is still hidden by whatever stands in front of it.
+- **With a 3D character mod driving the pass, a body it replaced gets no
+  sprite-shaped snow at all** -- no cap and no collar. Both are built to a
+  card: the cap is a ridge on the drawing's own top edges, the collar is a
+  card standing in front of the legs, and on a solid body they hang at the
+  outline of something that is not there. The collar was the loud one, a
+  white plank laid through everybody's shins. A slab on the crown was built
+  and measured instead, and rejected on sight -- twice. The lift is the
+  problem: at 0 the slab is inside the model's head and only its rim
+  escapes, which reads as a white ring round the hat; a five-rung sweep put
+  1.5 card px on the crown from the camera that sweep was shot from, and
+  from another angle and another pose it is the ring again. There is no one
+  height, because the sprite cannot say where a model's crown is. Snow on a
+  solid body wants that body's own geometry.
+- **But only the bodies it replaced.** The character mod replaces
+  CHARACTERS; the wild Pokemon walking the map are Terrarium's own, it has
+  no model for them, and they are still drawn as cards -- so they still
+  wear the cap, the collar and the clumps coming off it. That is what
+  `wearKind` already said, computed in posesOf for the wear field. So a
+  snowy route with a 3D player on it has snow lying on the Pokemon and
+  none on the trainer, which is the honest reading of what is actually
+  being drawn. Which body is standing there is asked of the SEAM, not of a
+  mod id (`SnowOnFX.solid`). Measured: with the mod bound, the only sheet
+  the cap is built for on a Viridian frame is the roamer's.
+- **Probe:** `tests/snow_on_probe.lua`, `run_snow_on_probe.cmd`. It samples
+  `Voxel3D.coat` at the draw rather than trusting the flag, tags cap meshes
+  as they are built and counts them as they reach the draw, reads `capTop`
+  for every sprite on the map (13..16 px on one Viridian frame -- one
+  number for all of them would mean the profile is not being read), and
+  shoots the old look and the new one in the same run.
+
+### Porygonal can now drive Terrarium
+
+- **The 3D characters mod could not see this one.**
+  [Porygonal -- Overworld Characters](https://github.com/CurlyG004/porygonal-overworld-characters)
+  swaps the overworld cast for 3D models, but it draws nothing itself: it
+  detects one supported renderer mod and replaces the characters through
+  **that renderer's own draw calls**, using a per-renderer adapter under
+  its `renderers/` folder. Every one of those adapters detects by exact
+  mod id, and this mod loads as `TERRARIUM`, so Porygonal found nothing
+  and logged "No compatible 3D renderer was detected". Upstream
+  `DRAMATIC_SHAPE` has an adapter; so does `BATTLE_ART_VOXEL_FORK`, which
+  is also a fork -- a fork needing its own file is the expected case
+  there, not a workaround.
+- **`compat/porygonal/` is that adapter.** It is meant to go upstream;
+  until it does, `compat/porygonal/install.py` puts it into a local
+  Porygonal install and `--uninstall` takes it back out. Nothing in
+  `lib/` or `main.lua` changed for this -- the whole of it lives on
+  Porygonal's side of the seam, which is where it belongs.
+- **Three of our signatures had drifted, and the drift was silent.** The
+  adapter wraps `Voxel3D.draw`, `SpriteBillboards.mesh` and
+  `SpriteBillboards.shadowQuad`; all three grew a parameter here after
+  Dramatic Shape 1.8.2, and a wrapper at the old arity does not fail, it
+  drops the argument. `sway` is the bad one: Voxel3D sends the shader
+  uniform from `sway or 0` on **every** draw, deliberately, so a swaying
+  pass cannot leak into the terrain drawn after it -- which means
+  truncating it does not merely miss the grass pass, it pins the entire
+  frame to zero and the whole world stops moving with nothing logged
+  anywhere. `cut` is the other: drop it and swimmers stand on the pond
+  and anybody in tall grass or snow is drawn at full height. The adapter
+  forwards all three.
+- **`FirstPerson` does not exist here**, and `V.require` raises on a
+  missing module rather than returning nil, so upstream's unguarded
+  require would abort `initialize()` inside Porygonal's `pcall` and read
+  as "adapter could not be initialized". It is required through `pcall`
+  now; every use of it was already nil-guarded.
+- **The adapter is generated, not copied.** `make_adapter.py` applies the
+  edits to Porygonal's own `dramatic_shape_adapter.lua` and asserts each
+  one matched -- so a Porygonal release that moves one of those call
+  sites fails the generator loudly instead of producing 4k lines that
+  quietly half-work.
+- **Measured both ways, on the same maps.** `tests/porygonal_probe.lua`
+  instruments both ends of each wrapped pair -- what this mod sends, and
+  what actually arrives at the original -- so a truncated argument is a
+  number rather than a guess. With the adapter bound: sway max 6.64 sent
+  and 6.64 arrived over 532 swaying draws, cut max 5 and 6 identical at
+  both ends, and solid character draws coming from a card fall from 1610
+  to 460 in Viridian and from 1537 to 318 on Route 1 -- the rest are wild
+  roamers, which are Pokemon rather than characters and correctly keep
+  their card. `trees_wind_probe` gives the same verdict with and without
+  the adapter.
+
+### The RTX row is now SCREEN FX
+
+- **Renamed, because the old name promised something it is not.** The
+  options row that does ambient occlusion, water reflections and light
+  shafts was labelled **RTX**. Nothing on it is ray tracing: no RT
+  hardware, no bounces against the world, no light transport -- every
+  effect is a march across the depth buffer the 3D pass already filled,
+  which is screen-space work. "RTX" set two false expectations at once:
+  reflections of the kind a raytraced game gives (it can only reflect
+  what is on screen), and "my GPU has no RTX, so this row is not for me"
+  (it runs on any GPU that runs the 3D mode). The row is now **SCREEN
+  FX**, the **RT** rung is **SSR** (screen-space reflections, which is
+  what it adds), and the menu description says in its first words what
+  the row is and is not.
+- **Saves are untouched.** The stored key (`rayfx`) and the stored values
+  (`auto`, `rt`, `ao`, `off`, `max`) are the same words they were, so an
+  old save resolves to the same rung it always did. Only the labels the
+  player reads changed. The DIAG overlay line follows the new name.
+- README, FEATURES, the shop card and the manifest blurb say SCREEN FX;
+  FEATURES keeps a note that the row was RTX up to 1.36.0-beta so the
+  older release notes below still read.
+
+### The mod's rows were missing from the OPTIONS menu on the PC build
+
+- **Found while checking the new label on the real menu.** The mod's
+  `ui.options.rows` hook pins the engine's TILT and GBC FX rows off, and
+  did so with a bare `require("src.render.GBCFX")`. The current PC build
+  (engine 0.2.57) has no such module -- SHADER FX took its place -- so the
+  require threw inside the hook, after `next()`, and the engine's hook
+  chain did what it is built to do: kept the vanilla rows and wrote one
+  warning to its log. Result: not one of this mod's rows (VOXEL's
+  companions, WEATHER, SCREEN FX, all of them) was on the OPTIONS menu on
+  that build; the mod manager's own page still listed every one, which is
+  why nobody noticed. The same require sat under the VOXEL key's press
+  handler. Both are now `pcall`ed and skipped where the module is absent,
+  and the rows are back: 37 rows on the menu before, 83 after (48 of them
+  this mod's), measured by `tests/options_label_probe.lua` -- which also puts the cursor on
+  SCREEN FX, reads it back, steps it once and photographs both.
+
 ## 1.36.0-beta
 
 **Beta para testes e nada mais.**

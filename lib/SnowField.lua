@@ -845,9 +845,285 @@ function SnowField.collar(sink)
   return m or nil, img
 end
 
+-- ------- the cap
+--
+-- The snow that lies ON a walker, and the reason it is not painted.
+--
+-- It used to be: the scene shader mixed white into the card's own texels
+-- along the drawing's top edges (Voxel3D's coat block -- a texel whose
+-- upstairs neighbour is transparent, plus the frame's top row, rationed by
+-- a hash). That put the snow INSIDE the picture. A 16x16 overworld sprite
+-- is a drawing with an ink outline, and whitening its top texels eats that
+-- outline and bleaches the hat and the face rather than covering them --
+-- the same complaint, and the same answer, as the rain rivulets that used
+-- to run down the same texels (lib/RainOnFX.lua).
+--
+-- So the snow comes off the drawing and becomes a thing lying on it: one
+-- small quad per COLUMN of the frame, sitting on that column's topmost
+-- opaque row and standing UP from it, into the air the card was not using.
+-- Per column is what makes it fit a body it was never told about -- it
+-- traces a hat, a pair of shoulders, a Pikachu's ears -- and standing up
+-- from the edge rather than down into it is what keeps the drawing whole.
+--
+-- The profile is read once per (sheet, frame) from the sheet the game
+-- already decoded, and it is a measurement of where the art's top edge is,
+-- not a reconstruction of the art: nothing here samples a colour.
+SnowField.CAP_ROWS = 4          -- the ragged strip's height, in texels
+SnowField.CAP_MIN = 0.30        -- coat below this caps nothing
+-- How far the snow LIES DOWN OVER the silhouette's top rows, and how far
+-- it stands proud of them, both in card pixels at full coat.
+--
+-- The proportion between these two is the whole look, and the first
+-- version had it backwards -- all rise, no lie. A cap that only stands
+-- above the drawing pokes out into the sky, and a shape that pokes into
+-- the sky gets an ink line drawn round it by the screen-space pass
+-- (lib/Anime.lua, drawn in RayFX): the snow came out as an outlined crown
+-- hovering over everybody's head. Snow lying ON a hat covers the hat. So
+-- most of it is inside the figure's own silhouette, where it adds no new
+-- outline, and only a hair of it crests.
+SnowField.CAP_LIE = 2.6
+-- Zero, and deliberately. Even a third of a pixel of crest is a silhouette
+-- against the sky, and the screen-space pass draws a line round any of
+-- those -- which is what made the first two attempts read as an outlined
+-- object sitting on a head rather than as snow. With none, the whole cap
+-- lives inside the figure's own outline and adds no line at all; the crest
+-- is the drawing's own top edge, wearing white.
+SnowField.CAP_RISE = 0
+-- How many heights the cap is quantized to. One mesh per (sheet, frame,
+-- step, cut), so this is the multiplier on that cache, not a free knob.
+SnowField.CAP_STEPS = 3
+-- A column whose top is more than this far below the highest one carries
+-- no snow. SMALL, and that is the other half of the same lesson: a head is
+-- as deep as it is wide, so its outermost columns top out five or six rows
+-- below the crown, and anything generous enough to include them wraps the
+-- snow down both sides of the face as a ring. The crown and the shoulders
+-- hold snow; the cheeks do not.
+SnowField.CAP_DROP = 2
+-- Notches up to this wide are bridged. Snow lying on a shape does not
+-- follow every one-pixel step in it -- it spans them, which is also what
+-- keeps the crest from reading as a row of crenellations.
+SnowField.CAP_BRIDGE = 2
+
+local capImg = nil
+local capMeshes = {}
+local capProfiles = {}
+
+-- A ragged white strip, one column per sheet column so neighbours do not
+-- share an edge. Same alpha contract as the collar: under half is
+-- discarded, so the rim dissolves instead of ending in a line.
+local function capImage()
+  if capImg ~= nil then return capImg or nil end
+  if not (love and love.image and love.image.newImageData
+          and love.graphics and love.graphics.newImage) then
+    capImg = false
+    return nil
+  end
+  local ok, img = pcall(function()
+    local w, h = 16, SnowField.CAP_ROWS
+    local d = love.image.newImageData(w, h)
+    -- Solid at the TOP and dissolving DOWNWARD, which is the way round
+    -- snow actually lies on a hat: it caps the crown and thins out as it
+    -- runs down the sides. The first version had it inverted -- solid deep
+    -- inside the head and ragged at the crest -- which reads as a bandage.
+    for x = 0, w - 1 do
+      -- how far down the strip this column's snow reaches, of 4
+      local reach = 2.2 + ((x * 7) % 5) * 0.32 + ((x * 3) % 2) * 0.26
+      for y = 0, h - 1 do
+        local down = y + 1              -- 1 at the top row, 4 at the base
+        local a
+        if down <= reach then a = 1
+        elseif down <= reach + 1 and ((x + y) % 2 == 0) then a = 1
+        else a = 0 end
+        -- a TONE the shader colours and lights, brightest at the crown and
+        -- a shade darker where it meets the drawing underneath
+        local v = (down <= 1.5) and 1.0 or 0.93
+        d:setPixel(x, y, v, v, v, a)
+      end
+    end
+    local i = love.graphics.newImage(d)
+    pcall(i.setFilter, i, "nearest", "nearest")
+    return i
+  end)
+  capImg = (ok and img) or false
+  return capImg or nil
+end
+
+-- For each of the frame's sixteen columns, the topmost opaque row, or nil
+-- where the column is empty. Read from the decoded sheet once and kept:
+-- the same handful of sheets are asked for this every frame.
+local function capProfile(path, frame)
+  local key = path .. "#" .. frame
+  local hit = capProfiles[key]
+  if hit ~= nil then return hit or nil end
+  local ImageCache = V.require("ImageCache")
+  local data = ImageCache.get(path)
+  if not (data and data.getPixel and data.getDimensions) then
+    capProfiles[key] = false
+    return nil
+  end
+  local ok, tops = pcall(function()
+    local iw, ih = data:getDimensions()
+    local fy = frame * 16
+    if fy + 16 > ih then fy = 0 end
+    local out, best = {}, nil
+    for x = 0, math.min(15, iw - 1) do
+      for r = 0, 15 do
+        local _, _, _, a = data:getPixel(x, fy + r)
+        if a and a >= 0.5 then
+          out[x] = r
+          if not best or r < best then best = r end
+          break
+        end
+      end
+    end
+    if not best then return nil end
+    -- drop the columns that are not a top surface, only a flank
+    for x = 0, 15 do
+      if out[x] and out[x] - best > SnowField.CAP_DROP then out[x] = nil end
+    end
+    -- bridge the narrow notches: a gap of a pixel or two between an ear
+    -- and a crown holds snow, and following it exactly is what turns the
+    -- crest into a row of crenellations
+    local span = SnowField.CAP_BRIDGE
+    for x = 0, 15 do
+      if not out[x] then
+        local left, right = nil, nil
+        for d = 1, span do
+          if not left and x - d >= 0 and out[x - d] then left = out[x - d] end
+          if not right and x + d <= 15 and out[x + d] then right = out[x + d] end
+        end
+        if left and right then out[x] = math.max(left, right) end
+      end
+    end
+    -- and flatten the one-pixel steps the same way: the snow sits at the
+    -- higher of a column and the neighbours it is resting between
+    local flat = {}
+    for x = 0, 15 do
+      local r = out[x]
+      if r then
+        local l, g = out[x - 1], out[x + 1]
+        if l and g and l < r and g < r then r = math.max(l, g) end
+        flat[x] = r
+      end
+    end
+    return flat
+  end)
+  capProfiles[key] = (ok and tops) or false
+  return capProfiles[key] or nil
+end
+
+-- The cap for one (sheet, frame) at coat `k` (0..1) on a card cut by `cut`
+-- pixels of feet, or nil. Returns mesh, image -- the same pair `collar`
+-- returns, drawn the same way.
+--
+-- The card's local y: the cut raised the card's origin to the waterline,
+-- so a sheet row r sits at (16 - r) - cut, and the cap stands on that.
+function SnowField.cap(def, frame, k, cut)
+  k = tonumber(k) or 0
+  if k < SnowField.CAP_MIN then return nil, nil end
+  if not (def and def.image) then return nil, nil end
+  cut = math.floor(tonumber(cut) or 0)
+  if cut < 0 then cut = 0 end
+  local step = math.ceil(k * SnowField.CAP_STEPS)
+  if step > SnowField.CAP_STEPS then step = SnowField.CAP_STEPS end
+  local img = capImage()
+  if not img then return nil, nil end
+
+  local key = def.image .. "#" .. frame .. "#" .. step .. "#" .. cut
+  local m = capMeshes[key]
+  if m == nil then
+    local tops = capProfile(def.image, frame)
+    if not tops then
+      capMeshes[key] = false
+      return nil, nil
+    end
+    local Voxel3D = V.require("Voxel3D")
+    local k = step / SnowField.CAP_STEPS
+    local lie, rise = SnowField.CAP_LIE * k, SnowField.CAP_RISE * k
+    local verts, indices, n = {}, {}, 0
+    -- One quad per RUN of columns at the same height, not one per column.
+    -- A column is a pixel wide, and the ink line the screen-space pass
+    -- draws round a shape is about that wide too -- so per-column quads
+    -- came out as a row of outlines with no snow left inside them. A run
+    -- has an interior.
+    local x = 0
+    while x <= 15 do
+      local r = tops[x]
+      if r then
+        local x1 = x
+        while x1 < 15 and tops[x1 + 1] == r do x1 = x1 + 1 end
+        local y0 = (16 - r) - cut
+        if y0 - lie > 0 then
+          local u0, u1 = x / 16, (x1 + 1) / 16
+          -- shade -1: full brightness and, by the SIGN, an UP-facing
+          -- surface, which is what makes the scene shader light it as
+          -- something snow lies on rather than as a wall
+          verts[#verts + 1] = { x, y0 - lie, 0, u0, 1, -1 }
+          verts[#verts + 1] = { x1 + 1, y0 - lie, 0, u1, 1, -1 }
+          verts[#verts + 1] = { x1 + 1, y0 + rise, 0, u1, 0, -1 }
+          verts[#verts + 1] = { x, y0 + rise, 0, u0, 0, -1 }
+          Voxel3D.pushQuad(indices, n)
+          n = n + 1
+        end
+        x = x1 + 1
+      else
+        x = x + 1
+      end
+    end
+    if n == 0 then
+      capMeshes[key] = false
+      return nil, nil
+    end
+    local ok, mesh = pcall(Voxel3D.newMesh, verts, indices)
+    m = (ok and mesh) or false
+    capMeshes[key] = m
+  end
+  return m or nil, img
+end
+
+-- ------- and the same snow on a SOLID body: not here, and tried twice
+--
+-- With a 3D character mod driving the character pass (Porygonal, through
+-- compat/porygonal), what stands there is a model rather than a card, and
+-- everything above is built from the sprite's own column profile.
+--
+-- The answer that looked right on paper was a slab lying flat on the
+-- model's crown, and it was built, calibrated and rejected on sight. The
+-- lift is the problem: at 0 the slab is inside the head and only its rim
+-- escapes, which reads as a white ring round the hat; a five-rung sweep put
+-- 1.5 card px on the crown from the camera that sweep was shot from -- and
+-- from a different angle and a different pose it is the ring again. There
+-- is no single height that works, because the sprite cannot say where a
+-- model's crown is.
+--
+-- So the solid path gets no cap. What a figure makes there is what their
+-- boots throw up out of the ground (lib/StepFX.lua), which is world space
+-- and true under anything standing in it. Snow on a solid body wants that
+-- body's own geometry, and until something can ask the model for it, a
+-- guess at its proportions is what keeps landing on the head as a ring.
+
+-- Where the snow on this figure sits, in card-local y: the top of its
+-- highest column. What SnowOnFX lets a shed flake go from, so the flake
+-- leaves the hat rather than the middle of the air above it.
+function SnowField.capTop(def, frame)
+  if not (def and def.image) then return nil end
+  local tops = capProfile(def.image, frame)
+  if not tops then return nil end
+  local best = nil
+  for x = 0, 15 do
+    local r = tops[x]
+    if r and (not best or r < best) then best = r end
+  end
+  if not best then return nil end
+  return 16 - best
+end
+
 function SnowField.invalidate()
   collarMeshes = {}
   collarImg = nil
+  capMeshes = {}
+  capProfiles = {}
+  capImg = nil
 end
 
 return SnowField

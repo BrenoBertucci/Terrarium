@@ -781,38 +781,11 @@ end
 
 -- ------- and the snow on their shoulders
 --
--- How much is lying on everybody's hat and shoulders, 0..1: climbs over a
--- few seconds while the fall is coming down where the camera is, and
--- slides off over half a minute after it stops -- or the moment you step
--- indoors, where Weather.visible already answers nothing. The scene
--- shader paints it along each card's top edges (Voxel3D's coat block).
-local coatK = 0
-local coatAt = nil
-local function coatNow()
-  local now = (love.timer and love.timer.getTime and love.timer.getTime())
-              or 0
-  local dt = (coatAt and (now - coatAt)) or 0
-  coatAt = now
-  if dt < 0 then dt = 0 elseif dt > 0.1 then dt = 0.1 end
-  local kind, power = nil, 0
-  local okW, Weather = pcall(V.require, "Weather")
-  if okW and Weather and Weather.visible then
-    local okv, k, p = pcall(Weather.visible)
-    if okv then kind, power = k, tonumber(p) or 0 end
-  end
-  local target = 0
-  if kind == "snow" and GroundFX.enabled() then
-    target = math.min(1, power * 1.25)
-  end
-  if target > coatK then
-    coatK = coatK + (target - coatK) * math.min(1, dt / 6)
-  else
-    coatK = coatK - dt / 30
-    if coatK < target then coatK = target end
-  end
-  if coatK < 0 then coatK = 0 end
-  return coatK
-end
+-- How much is lying on each figure, and what it draws, both live in
+-- lib/SnowOnFX.lua now -- per figure rather than one number for the whole
+-- map, so the snow stops for the ones under a crown or held in a doorway,
+-- and drawn as a quad standing on the drawing's top edges rather than as
+-- white mixed into the drawing's texels. See that file for why.
 
 local function posesOf(state, spriteColors)
   local colors = spriteColors(state.map)
@@ -1858,12 +1831,14 @@ function VoxelScene.render(state, w, h, vw, vh, paletteFor)
   -- character genuinely behind a building is far deeper and loses the
   -- test, so buildings and trees really occlude.
   Voxel3D.seams(false)
-  -- the snow on everybody's hat and shoulders, for the length of this
-  -- pass and no longer (see coatNow) -- and on top of it whatever a
-  -- shaken tree dropped on this one figure in particular
-  local coatBase = coatNow()
-  -- and how much rain is running down each one (lib/RainOnFX.lua), on a
-  -- clock the rivulets slide on -- off for anything that is not a figure
+  -- how much snow is lying on each one (lib/SnowOnFX.lua) and how much
+  -- rain is running down it (lib/RainOnFX.lua) -- both off for anything
+  -- that is not a figure
+  local snowOn = nil
+  do
+    local okS, S = pcall(V.require, "SnowOnFX")
+    if okS and S and S.paintOf then snowOn = S end
+  end
   local rainOn = nil
   do
     local okR, R = pcall(V.require, "RainOnFX")
@@ -1871,10 +1846,14 @@ function VoxelScene.render(state, w, h, vw, vh, paletteFor)
     Voxel3D.rainTime = (love.timer and love.timer.getTime and love.timer.getTime()) or 0
   end
   for _, p in ipairs(posed) do
-    local c = coatBase
-    if snowField and p.ent then
-      local okc, d = pcall(snowField.coatOf, p.ent)
-      if okc and d and d > c then c = d end
+    -- what the shader may PAINT on the card: nothing, unless SnowOnFX.PAINT
+    -- -- the snow on a figure is a quad standing on the drawing's own top
+    -- edges now (SnowField.cap, drawn below with the collar), not white
+    -- mixed into the drawing's texels
+    local c = 0
+    if snowOn and p.ent then
+      local okc, cc = pcall(snowOn.paintOf, p.ent)
+      c = (okc and tonumber(cc)) or 0
     end
     Voxel3D.coat = c
     -- what the shader may PAINT on the card: nothing, unless RainOnFX.PAINT
@@ -1927,13 +1906,44 @@ function VoxelScene.render(state, w, h, vw, vh, paletteFor)
   if snowField then
     local cpull = billboardPull() + 0.75
     local drewOne = false
+    -- ------- who still gets the snow a CARD gets
+    --
+    -- The collar and the cap are both built to a sprite: the collar is a
+    -- card standing in front of the legs, the cap is a ridge on the
+    -- drawing's own top edges. With a 3D character mod driving the pass
+    -- neither of them belongs on the figures it replaced -- they are
+    -- sprite-shaped snow on a body that is no longer that shape, and the
+    -- collar in particular reads as a white plank laid through the shins.
+    --
+    -- But the mod only replaces CHARACTERS. The wild Pokemon walking the
+    -- map are Terrarium's own, it has no model for them, and they are
+    -- still drawn as cards -- so they still get what a card gets. That is
+    -- the ENTITY's own roamer flag, and not `wearKind`: a roamer standing
+    -- on a neighbour map comes through as a ghost, so wearKind says
+    -- "ghost" there and a Vulpix two cells over the border was being given
+    -- a solid body's snow. The flag travels with the entity either way.
+    local okSolid, solid = pcall(snowOn and snowOn.solid or function() return false end)
+    solid = okSolid and solid or false
+    local function asACard(p)
+      if not solid then return true end
+      return (p.ent and p.ent.roamer) and true or false
+    end
     for _, p in ipairs(posed) do
-      if p.sink and p.sink > 0 then
+      if p.sink and p.sink > 0 and asACard(p) then
         local mesh, img = snowField.collar(p.sink)
         if mesh then
           if not drewOne then
             Voxel3D.glass(false)
-            Voxel3D.snowMap = snowState
+            -- The level-snow stand-in, NOT the deformation field. The
+            -- field is indexed by world XZ and the XZ under a walker is
+            -- the most trodden texel on the map, so both of these little
+            -- cards were sampling the floor of the walker's own boot
+            -- print: measured at luminance 88 against 136 for the snow a
+            -- foot away, which is what made the collar read as a concrete
+            -- step rather than as snow. The trench belongs on the GROUND,
+            -- which the terrain pass already draws it on; what stands
+            -- around the shins is the snow the boot pushed UP.
+            Voxel3D.snowMap = nil
             drewOne = true
           end
           local y = p.gh + (p.lift or 0)
@@ -1943,6 +1953,55 @@ function VoxelScene.render(state, w, h, vw, vh, paletteFor)
                                                            false)))
         end
       end
+    end
+    -- ------- and the snow lying ON them
+    --
+    -- The other half of taking the coat off the drawing: one small white
+    -- quad per column of the frame, standing on that column's own topmost
+    -- opaque row and rising into the air ABOVE it. Above, not into it --
+    -- which is the whole point, because the shader block this replaces
+    -- whitened the drawing's own texels and ate the ink outline with them.
+    --
+    -- Same feet pivot, same lean and the same camera-ward pull the collar
+    -- takes, and the same MIRROR the card was drawn with: the profile was
+    -- read off the unflipped frame, so a figure facing right has to flip
+    -- its snow with it or the hat's snow ends up over an ear.
+    -- ------- and the snow lying ON one, under the same rule
+    --
+    -- The ridge is built from the drawing's own column profile, so a body
+    -- the character mod replaced gets none of it -- and gets nothing in its
+    -- place either. A slab lying on the model's crown was built for this
+    -- and rejected on sight: see SnowField, where the calibration and why
+    -- it does not hold are written down. What a figure gets on that path is
+    -- what the ground throws up under them as they walk (lib/StepFX.lua).
+    if snowOn then
+      for _, p in ipairs(posed) do
+        local k = 0
+        if p.ent and asACard(p) then
+          local okk, kk = pcall(snowOn.capOf, p.ent)
+          k = (okk and tonumber(kk)) or 0
+        end
+        if k > 0 then
+          local def = p.sprite and p.sprite.def
+          local frame, mirror = frameFor(def, p.facing, p.phase, p.flip)
+          local mesh, img = snowField.cap(def, frame, k, p.waterline or 0)
+          if mesh then
+            if not drewOne then
+              Voxel3D.glass(false)
+              drewOne = true
+            end
+            Voxel3D.snowMap = nil
+            local y = p.gh + (p.lift or 0)
+            -- the ridge rides the card, lean and all, because it is snow
+            -- on that drawing
+            Voxel3D.draw(mesh, img,
+                         billboardMatrix(p.px, p.py, y, mirror), cpull,
+                         ShadowMap.snug(Voxel3D.casterMatrix(p.px, p.py, y,
+                                                             mirror)))
+          end
+        end
+      end
+      Voxel3D.snowMap = snowState
     end
     if drewOne then Voxel3D.glass(true) end
   end

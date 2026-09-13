@@ -84,8 +84,37 @@ StepFX.WET_KILL = 0.45     -- wetness at which the ground stops puffing
 StepFX.SNOW_KILL = 0.35    -- settled cover at which the step throws snow
 -- What that snow is tinted: the fall's own white (Weather.SNOW), a hair
 -- cooler, so a kicked pinch of it reads as powder and not as dust.
-StepFX.SNOW = { 0.95, 0.97, 1.00 }
-StepFX.SNOW_SIZE = 1.35    -- powder flies bigger than dust
+-- ...and it was WHITE, which is the trap: near-white powder at 0.62 alpha
+-- over a field of near-white snow is no contrast at all, and the effect
+-- fired all along (45 motes alive at the peak, measured) without being
+-- visible in a single frame. What you actually see of snow thrown into the
+-- air is its SHADED side against the flat lit ground it came out of, so
+-- the powder is cooler and darker than the ground rather than brighter.
+StepFX.SNOW = { 0.80, 0.86, 0.99 }
+StepFX.SNOW_SIZE = 2.9     -- powder flies bigger than dust
+-- Thrown HIGHER and WIDER than dust, and that is the other half of why it
+-- could not be seen: a mote at the same height as a boot print, on a
+-- camera looking down over the walker's shoulder, is behind the walker.
+-- Powder off a drift goes up and out, into the air beside them.
+StepFX.SNOW_LIFT = 2.4
+StepFX.SNOW_SPREAD = 2.2
+StepFX.SNOW_RATE = 1.7     -- and there is more of it than there is dust
+-- ------- and the BURST, which is the thing you actually see
+--
+-- Two authored stamps -- a grit speck and a soft puff -- are what dust off a
+-- dry road is, and tinting them white is not what powder off a drift is: at
+-- a footstep's scale they read as a couple of commas by the boots. So a
+-- snowy footfall also throws ONE clip -- a clump at ground level that blooms
+-- outward into a cloud of separate specks and thins out, which is what a
+-- boot going through a drift does to it.
+--
+-- Pimen's Smoke n Dust 03 VFX 4, cut by tools/cut_snow_burst.py and carried
+-- in the shared pack (WindFX.pack().snowburst). It does not spin and it does
+-- not fly: the clip animates the rise, and the mote only drifts the way the
+-- boot pushed it.
+StepFX.SNOW_BURST = { fw = 64, fh = 64, n = 7, fps = 15, hw = 7.2 }
+StepFX.BURST_CHANCE = 0.85    -- per snowy footfall
+StepFX.BURST_ALPHA = 0.85
 StepFX.WATER = { 0.74, 0.85, 1.00 }   -- and a splash off a soaked road
 -- ------- and a real SPLASH, out of standing water
 --
@@ -115,6 +144,7 @@ local field = Particles.newField(StepFX.KINDS, StepFX.MAX)
 local trail = setmetatable({}, { __mode = "k" })
 local stepCtx = {}
 local builder = nil
+local softBuilder = nil
 
 -- The instruments, same contract as every module in the chain (see
 -- armadilha 1): a throw in update or draw is caught, counted and named,
@@ -257,18 +287,51 @@ local function footfall(x, z, mx, mz)
   local tint = snowy and StepFX.SNOW or (soaked and StepFX.WATER) or WindFX.DUST
   local big = snowy and StepFX.SNOW_SIZE or (soaked and 0.75) or 1
 
+  local snowRate = snowy and StepFX.SNOW_RATE or 1
+  local snowLift = snowy and StepFX.SNOW_LIFT or 1
+  local snowWide = snowy and StepFX.SNOW_SPREAD or 1
+
+  -- ------- the powder burst, on snow only
+  local burst = StepFX.SNOW_BURST
+  if snowy and rand() < math.min(1, StepFX.BURST_CHANCE * mul)
+      and not field:full() then
+    local m = field:claim()
+    if m then
+      m.kind = "burst"
+      m.snow = true
+      m.x = x + (rand() * 2 - 1) * 2
+      m.z = z + (rand() * 2 - 1) * 2
+      m.y = ground + 1.0
+      m.t, m.ttl = 0, burst.n / burst.fps
+      m.seed = rand() * 6.2831
+      -- no fast, no lift, no spin: the clip IS the animation, and a card
+      -- that turns in its own plane while a drawn puff blooms inside it
+      -- reads as the drawing sliding rather than as snow rising
+      m.fast, m.lift, m.spin = 0, 0, 0
+      m.frame, m.flip, m.front = 0, 1, false
+      m.size = 0.85 + rand() * 0.35
+      m.tint = tint
+      m.ang = 0
+      -- only what the boot pushed: a burst stays where the foot was
+      m.vx = -mx * 5 + (rand() * 2 - 1) * 2
+      m.vz = -mz * 5 + (rand() * 2 - 1) * 2
+      StepFX.emitted = StepFX.emitted + 1
+    end
+  end
+
   -- the grain, thrown backward off the boot
-  if rand() < math.min(1, 0.85 * dry * mul) and not field:full() then
+  if rand() < math.min(1, 0.85 * dry * mul * snowRate) and not field:full() then
     local m = field:claim()
     if m then
       m.kind = "kick"
-      m.x = x + (rand() * 2 - 1) * 2
-      m.z = z + (rand() * 2 - 1) * 2
+      m.snow = snowy
+      m.x = x + (rand() * 2 - 1) * 2 * snowWide
+      m.z = z + (rand() * 2 - 1) * 2 * snowWide
       m.y = ground + 1.2
       m.t, m.ttl = 0, 0.5 + rand() * 0.4
       m.seed = rand() * 6.2831
       m.fast = 0.5 + rand() * 0.7
-      m.lift = 3 + rand() * 4
+      m.lift = (3 + rand() * 4) * snowLift
       m.spin = (rand() * 2 - 1) * 1.5
       m.frame, m.flip, m.front = 0, 1, false
       m.size = (0.40 + rand() * 0.50) * big
@@ -284,17 +347,18 @@ local function footfall(x, z, mx, mz)
   end
 
   -- the puff, which just hangs and takes the air
-  if rand() < math.min(1, 0.70 * dry * mul) and not field:full() then
+  if rand() < math.min(1, 0.70 * dry * mul * snowRate) and not field:full() then
     local m = field:claim()
     if m then
       m.kind = "dust"
-      m.x = x + (rand() * 2 - 1) * 3
-      m.z = z + (rand() * 2 - 1) * 3
+      m.snow = snowy
+      m.x = x + (rand() * 2 - 1) * 3 * snowWide
+      m.z = z + (rand() * 2 - 1) * 3 * snowWide
       m.y = ground + 1.6
       m.t, m.ttl = 0, 0.9 + rand() * 0.7
       m.seed = rand() * 6.2831
       m.fast = 0.5 + rand() * 0.6
-      m.lift = 2 + rand() * 3
+      m.lift = (2 + rand() * 3) * snowLift
       m.spin = (rand() * 2 - 1) * 3.0
       m.frame, m.flip, m.front = 0, 1, false
       m.size = (0.55 + rand() * 0.55) * big
@@ -433,12 +497,43 @@ local function drawWorldBody()
   builder = builder or ParticleMesh.newBuilder(StepFX.MAX)
 
   local describe = function(m)
-    local img = (m.kind == "dust" or m.kind == "foam") and (pack.puff or pack.grit) or pack.grit
+    -- ------- the burst: one card of the clip's current frame
+    if m.kind == "burst" then
+      local img = pack.snowburst
+      if not img then return nil end
+      local s = StepFX.SNOW_BURST
+      local iw, ih = img:getDimensions()
+      if iw < 1 or ih < 1 then return nil end
+      local f = math.floor(m.t * s.fps)
+      if f < 0 then f = 0 elseif f >= s.n then return nil end
+      local u0 = (f * s.fw) / iw
+      local u1 = u0 + s.fw / iw
+      -- the clip thins out on its own, so this only guards the last frame
+      -- against a pop, the way WindFX.SHEET_OUT does
+      local a = StepFX.BURST_ALPHA * math.min(1, (m.ttl - m.t) * 5)
+      if a <= 0.02 then return nil end
+      local col = m.tint or StepFX.SNOW
+      local hw = s.hw * (m.size or 1)
+      return img, u0, 0, u1, 1, hw, hw * (s.fh / s.fw), 0,
+             col[1], col[2], col[3], a
+    end
+
+    -- Snow takes the PUFF for its grain too, not the grit. Grit is a hard
+    -- speck, which is what a stone road throws; powder off a drift is a
+    -- soft cloud, and at this magnification the difference between the two
+    -- is the difference between grey commas by the boots and snow being
+    -- kicked up.
+    local soft = m.kind == "dust" or m.kind == "foam" or m.snow
+    local img = soft and (pack.puff or pack.grit) or pack.grit
     if not img then return nil end
     -- fast in (a step is sudden), long settle-out (dust dies by fading)
     local fade = math.min(1, m.t * 6, (m.ttl - m.t) * 1.6)
-    -- water is bright and hard-edged; it does not fade the way dust does
-    local a = (m.kind == "drop" and 0.92 or (m.kind == "foam" and 0.78 or 0.62)) * fade
+    -- water is bright and hard-edged; it does not fade the way dust does.
+    -- Powder carries more than dust: it is the thing being looked at here,
+    -- and it is competing with a field of the same colour.
+    local a = (m.kind == "drop" and 0.92
+               or (m.kind == "foam" and 0.78)
+               or (m.snow and 0.82) or 0.62) * fade
     if a <= 0.02 then return nil end
     local c = CARD[m.kind] or CARD.kick
     local base = c[1] * (m.size or 1)
@@ -450,9 +545,33 @@ local function drawWorldBody()
     return img, 0, 0, 1, 1, hw, hh, m.ang or 0, col[1], col[2], col[3], a
   end
 
-  local mesh, batches = builder:build(field, describe)
-  if not mesh then StepFX.lastBatches = 0 return 0 end
-  local drew = Voxel3D.drawParticles(mesh, nil, batches, true)
+  -- ------- two passes, and the difference is the DEPTH WRITE
+  --
+  -- The grain, the spray and the foam write depth, as they always have.
+  -- The powder burst must not, and that is not a detail: a fragment that
+  -- writes depth is a silhouette, and the screen-space pass draws an ink
+  -- line round every silhouette (lib/Anime.lua). Written, each puff came
+  -- out as a white blob with a hard black rim -- a cut-out sticker lying
+  -- on the snow rather than powder in the air. It is the same reason the
+  -- breath, the hearth's smoke and the falling flakes all pass false.
+  --
+  -- The depth TEST stays either way, so a burst is still hidden by
+  -- whatever stands in front of it.
+  local function only(want)
+    return function(m)
+      if ((m.kind == "burst") and true or false) ~= want then return nil end
+      return describe(m)
+    end
+  end
+
+  local drew = 0
+  local mesh, batches = builder:build(field, only(false))
+  if mesh then drew = drew + Voxel3D.drawParticles(mesh, nil, batches, true) end
+  softBuilder = softBuilder or ParticleMesh.newBuilder(StepFX.MAX)
+  local sMesh, sBatches = softBuilder:build(field, only(true))
+  if sMesh then
+    drew = drew + Voxel3D.drawParticles(sMesh, nil, sBatches, false)
+  end
   StepFX.lastBatches = drew
   return drew
 end
