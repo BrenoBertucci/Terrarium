@@ -41,6 +41,18 @@ local BattleBoxXY = {}
 
 BattleBoxXY.ENABLED = true
 
+-- MINIMAL (see BattleDynamic): still speaks for "messages" (the intro
+-- text and the like), but gets out of the way for "menu"/"moveSelect" --
+-- neither this mod's own command UI nor the engine's shows, leaving the
+-- phase for another mod's own hook.
+BattleBoxXY.HIDE_COMMANDS = false
+
+-- OFF (see BattleDynamic): suppressed outright. Unlike a plain
+-- `available()==false` (missing assets, say), which falls back to the
+-- engine's own box, SUPPRESS means nothing this mod touches shows at
+-- all -- OFF is a level below "fall back to classic," not classic itself.
+BattleBoxXY.SUPPRESS = false
+
 BattleBoxXY.ASSET_DIR = "assets/battlexy/"
 
 -- The four commands, in the order menuIndex counts them. Measured, not
@@ -171,6 +183,11 @@ BattleBoxXY.PHASES = {
 
 function BattleBoxXY.covers(battle)
   if not (battle and BattleBoxXY.available()) then return false end
+  if BattleBoxXY.SUPPRESS then return false end
+  if BattleBoxXY.HIDE_COMMANDS
+     and (battle.phase == "menu" or battle.phase == "moveSelect") then
+    return false
+  end
   return BattleBoxXY.PHASES[battle.phase] and true or false
 end
 
@@ -742,7 +759,20 @@ function BattleBoxXY.install()
     -- `dramaticShapeShot` is how the rest of the mod asks "is this battle
     -- being drawn over the diorama": on the plain battle background the
     -- engine's own box is right and nothing here should run.
-    if self.dramaticShapeShot and BattleBoxXY.available() then return end
+    if self.dramaticShapeShot then
+      -- OFF: nothing this mod touches shows, ever -- not even the
+      -- engine's own box, which a plain `available()==false` falls back
+      -- to below.
+      if BattleBoxXY.SUPPRESS then return end
+      -- MINIMAL (HIDE_COMMANDS): this file speaks for "messages" (handled
+      -- in OverworldBattle.snapHUDs) but draws nothing at all for the
+      -- command phases -- not its own UI, and not the engine's either.
+      -- A mod meaning to supply its own menu here has to reach the
+      -- screen some other way (its own render hook, not this chain),
+      -- since falling through to `inner` would show the engine's box
+      -- exactly when this level means to hide it.
+      if BattleBoxXY.available() then return end
+    end
     return inner(self, ...)
   end
   BattleState.terrariumXYBox = true
