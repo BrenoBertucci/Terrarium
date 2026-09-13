@@ -26,6 +26,23 @@ Tags and packages:
 
 ## Unreleased
 
+### A language switch for this mod's own menus -- Portuguese by default, English on request
+
+- **`lib/Lang.lua` (new):** a `ModSetting`-backed `IDIOMA` row and
+  `Lang.pick(en, pt)` for text this mod draws itself -- never the engine's
+  own strings, which stay whatever a save's own translation mod (if any)
+  prints them as. Portuguese is the default, matching how this mod's
+  battle/menu overlays have always read; English is there for a player who
+  wants this mod's own glass-panel menus to read in English instead.
+- **`lib/BattleBoxXY.lua`:** the X/Y command buttons' fallback label (drawn
+  only when the pack's own art fails to load) follows the setting instead
+  of being a fixed Portuguese literal.
+- **`lib/BattleScreenXY.lua`:** the bag's pocket tabs (ITENS/CURA/BOLAS/TM-HM)
+  follow it too, through a new `pocketLabel(key)` in place of the old fixed
+  `POCKET_LABEL` table.
+- **`lib/StartMenuMap.lua`:** the start menu's MAP row label follows it as
+  well, through a new `label()` in place of the old fixed `LABEL` field.
+
 ### The snow came off the drawing
 
 - **It was being painted INTO the sprite.** The snow on everybody's hat and
