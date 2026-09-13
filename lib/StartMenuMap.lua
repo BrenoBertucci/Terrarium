@@ -19,14 +19,21 @@
 -- the mod namespace (see main.lua): V.require loads a sibling module
 local V = ...
 
+local Lang = V.require("Lang")
+
 local StartMenuMap = {}
 
 StartMenuMap.ENABLED = true
 
 -- What the row says. The engine's own item is called MAPA in this build's
--- strings (data item TOWN_MAP, name = "MAPA"), so the row borrows that rather
--- than inventing a second word for the same object.
-StartMenuMap.LABEL = "MAPA"
+-- strings (data item TOWN_MAP, name = "MAPA"), so the row borrows that by
+-- default rather than inventing a second word for the same object -- MAP is
+-- what gen1recomp's own TOWN_MAP item is named in English
+-- (data/generated/text.lua), so Lang.setting swaps to that instead when the
+-- player picks English.
+function StartMenuMap.label()
+  return Lang.pick("MAP", "MAPA")
+end
 
 -- The row this one goes under, matched case-insensitively against the menu's
 -- own labels. A build whose ITENS row is spelled differently gets the row
@@ -90,7 +97,7 @@ end
 
 function StartMenuMap.row(game)
   return {
-    label = StartMenuMap.LABEL,
+    label = StartMenuMap.label(),
     onSelect = function() StartMenuMap.open(game) end,
   }
 end
@@ -124,7 +131,7 @@ function StartMenuMap.install()
     end
     -- never twice on the same menu, whatever else wraps this
     for i = 1, #menu.items do
-      if menu.items[i] and menu.items[i].label == StartMenuMap.LABEL then
+      if menu.items[i] and menu.items[i].label == StartMenuMap.label() then
         return menu
       end
     end

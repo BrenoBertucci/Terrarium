@@ -29,13 +29,17 @@
 -- used to step upward to dodge the grown panel.
 --
 -- THE LABELS ARE THE GAME'S. The 5X pack draws its command buttons with the
--- words baked in, in English -- POKéMON, BAG, RUN. This build runs in
--- Portuguese (LUTAR, PKMN, ITENS, FUGIR), so the art's own labels would put
--- two languages in one frame. The buttons here are drawn rather than blitted
--- and the words come from the same place the Game Boy's did.
+-- words baked in, in English -- POKéMON, BAG, RUN -- and this build's own
+-- Portuguese default (see lib/Lang.lua) would put two languages in one
+-- frame, so the buttons here are drawn rather than blitted and the words
+-- come from the same place the Game Boy's did. `label` is only the fallback
+-- text drawn when the art fails to load (see `button` below); Lang.setting
+-- lets a player switch that fallback to English without touching the art.
 
 -- the mod namespace (see main.lua): V.require loads a sibling module
 local V = ...
+
+local Lang = V.require("Lang")
 
 local BattleBoxXY = {}
 
@@ -48,16 +52,22 @@ BattleBoxXY.ASSET_DIR = "assets/battlexy/"
 -- to 2, which is a 2x2 read row-first.
 --
 -- The art is the pack's own button for each, so the words on them are the
--- pack's too: FIGHT, POKéMON, BAG, RUN. That does put English on a menu the
--- rest of this build shows in Portuguese, and it is deliberate -- these are
--- the X/Y buttons, and redrawing them to translate the label would make them
--- something else. `label` is kept beside each for the tooltip-less case where
--- the art fails to load and the fallback has to say something.
+-- pack's too: FIGHT, POKéMON, BAG, RUN -- redrawing them to translate the
+-- label would make them something else. `label` is a function so the
+-- fallback text (drawn only when the art fails to load; see `button` below)
+-- follows Lang.setting instead of being fixed at load time.
+local function label(en, pt)
+  return function() return Lang.pick(en, pt) end
+end
 BattleBoxXY.COMMANDS = {
-  { art = "cmd_fight",   label = "LUTAR", color = { 0.86, 0.24, 0.21 } },
-  { art = "cmd_pokemon", label = "PKMN",  color = { 0.24, 0.70, 0.36 } },
-  { art = "cmd_bag",     label = "ITENS", color = { 0.93, 0.66, 0.16 } },
-  { art = "cmd_run",     label = "FUGIR", color = { 0.20, 0.52, 0.86 } },
+  { art = "cmd_fight",   label = label("FIGHT", "LUTAR"),
+    color = { 0.86, 0.24, 0.21 } },
+  { art = "cmd_pokemon", label = label("PKMN",  "PKMN"),
+    color = { 0.24, 0.70, 0.36 } },
+  { art = "cmd_bag",     label = label("BAG",   "ITENS"),
+    color = { 0.93, 0.66, 0.16 } },
+  { art = "cmd_run",     label = label("RUN",   "FUGIR"),
+    color = { 0.20, 0.52, 0.86 } },
 }
 
 -- X/Y stands FIGHT on its own, big, with the other three along the bottom
@@ -309,8 +319,9 @@ local function button(x, y, w, h, cmd, selected, align, mul)
     love.graphics.setColor(c[1], c[2], c[3], selected and 1 or BattleBoxXY.DIM)
     love.graphics.rectangle("fill", x, y, w, h, r, r)
     local th = h * 0.46
-    local tw = BattleHudXY.textWidth(cmd.label) * (th / 84)
-    BattleHudXY.text(cmd.label, x + (w - tw) * 0.5, y + (h - th) * 0.5, th,
+    local text = cmd.label()
+    local tw = BattleHudXY.textWidth(text) * (th / 84)
+    BattleHudXY.text(text, x + (w - tw) * 0.5, y + (h - th) * 0.5, th,
                      BattleBoxXY.TEXT)
     love.graphics.setColor(1, 1, 1, 1)
     return
