@@ -1449,6 +1449,19 @@ end
 local UI = 1
 local function S(px) return math.floor(px * UI + 0.5) end
 
+-- A second, independent scale for the screen's own reading text -- the
+-- objective panel, the card, the hints, the compass, the banner -- for
+-- better reading on both ends of the window-size range: a phone panel
+-- already gets S()'s own 3x from being held close, but the text itself
+-- read small there and on a 4K monitor alike next to everything else
+-- here. Wraps just the number, not S() itself, so it stacks with the
+-- 720p scale rather than replacing it. NOT applied inside plate()
+-- below: the floating name tag over each pin on the terrain is sized
+-- correctly already, and growing it too would make it fight the pin it
+-- sits on.
+local FONT_UP = 1.3
+local function fs(px) return px * FONT_UP end
+
 local function text(s, x, y, size, r, g, b, a)
   size = S(size)
   if BattleHudXY.available() then
@@ -1597,7 +1610,7 @@ local function drawPins(screen, w, h, hour)
       if flySet and not flySet[L.name] and not isYou then col = { 0.6, 0.6, 0.66 } end
       plate(L.name, sx, sy - (isYou and S(26) or 0), size, isSel, col)
       if isYou then
-        text(STRINGS.you, sx - textW(STRINGS.you, 13) * 0.5, sy + S(6), 13, 0.65, 0.92, 1, 0.95)
+        text(STRINGS.you, sx - textW(STRINGS.you, fs(13)) * 0.5, sy + S(6), fs(13), 0.65, 0.92, 1, 0.95)
       end
     end
   end
@@ -1705,17 +1718,18 @@ local function drawObjective(w, h)
   if not quest then return end
   local pad, x, y = S(12), S(18), S(18)
   local pw = math.min(S(470), w * 0.36)
-  local size = 16
+  local size = fs(16)
+  local dsize = fs(13)
   local lines = wrap(quest.step.title, size, pw - pad * 2)
-  local dlines = wrap(quest.step.detail or "", 13, pw - pad * 2)
-  local ph = pad + S(18) + #lines * S(size + 5) + S(6) + #dlines * S(17) + S(6)
+  local dlines = wrap(quest.step.detail or "", dsize, pw - pad * 2)
+  local ph = pad + S(fs(18)) + #lines * S(size + 5) + S(fs(6)) + #dlines * S(fs(17)) + S(fs(6))
   local where = questTarget and questTarget.name or ""
-  if where ~= "" then ph = ph + S(24) end
-  if #quest.upcoming > 0 then ph = ph + S(20) + #quest.upcoming * S(17) end
-  ph = ph + pad - S(4)
+  if where ~= "" then ph = ph + S(fs(24)) end
+  if #quest.upcoming > 0 then ph = ph + S(fs(20)) + #quest.upcoming * S(fs(17)) end
+  ph = ph + pad - S(fs(4))
   panel(x, y, pw, ph, 0.80)
-  local ty = y + pad - S(2)
-  text(STRINGS.objective, x + pad, ty, 11, 1, 0.86, 0.35, 1)
+  local ty = y + pad - S(fs(2))
+  text(STRINGS.objective, x + pad, ty, fs(11), 1, 0.86, 0.35, 1)
   local bw = S(9)
   local bx = x + pw - pad - 8 * (bw + S(3))
   for i = 1, 8 do
@@ -1723,28 +1737,28 @@ local function drawObjective(w, h)
     love.graphics.setColor(got and 1 or 0.35, got and 0.86 or 0.38, got and 0.35 or 0.42, got and 1 or 0.7)
     love.graphics.circle(got and "fill" or "line", bx + (i - 1) * (bw + S(3)) + bw * 0.5, ty + S(5), bw * 0.45)
   end
-  text(STRINGS.badges, bx - textW(STRINGS.badges, 9) - S(8), ty + S(1), 9, 0.7, 0.72, 0.78, 1)
-  ty = ty + S(20)
+  text(STRINGS.badges, bx - textW(STRINGS.badges, fs(9)) - S(fs(8)), ty + S(fs(1)), fs(9), 0.7, 0.72, 0.78, 1)
+  ty = ty + S(fs(20))
   for _, ln in ipairs(lines) do
     text(ln, x + pad, ty, size, 1, 1, 1, 1); ty = ty + S(size + 5)
   end
-  ty = ty + S(4)
+  ty = ty + S(fs(4))
   for _, ln in ipairs(dlines) do
-    text(ln, x + pad, ty, 13, 0.78, 0.82, 0.90, 1); ty = ty + S(17)
+    text(ln, x + pad, ty, dsize, 0.78, 0.82, 0.90, 1); ty = ty + S(fs(17))
   end
   if where ~= "" then
-    ty = ty + S(6)
+    ty = ty + S(fs(6))
     love.graphics.setColor(1, 0.86, 0.35, 0.95)
     love.graphics.circle("fill", x + pad + S(5), ty + S(8), S(4))
-    text(where, x + pad + S(16), ty, 14, 1, 0.9, 0.5, 1)
-    ty = ty + S(22)
+    text(where, x + pad + S(16), ty, fs(14), 1, 0.9, 0.5, 1)
+    ty = ty + S(fs(22))
   end
   if #quest.upcoming > 0 then
-    ty = ty + S(8)
-    text(STRINGS.next, x + pad, ty, 10, 0.55, 0.62, 0.74, 1)
-    ty = ty + S(15)
+    ty = ty + S(fs(8))
+    text(STRINGS.next, x + pad, ty, fs(10), 0.55, 0.62, 0.74, 1)
+    ty = ty + S(fs(15))
     for _, st in ipairs(quest.upcoming) do
-      text("- " .. st.title, x + pad, ty, 12, 0.62, 0.68, 0.78, 1); ty = ty + S(17)
+      text("- " .. st.title, x + pad, ty, fs(12), 0.62, 0.68, 0.78, 1); ty = ty + S(fs(17))
     end
   end
 end
@@ -1791,17 +1805,17 @@ local function drawCard(screen, w, h, game)
                           got and { 0.55, 0.9, 0.6 } or { 0.85, 0.6, 0.5 } }
     end
   end
-  local ph = pad * 2 + S(26) + #rows * S(17)
+  local ph = pad * 2 + S(fs(26)) + #rows * S(fs(17))
   y = y - ph
   panel(x, y, pw, ph, 0.80)
-  local ty = y + pad - S(2)
+  local ty = y + pad - S(fs(2))
   local col = (L and L.color) or { 1, 1, 1 }
-  text(loc.name, x + pad, ty, 18, 1, 1, 1, 1)
-  local kw = textW(kind, 11)
-  text(kind, x + pw - pad - kw, ty + S(4), 11, col[1] * 0.8 + 0.2, col[2] * 0.8 + 0.2, col[3] * 0.8 + 0.2, 1)
-  ty = ty + S(26)
+  text(loc.name, x + pad, ty, fs(18), 1, 1, 1, 1)
+  local kw = textW(kind, fs(11))
+  text(kind, x + pw - pad - kw, ty + S(fs(4)), fs(11), col[1] * 0.8 + 0.2, col[2] * 0.8 + 0.2, col[3] * 0.8 + 0.2, 1)
+  ty = ty + S(fs(26))
   for _, r in ipairs(rows) do
-    text(r[1], x + pad, ty, 12, r[2][1], r[2][2], r[2][3], 1); ty = ty + S(17)
+    text(r[1], x + pad, ty, fs(12), r[2][1], r[2][2], r[2][3], 1); ty = ty + S(fs(17))
   end
 end
 
@@ -1848,7 +1862,7 @@ local function drawInset(screen, w, h)
   if screen.playerLoc then mark(screen.playerLoc, 0.85, 0.1, 0.1, 0.55 + 0.45 * math.abs(math.sin(clock * 3))) end
   local sel = screen.locs and screen.sel and screen.locs[screen.sel]
   if sel then mark(sel, 0.05, 0.05, 0.05, 0.95, true) end
-  text(STRINGS.classic, x, y - S(20), 10, 0.7, 0.72, 0.78, 0.9)
+  text(STRINGS.classic, x, y - S(fs(20)), fs(10), 0.7, 0.72, 0.78, 0.9)
 end
 
 local function drawBanner(screen, w, h)
@@ -1864,7 +1878,7 @@ local function drawBanner(screen, w, h)
   else
     label = "KANTO"
   end
-  local size = 24
+  local size = fs(24)
   local tw = textW(label, size)
   local x, y = (w - tw) * 0.5, S(16)
   panel(x - S(16), y - S(6), tw + S(32), S(size) + S(14), 0.75)
@@ -1889,13 +1903,13 @@ local function drawCompass(w, h)
   g.polygon("fill", tipX, tipY, lx, ly, rx, ry)
   g.setColor(0.85, 0.87, 0.92, 0.9)
   g.polygon("fill", cx - math.sin(a) * rad * 0.62, cy + math.cos(a) * rad * 0.62, lx, ly, rx, ry)
-  text(STRINGS.north, cx - textW(STRINGS.north, 11) * 0.5, cy - rad - S(16), 11, 1, 1, 1, 0.95)
+  text(STRINGS.north, cx - textW(STRINGS.north, fs(11)) * 0.5, cy - rad - S(fs(16)), fs(11), 1, 1, 1, 0.95)
 end
 
 local function drawHints(screen, w, h)
   local hint = screen.fly and STRINGS.hintFly
                or (screen.nestSpecies and STRINGS.hintNest or STRINGS.hintView)
-  local size = 12
+  local size = fs(12)
   local tw = textW(hint, size)
   local x, y = (w - tw) * 0.5, h - S(28)
   love.graphics.setColor(0.04, 0.06, 0.10, 0.6)
@@ -1908,8 +1922,8 @@ local function drawProgress(w, h)
   g.setColor(0.05, 0.08, 0.14, 1)
   g.rectangle("fill", 0, 0, w, h)
   local msg = STRINGS.building
-  local tw = textW(msg, 18)
-  text(msg, (w - tw) * 0.5, h * 0.5 - 30, 18, 1, 0.86, 0.35, 1)
+  local tw = textW(msg, fs(18))
+  text(msg, (w - tw) * 0.5, h * 0.5 - 30, fs(18), 1, 0.86, 0.35, 1)
   local frac = (build and build.done or 0) / 6
   g.setColor(0.2, 0.24, 0.32, 1)
   g.rectangle("fill", w * 0.3, h * 0.5 + 6, w * 0.4, 8, 4, 4)

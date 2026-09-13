@@ -26,6 +26,21 @@ Tags and packages:
 
 ## Unreleased
 
+### The 3D map's own text grew 1.3x, for better reading on both ends of the window-size range
+
+- **New `fs()` multiplier in `lib/WorldMap3D.lua`**, stacked on top of
+  the existing responsive `S()` scale (which reacts to window size, not
+  to a taste for bigger text) -- a phone panel already gets `S()`'s own
+  3x from being held close, but the text itself read small there and on
+  a 4K monitor alike, next to everything else on the screen. Applied to
+  the objective panel, the selected-place card, the bottom hints, the
+  compass, the top banner and the loading screen -- everything except
+  the floating tag `plate()` draws over each pin on the terrain, which
+  was already the right size. All the vertical-spacing math that
+  depended on the font size (line height, panel height) grows along
+  with it, reading from the same variable or the same `fs(N)`, so the
+  bigger text does not spill over its own box.
+
 ### The snow came off the drawing
 
 - **It was being painted INTO the sprite.** The snow on everybody's hat and
