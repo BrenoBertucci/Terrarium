@@ -1,5 +1,10 @@
 # Character turnaround reference
 
+> **The image was removed on 2026-09-15.** The generated sheet read as a
+> Pokemon protagonist (red-and-white cap, blue jacket), which makes it a
+> derivative of Nintendo's character design whatever the prompt asked for.
+> The notes below stay. A replacement must resemble no existing character.
+
 `trainer_turnaround.png` — front / left profile / back, A-pose, flat lighting,
 neutral background. Generated with Meshy (`nano-banana-pro`, 9 credits,
 2026-08-27).

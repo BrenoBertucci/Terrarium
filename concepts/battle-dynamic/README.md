@@ -1,5 +1,10 @@
 # Combate dinâmico — concepts (telas flutuantes estilo Clair Obscur)
 
+> **As imagens saíram do repositório em 2026-09-15.** Mostravam Pokémon,
+> Poké Balls e a UI de batalha dos jogos — derivados de designs da Nintendo,
+> mesmo gerados por IA. Este texto fica como registro de design; os nomes de
+> arquivo abaixo não existem mais aqui.
+
 Gerados em 2026-08-30 via Meshy text-to-image (`nano-banana-pro`, 16:9). Direção:
 a UI sai do rect GB 160x48 e vira painéis de vidro diegéticos, inclinados em
 perspectiva DENTRO do diorama voxel, com câmera de batalha cinematográfica.

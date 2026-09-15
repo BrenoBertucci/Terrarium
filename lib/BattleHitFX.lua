@@ -1196,7 +1196,11 @@ local function capsule()
     local ok, C = pcall(V.require, "BattleCapsule")
     Capsule = (ok and C) or false
   end
-  return Capsule or nil
+  -- gated like BattlePanelsXY/BattleFanXY/BattleRibbon: without the B2W2
+  -- art textWidth is 0 and text draws nothing, so the figure would vanish
+  -- instead of taking the g.print fallback in drawTop
+  return (Capsule and Capsule.available and Capsule.available()) and Capsule
+         or nil
 end
 
 function BattleHitFX.drawTop(battle, shot)

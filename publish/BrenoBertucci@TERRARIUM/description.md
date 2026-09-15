@@ -162,8 +162,9 @@ The fight is staged. The Pokemon Center is a drawing. The wind is a brush.
   attacker. Menu, dialog and move cards float on glass in the arena. HP
   capsules hang beside their mons. Hits send a shockwave and a typed
   sheet at the blow. CLASSICA holds still. Safe to flip mid-battle.
-- **Pokemon Centers voxelized** from UlithiumDragon's XY-inspired Center
-  + Mart drawing. Warps and collision unchanged.
+- **Pokemon Centers voxelized** from a fan drawing of an X/Y Center
+  (taken back out on 2026-09-15: Nintendo-derived art; Centers are on the
+  classic voxel kit again). Warps and collision unchanged.
 - **Wind field redrawn** with Pimen / EdgeLoopRepeat strips (use-in-a-game
   licence; not CC0 — see `assets/vfx/LICENSE.md`). Grey specks over the
   path are gone.
@@ -379,6 +380,7 @@ The tall grass is geometry out here, and that release made it behave like it.
 | --- | --- | --- |
 | X/Y HUD / menu / battle box art | third-party pack; no redistributable licence | `python tools/extract_xy_assets.py <pack folder>` |
 | Gen-2-style wild / town walk sprites | fan overworld art; same licence rule | `python tools/install_roamer_sprites.py` |
+| B2W2 HP capsules | Nintendo art (Black 2 / White 2 rip); no licence at all | not distributed in any form |
 
 Without them the mod still runs: HUD falls back to Game Boy panels, roamers
 fall back to a greyscale bake.

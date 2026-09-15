@@ -1,8 +1,16 @@
 # assets/battlexy third-party (CC0 only)
 
-Downloaded for the X/Y bag preview twinkles, the cursor hop landing spark,
-and a small preview-card frame. Existing 5X item/pocket PNGs under
-`items/` and `pockets/` were not replaced.
+Everything versioned in this folder is CC0 (`fx/`, below) or made for this
+mod (`glass/`, baked in Blender).
+
+The 5X pack cuts (`cmd_*.png`, `slot_*.png`, `items/`, `pockets/`, `types/`)
+and the B2W2 HP-bar plates (`b2w2/`) are Nintendo / Game Freak art. They are
+**not** in this repository or its packages (removed 2026-09-15), and
+`.gitignore` keeps them out. The 5X cuts can be made on your own machine
+with `tools/extract_xy_assets.py`; without them the mod uses its older HUD.
+
+The CC0 files were downloaded for the X/Y bag preview twinkles, the cursor
+hop landing spark, and a small preview-card frame.
 
 ## Particle textures
 

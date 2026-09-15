@@ -107,9 +107,9 @@ PAL = {
     "bin":        "#33383E",   # the dark mass the room has none of
     "bin_lid":    "#4A5058",
     "ext_red":    "#A8241E",
-    # THE BALLS, sampled from assets/battlexy/items/*_BALL.png rather than
-    # invented -- those are the sprites the battle bag already ships, so
-    # the shelf and the bag agree about what a Great Ball looks like.
+    # THE BALLS. Colours only, read once off the X/Y bag's *_BALL item
+    # sprites so the shelf and the bag agreed. Those sprites are Nintendo
+    # art and are not in the repository; these hex values are the record.
     "ball_lid0":  "#FF9439",   # Poke
     "ball_shd0":  "#DE5A39",
     "ball_lid1":  "#3994FF",   # Great
@@ -201,8 +201,8 @@ def draw_ball(s, x, y, k):
     black outline -- so every ball on the shelf wore a dark cap, which is
     the one face this camera always sees.
 
-    So the rows are authored instead, in the sprite's own sampled palette
-    (assets/battlexy/items/*_BALL.png):
+    So the rows are authored instead, in the palette sampled off those
+    sprites (the `ball_*` colours above; the sprites are not in the repo):
 
         0  lid          1  lid, shaded
         2  belt + button    3  belt

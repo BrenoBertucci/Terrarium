@@ -194,15 +194,39 @@ gh_token*
 #
 #   Pokemon X/Y 5X GUI -- https://gamebanana.com/mods/578206
 #
-# They were kept out of the repository for the same reason as GAME DATA:
-# crediting an author is not a licence, and the underlying art is Nintendo's.
-# **1.31.0-beta ships the cuts anyway**, at the author's request, so testers
-# get the Clair Obscur staged fight without installing the 5X pack themselves.
-# tools/extract_xy_assets.py is still how they were cut.
+# Same reason as GAME DATA: crediting an author is not a licence, and the
+# underlying art is Nintendo's and Game Freak's whichever way it travels.
+# Releases up to 1.36.0-beta carried these cuts; they were taken back out of
+# the repository on 2026-09-15 and must not return. Cut them locally with
+# tools/extract_xy_assets.py -- these rules keep that output out of git. They
+# do NOT prove it stays out of a zip: the local 1.28.1-mobile zip carried 151
+# roamer PNGs git never tracked, so list a packed zip before publishing it.
 #
-# assets/battlexy/
-# assets/hudxy/
-# assets/menuxy/
+# The B2W2 HP-bar plates and the font table measured off them came from a
+# Spriters Resource rip of Pokemon Black 2 / White 2: Nintendo's pixels with
+# no licence of any kind. The HUD falls back without them.
+assets/battlexy/b2w2/
+assets/battlexy/items/
+assets/battlexy/pockets/
+assets/battlexy/types/
+assets/battlexy/cmd_*.png
+assets/battlexy/slot_*.png
+assets/hudxy/
+assets/menuxy/
+data/b2w2_font.lua
+data/hudxy_glyphs.lua
+
+
+# ---------------------------------------------- NINTENDO-DERIVED DRAWINGS
+#
+# A fan drawing of a Pokemon Center, or an AI image of Pokemon, Poke Balls
+# or a Pokemon protagonist, is a derivative of Nintendo's designs no matter
+# who drew it or what the prompt said. The design notes stay; the pictures
+# do not.
+assets/buildings/ulithium_*
+concepts/**/*.png
+concepts/**/*.jpg
+assets/docs/character_ref/*.png
 
 
 # ------------------------------------------------ OVERWORLD ROAMER SPRITES

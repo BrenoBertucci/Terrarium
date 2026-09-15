@@ -2959,14 +2959,17 @@ return {
 
       -- assets/docs/buildings/B05: every Pokemon Center in the game
       -- (Celadon, Cerulean, Cinnabar, Fuchsia, Lavender, Pewter,
-      -- Saffron, Vermilion, Viridian, Mt Moon, Rock Tunnel).
-      -- Front-facing XY Center+Mart drawing by UlithiumDragon (fan
-      -- custom art, not a Nintendo rip) voxelized as the south facade
-      -- with invented depth. Matcher tiles unchanged so all 11
-      -- placements still stamp; collision/warps untouched.
+      -- Saffron, Vermilion, Viridian, Mt Moon, Rock Tunnel). B03's
+      -- block with the POKe sign hung beside the door; the sign is
+      -- too wide to be a pane, so it stays flush.
+      --
+      -- From 2026-09-01 to 2026-09-15 this template voxelized a fan
+      -- drawing of an X/Y Center through `sprite`. A fan drawing of a
+      -- Nintendo design is still Nintendo's design, so it left the
+      -- repository and the classic kit values below came back. `sprite`
+      -- still takes a PNG drawn for this mod.
       {
         id = "pokecenter",
-        sprite = "assets/buildings/ulithium_poke_center_mart.png",
         tiles = {
           { 76, 83, 83, 83, 83, 83, 83, 77 },
           { 90, 18, 18, 18, 18, 18, 18, 90 },
@@ -2978,9 +2981,7 @@ return {
           { 78, 26, 27, 28, 74, 74, 26, 79 },
         },
         roofRows = 32, roofBack = 7, roofFront = 8, roofCycle = { 5, 12 },
-        slab = 6, frontEave = 8, eaveOut = 5, recessDepth = 4,
-        ledge = { 32, 35 },
-        chimney = { x = 28, z = 18, w = 8, h = 8, ball = true },
+        slab = 4, frontEave = 4, ledge = nil,
       },
 
       -- assets/docs/buildings/B06: every Poke Mart (Cerulean,

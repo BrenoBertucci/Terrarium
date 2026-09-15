@@ -7,9 +7,9 @@ black-white/`) on 2026-09-03 and cropped to their opaque bounding box by
 `tools/install_mon_pack.py`. No resampling, no recolour.
 
 These are Nintendo / Game Freak / The Pokemon Company artwork, redistributed
-by PokeAPI for non-commercial fan use. They are NOT CC0 and are carried here
-on the same footing as the Gen 1 pics the game itself ships and the B2W2 HUD
-sheet in assets/battlexy: a fan project's own use, with the user's approval.
+by PokeAPI for non-commercial fan use. They are NOT CC0, so they are NOT in
+this repository or in any package: `.gitignore` drops `assets/mons/**/*.png`
+and the install scripts put them in place on the player's own machine.
 
 ## anim/ -- the animated set (2026-09-03)
 
