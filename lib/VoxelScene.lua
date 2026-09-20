@@ -31,6 +31,7 @@ local FloorArt = V.require("FloorArt")
 local Underpass = V.require("Underpass")
 local Crypt = V.require("Crypt")
 local Shop = V.require("Shop")
+local LavenderHomeKit = V.require("LavenderHomeKit")
 local Anime = V.require("Anime")
 local VoxelGrid = V.require("VoxelGrid")
 local RayFX = V.require("RayFX")
@@ -220,6 +221,15 @@ local function groundAt(map, cellX, cellY)
   -- know the path is ground -- raw reads hoisted every walker into the
   -- air at wall height.
   local tx, ty = cellX * 2, cellY * 2 + 1
+  -- A floor a kit MODELLED over the drawn ground (Lavender's flagged
+  -- paths and the lawn between them) stands a voxel above it, and the
+  -- profile knows nothing about that: the tiles under it are still flat
+  -- ground at zero. Without this walkers stood ankle-deep in stone and
+  -- every puddle lay buried under the slab it should have been lying on.
+  local okS, StructuresMod = pcall(V.require, "Structures")
+  local lift = okS and StructuresMod and StructuresMod.liftAt
+               and StructuresMod.liftAt(map, tx, ty)
+  if lift then return lift end
   local s = TileShape.at(map, shapes, map:tileAt(tx, ty), tx, ty)
   if not s then return 0 end
   -- a recessed class (water) still supports whatever stands on it; only
@@ -1222,12 +1232,16 @@ local function castShadows(state, terrain, nbMesh, posed, cx, cy, vw, vh,
   end
   -- one draw per sheet: a map with a Center AND a Mart holds two, and
   -- their UVs are normalised against different PNGs (ChunkMesher).
+  -- (a cut sheet's chunks are left out when they cannot reach the light's
+  -- own box -- ChunkMesher.spriteInBox)
   for _, g in ipairs(ChunkMesher.spriteGroups(state.map) or {}) do
-    ShadowMap.draw(g.mesh, g.tex, nil)
+    if ChunkMesher.spriteInBox(g, box) then ShadowMap.draw(g.mesh, g.tex, nil) end
   end
   for _, nb in ipairs(casters) do
     for _, g in ipairs(ChunkMesher.spriteGroups(nb.map) or {}) do
-      ShadowMap.draw(g.mesh, g.tex, Mat4.translate(nb.ox, 0, nb.oy))
+      if ChunkMesher.spriteInBox(g, shifted(box, nb.ox, nb.oy)) then
+        ShadowMap.draw(g.mesh, g.tex, Mat4.translate(nb.ox, 0, nb.oy))
+      end
     end
   end
   -- flower billboards live outside the terrain mesh (they draw after the
@@ -1466,7 +1480,15 @@ function VoxelScene.render(state, w, h, vw, vh, paletteFor)
   -- surfaces edge to edge, and a grid ruled over white surfaces is not a
   -- signature, it is tiling. The first in-game frames of the Mart were a
   -- room made of graph paper (probe_out_shop/shop_room.png).
-  if (crypt and Crypt.fxOn()) or (shop and Shop.fxOn()) then
+  -- ...and the three Lavender homes (lib/LavenderHomeKit.lua): authored
+  -- plaster, cloth and wood, one texel per voxel, ruled over the same way.
+  local homeDef = (not outdoor) and state.map and state.map.def
+  local home = homeDef and LavenderHomeKit.MAPS[homeDef.id or homeDef.name]
+  if homeDef and not home then                      -- ...and Vermilion's three
+    local okV, VKit = pcall(V.require, "VermilionHomeKit")
+    home = okV and VKit and VKit.MAPS and VKit.MAPS[homeDef.id or homeDef.name]
+  end
+  if (crypt and Crypt.fxOn()) or (shop and Shop.fxOn()) or home then
     if VoxelGrid.override == nil then
       VoxelGrid.override = false
       gridHeld = true
@@ -1712,6 +1734,52 @@ function VoxelScene.render(state, w, h, vw, vh, paletteFor)
       local okK, ShopKit = pcall(V.require, "ShopKit")
       shopSheet = okK and ShopKit and ShopKit.SHEET or nil
     end
+    -- Sheets that ask something of the shader for the length of their own
+    -- draw: the bridges' carries lantern glass and baked lamplight
+    -- (lib/BridgeKit.lua), the reef's stands under water (lib/ReefKit.lua).
+    local sheetFx = {}
+    local okB, BridgeKit = pcall(V.require, "BridgeKit")
+    if okB and BridgeKit then
+      sheetFx[BridgeKit.SHEET] = function(on)
+        Voxel3D.lantern(on and BridgeKit.GLASS_UV or nil, BridgeKit.GLOW)
+        Voxel3D.reef(on)                 -- its piles stand in the water too
+      end
+    end
+    -- Vermilion's houses: their window glass burns after dark (an authored
+    -- sheet has no glass mask; the GLASS row is handed over as a UV rect)
+    local okH, HouseKit = pcall(V.require, "VermilionHouseKit")
+    if okH and HouseKit and HouseKit.GLASS_UV then
+      sheetFx[HouseKit.SHEET] = function(on)
+        Voxel3D.lantern(on and HouseKit.GLASS_UV or nil, { 0, 0 })
+      end
+    end
+    local okR, ReefKit = pcall(V.require, "ReefKit")
+    local sheetSway = {}
+    if okR and ReefKit then
+      -- under the sheet it is absorbed like the bed; its shades are packed
+      -- with which plant each corner is (Buildings' reef branch), and the
+      -- shader moves each kind its own way. For this one draw the crush
+      -- slots carry the swimmers' hulls and wakes (lib/WakeFX.lua) and the
+      -- load channel the weather, both put back after -- the pass that
+      -- wants them asks, as the forest does (Trees3D.draw).
+      local heldCrush, heldLoad = nil, nil
+      sheetFx[ReefKit.SHEET] = function(on)
+        Voxel3D.reef(on)
+        Voxel3D.packedShade(on)
+        if on then
+          heldCrush, heldLoad = Voxel3D.crush, Voxel3D.grassLoad
+          Voxel3D.crush = Voxel3D.stir
+          local okL, wet, snow, gust = pcall(Wind.load)
+          Voxel3D.grassLoad = okL and { wet or 0, snow or 0, gust or 0 } or nil
+        else
+          Voxel3D.crush, Voxel3D.grassLoad = heldCrush, heldLoad
+        end
+      end
+      -- the reeds' reach: WIND OFF stills them, but the floor keeps the
+      -- branch alive for the water and the swimmers (Voxel3D.SWAY_FLOOR)
+      sheetSway[ReefKit.SHEET] = math.max(Wind.amount() * ReefKit.SWAY,
+                                          Voxel3D.SWAY_FLOOR)
+    end
     Voxel3D.glass(false)
     Voxel3D.snowMap = snowState
     for _, g in ipairs(ChunkMesher.spriteGroups(state.map) or {}) do
@@ -1721,14 +1789,25 @@ function VoxelScene.render(state, w, h, vw, vh, paletteFor)
       -- longer, exactly as glass() is (lib/Voxel3D.lua's shopMats).
       local isShop = shopFx and g.path == shopSheet
       if isShop then Voxel3D.shopMats(true) end
-      Voxel3D.draw(g.mesh, g.tex, nil, nil, nil, 0)
+      if ChunkMesher.spriteInBox(g, box) then
+        local fx = sheetFx[g.path]
+        if fx then fx(true) end
+        Voxel3D.draw(g.mesh, g.tex, nil, nil, nil, sheetSway[g.path] or 0)
+        if fx then fx(false) end
+      end
       if isShop then Voxel3D.shopMats(false) end
     end
     Voxel3D.snowMap = nil
     for _, nb in ipairs(state.neighbors or {}) do
       for _, g in ipairs(ChunkMesher.spriteGroups(nb.map) or {}) do
-        Voxel3D.draw(g.mesh, g.tex,
-                     Mat4.translate(nb.ox, 0, nb.oy), nil, nil, 0)
+        if ChunkMesher.spriteInBox(g, shifted(box, nb.ox, nb.oy)) then
+          local fx = sheetFx[g.path]
+          if fx then fx(true) end
+          Voxel3D.draw(g.mesh, g.tex,
+                       Mat4.translate(nb.ox, 0, nb.oy), nil, nil,
+                       sheetSway[g.path] or 0)
+          if fx then fx(false) end
+        end
       end
     end
     Voxel3D.glass(true)
@@ -2021,7 +2100,9 @@ function VoxelScene.render(state, w, h, vw, vh, paletteFor)
   -- and a top free to give. Everything above is either terrain, which does
   -- not lean, or a character, whose card is a trick played on the camera
   -- and would read as the person swaying rather than the meadow.
-  local sway = Wind.amount()
+  -- Floored, never zero: see Voxel3D.SWAY_FLOOR (WIND OFF stills the wave,
+  -- not the feet).
+  local sway = math.max(Wind.amount(), Voxel3D.SWAY_FLOOR)
   -- 3D grass bake (if present) + foot-crush physics from everyone walking
   -- through the meadow this frame.
   local grassTex = atlasFor(state.map)
@@ -2060,6 +2141,8 @@ function VoxelScene.render(state, w, h, vw, vh, paletteFor)
     if okl then wet, snow, gust = a or 0, b or 0, c or 0 end
     Voxel3D.grassLoad = { wet, snow, gust }
   end
+  -- the laid field (GrassWear.laidState), for THIS map's draws only
+  local laidMap = nil
   do
     -- Everyone standing in the world parts the grass; moving parts it
     -- harder. Handed to Grass3D rather than sent straight down, because
@@ -2092,13 +2175,15 @@ function VoxelScene.render(state, w, h, vw, vh, paletteFor)
       -- faces a way so blades part slightly ahead of the gaze.
       local moving = math.abs(lift) > 0.15 or p.phase == 1
       local pdx, pdz = faceDir(p.facing)
+      -- a bicycle ploughs a wider, harder wake than a boot
+      local bike = moving and p.ent and p.ent.onBike
       -- Wider, harder disc while walking so the corridor reads at a glance;
       -- standing keeps a softer pocket so idle does not carve a permanent hole.
       feet[#feet + 1] = {
         (p.px or 0) + 8,
         (p.py or 0) + 8,
-        moving and 17 or 12,
-        moving and 1.25 or 0.72,
+        (bike and 21) or (moving and 17) or 12,
+        (bike and 1.45) or (moving and 1.25) or 0.72,
         pdx, pdz,
         -- 7th slot: who this is, for the persistent field. Grass3D's
         -- crushFrame reads 1..6 and ignores the rest, so this rides along
@@ -2126,15 +2211,8 @@ function VoxelScene.render(state, w, h, vw, vh, paletteFor)
     if dt < 0 then dt = 0 elseif dt > 0.1 then dt = 0.1 end
     local crush = nil
     if GrassMod and GrassMod.crushFrame then
-      if me and GrassMod.setFocus then
-        pcall(GrassMod.setFocus, (me.px or 0) + 8, (me.py or 0) + 8)
-      end
       local okc, c = pcall(GrassMod.crushFrame, feet, dt)
       if okc then crush = c end
-      if GrassMod.mapState then
-        local okm, ms = pcall(GrassMod.mapState)
-        if okm then Voxel3D.crushMap = ms end
-      end
     end
     -- ------- and the SLOW half of the same information
     --
@@ -2158,6 +2236,12 @@ function VoxelScene.render(state, w, h, vw, vh, paletteFor)
           mon = GW.W_MON,
           ghost = 0,
         }
+        local okd, dew = pcall(Wind.dew)
+        dew = (okd and dew) or 0
+        local legWet = math.max(dew, Wind.grassWet or 0,
+                                GroundFX.wetness() or 0)
+        local okR, RainOnFX = pcall(V.require, "RainOnFX")
+        if not okR then RainOnFX = nil end
         for i = 1, #feet do
           local f = feet[i]
           -- Only a walker actually IN MOTION lays anything down.
@@ -2169,9 +2253,24 @@ function VoxelScene.render(state, w, h, vw, vh, paletteFor)
           if (f[4] or 0) > 1.0 and weight > 0 then
             pcall(GW.add, f[1], f[2], weight * dt, GW.CAUSE_TRAMPLE)
           end
+          -- and the minutes-long half: everyone standing or walking in the
+          -- grass PRESSES the cell they are in (a stepping foot at full
+          -- weight, a standing one lighter) -- the path they leave, and
+          -- the bed a mon lying in the meadow flattens.
+          if weight > 0 and f[8] then
+            local okl, inGrass = pcall(GW.lay, f[8], f[1], f[2], f[5], f[6],
+                                       weight * (f[4] or 0) / 1.25, dew)
+            -- and the grass is WET (dew, or a meadow still soaked after
+            -- the rain): stepping through it soaks the legs
+            if okl and inGrass and legWet > 0.05 and (f[4] or 0) > 1.0
+               and RainOnFX then
+              pcall(RainOnFX.soakLegs, f[8], legWet * 0.8)
+            end
+          end
         end
         pcall(GW.step, dt)
         pcall(function() Voxel3D.wearMap = GW.state(0, 0) end)
+        pcall(function() laidMap = GW.laidState() end)
       end
     end
     -- ------- and the SNOW, from the same list
@@ -2195,6 +2294,7 @@ function VoxelScene.render(state, w, h, vw, vh, paletteFor)
     Voxel3D.crush = crush
   end
   Voxel3D.snowMap = snowState
+  Voxel3D.crushMap = laidMap
   Voxel3D.draw(ChunkMesher.grass(state.map), grassTex, nil, pull,
                nil, sway)
   -- ------- and the neighbour maps get NO wear, on purpose
@@ -2210,6 +2310,7 @@ function VoxelScene.render(state, w, h, vw, vh, paletteFor)
   -- fields to decorate the strip you are about to leave.
   Voxel3D.wearMap = nil
   Voxel3D.snowMap = nil
+  Voxel3D.crushMap = nil
   for _, nb in ipairs(state.neighbors or {}) do
     if mapInBox(nb.map, box, nb.ox, nb.oy) then
       local ntex = grassTex
@@ -2244,9 +2345,11 @@ function VoxelScene.render(state, w, h, vw, vh, paletteFor)
   -- in a meadow the eye settles on
   local fsway = sway * Wind.FLOWER_SHARE
   Voxel3D.snowMap = snowState
+  Voxel3D.crushMap = laidMap
   Voxel3D.draw(ChunkMesher.flowers(state.map), atlasFor(state.map), nil,
                fpull, ShadowMap.snug(nil), fsway)
   Voxel3D.snowMap = nil
+  Voxel3D.crushMap = nil
   for _, nb in ipairs(state.neighbors or {}) do
     if mapInBox(nb.map, box, nb.ox, nb.oy) then
       Voxel3D.draw(ChunkMesher.flowers(nb.map), atlasFor(nb.map),

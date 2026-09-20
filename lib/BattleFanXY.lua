@@ -59,11 +59,11 @@ BattleFanXY.ENABLED = true
 -- far and small, and reads fine through the glass.
 BattleFanXY.CARD_W = 4.6          -- card width
 BattleFanXY.CARD_H = 6.4          -- card height
-BattleFanXY.STEP = 5.1            -- spacing between card centres
+BattleFanXY.STEP = 5.7            -- spacing between card centres
 BattleFanXY.RIGHT_OFF = 20.0      -- fan centre, along camera right
 BattleFanXY.UP_OFF = 5.5          -- fan centre, above the arena floor
-BattleFanXY.ROLL_STEP = math.rad(7)   -- in-plane lean per slot: the hand
-BattleFanXY.YAW_TILT = math.rad(10)   -- turn per slot: the foreshortening
+BattleFanXY.ROLL_STEP = math.rad(3)   -- in-plane lean per slot: the hand
+BattleFanXY.YAW_TILT = math.rad(5)   -- turn per slot: the foreshortening
 BattleFanXY.ARC_DROP = 0.42       -- outer cards sit lower, like held cards
 -- The size knob. Every laid-out centre is pulled toward the eye along its
 -- own view ray, which scales the whole hand up on screen without moving it
@@ -71,16 +71,22 @@ BattleFanXY.ARC_DROP = 0.42       -- outer cards sit lower, like held cards
 -- CARD_W instead would also change the fan's world footprint and re-tune
 -- every offset above; this one number does not.
 BattleFanXY.CLOSE = 0.74
-BattleFanXY.RAISE_UP = 3.2        -- the selected card lifts...
-BattleFanXY.RAISE_FWD = 4.0       -- ...and steps toward the camera
+BattleFanXY.RAISE_UP = 1.4        -- the selected card lifts...
+BattleFanXY.RAISE_FWD = 1.4       -- ...and steps toward the camera
 BattleFanXY.RAISE_K = 18          -- per-second exponential approach
-BattleFanXY.UNSEL_ALPHA = 0.62
+-- An unselected card RECEDES; it does not turn to glass. At 0.62 the arena
+-- came through the whole face and the three cards the player is not on read as
+-- green panes with writing on them (probe shot look_move_cards.png) -- the
+-- concept boards have them dark and solid, and only the raised one lit. The
+-- dimming that separates them now lives in drawFace's own selected/unselected
+-- colours, which dim the CARD instead of thinning it.
+BattleFanXY.UNSEL_ALPHA = 1
 BattleFanXY.UNSEL_RECEDE = 0.90   -- unselected cards sit back from the lens
-BattleFanXY.CLICK_OVER = 0.55     -- cursor-change snap: raise briefly past 1
+BattleFanXY.CLICK_OVER = 0.18     -- cursor-change snap: raise briefly past 1
 BattleFanXY.CLICK_K = 14          -- per-second decay of the click
-BattleFanXY.WOBBLE = math.rad(3)  -- idle selected yaw/roll
+BattleFanXY.WOBBLE = math.rad(0.8)  -- idle selected yaw/roll
 BattleFanXY.RIM_SCALE = 1.09      -- additive type bloom, slightly larger
-BattleFanXY.RIM_ALPHA = 0.25
+BattleFanXY.RIM_ALPHA = 0.08
 
 -- the deal: cards FLY from the player's mon, overshoot, land, staggered
 BattleFanXY.DEAL_TIME = 0.22      -- seconds per card
@@ -97,8 +103,8 @@ BattleFanXY.REENTRY_GAP = 0.25
 BattleFanXY.COLS = 8
 
 -- the face canvas, in its own pixels
-BattleFanXY.FACE_W = 240
-BattleFanXY.FACE_H = 330
+BattleFanXY.FACE_W = 320
+BattleFanXY.FACE_H = 440
 
 -- the PP meter's colours by state (see drawFace)
 BattleFanXY.PP_COLOR = {
@@ -221,6 +227,31 @@ local function faceKey(mv, def, sel, swap, disabled)
                         disabled and "D" or "-" }, ":")
 end
 
+-- ------- what a card says about a move, beyond its name
+--
+-- Generation 1 ships no prose for moves -- there is no description field in
+-- the data at all (Generation 2 has one, and it is used when it is there). So
+-- rather than author flavour text and let it read as the game's own voice,
+-- the line under the badge is the one fact the record DOES carry beyond the
+-- cells below it: whether the blow works off Attack or Special. (How often it
+-- lands has its own cell, ACCURACY, beside POWER.)
+local function moveLine(B, def)
+  if not def then return nil end
+  if type(def.description) == "string" and #def.description > 0 then
+    return def.description
+  end
+  local cat = def.category
+  if not cat or cat == "" then
+    local okT, TypeChart = pcall(require, "src.battle.TypeChart")
+    if okT and TypeChart and TypeChart.category then
+      local okC, c = pcall(TypeChart.category, def.type)
+      if okC then cat = c end
+    end
+  end
+  return (cat and cat ~= "" and tostring(cat):upper()) or nil
+end
+
+-- The same atlas as the HUD, with fixed reading bands instead of overlapping rows.
 local function drawFace(slot, mv, def, sel, swap, disabled)
   local B = box(); if not B then return false end
   local g = love.graphics
@@ -229,209 +260,119 @@ local function drawFace(slot, mv, def, sel, swap, disabled)
     local ok, c = pcall(g.newCanvas, W, H, { dpiscale = 1 })
     if not (ok and c) then return false end
     slot.canvas = c
+    c:setFilter("nearest", "nearest")
   end
-
   local tname = def and B.typeName(def.type)
-  local tcolor = (tname and B.TYPE_COLOR[tname]) or B.TYPE_FALLBACK
+  local tc = (tname and B.TYPE_COLOR[tname]) or B.TYPE_FALLBACK
   local pp, maxPP = B.ppOf(mv, def)
-
+  local ink, muted = BattleHudXY.INK, BattleHudXY.GOLD
+  local danger = { 0.65, 0.18, 0.17, 1 }
   local prevCanvas = g.getCanvas()
   local prevBlend, prevAlpha = g.getBlendMode()
   local ok, err = pcall(function()
     g.setCanvas(slot.canvas)
     g.clear(0, 0, 0, 0)
     g.setBlendMode("alpha")
-    local r = 26
-    local m = 10                      -- margin, so the glow has room
-    -- the rows' own recipe (see moveRow): a dark base first for contrast
-    -- against any floor, the type's colour on top to keep the hue honest
-    -- lighter than they were: the frost underneath is the body now, and
-    -- these are the tint over it
-    g.setColor(B.PANEL[1], B.PANEL[2], B.PANEL[3], 0.60)
-    g.rectangle("fill", m, m, W - 2 * m, H - 2 * m, r, r)
-    g.setColor(tcolor[1], tcolor[2], tcolor[3], sel and 0.72 or 0.48)
-    g.rectangle("fill", m, m, W - 2 * m, H - 2 * m, r, r)
-    -- a faint sheen across the top: what says "glass" once the panel is
-    -- standing in the world instead of lying on it
-    g.setColor(1, 1, 1, 0.10)
-    g.rectangle("fill", m, m, W - 2 * m, (H - 2 * m) * 0.30, r, r)
-
-    if sel then
-      g.setColor(1, 1, 1, 0.30)
-      g.setLineWidth(14)
-      g.rectangle("line", m, m, W - 2 * m, H - 2 * m, r, r)
+    if not BattleHudXY.plateArt(g, 10, 10, W - 20, H - 20) then
+      g.setColor(unpack(BattleHudXY.PANEL))
+      g.rectangle("fill", 10, 10, W - 20, H - 20)
     end
-    local ring = swap and SWAP_RING
-                 or (sel and B.SELECT_RING or B.PANEL_EDGE)
-    g.setColor(ring[1], ring[2], ring[3], ring[4] or 1)
-    g.setLineWidth(sel and 7 or 4)
-    g.rectangle("line", m, m, W - 2 * m, H - 2 * m, r, r)
-    g.setLineWidth(1)
-
-    local pad = 26
-    local ly = m + pad
-    local icon = tname and B._art("types/" .. tname)
-    if icon then
-      local iw, ih = icon:getDimensions()
-      local is = 84 / math.max(1, ih)
-      g.setColor(1, 1, 1, 1)
-      g.draw(icon, (W - iw * is) * 0.5, ly, 0, is, is)
-      ly = ly + ih * is + pad * 0.7
+    local function text(value, x, y, size, width, color)
+      value = tostring(value)
+      size = math.min(size, width * 84 / math.max(1, BattleHudXY.textWidth(value)))
+      BattleHudXY.text(value, x, y, size, color or ink)
     end
-
-    -- the name, shrunk to fit rather than clipped: THUNDERBOLT is a real
-    -- word on a real card and half of it is not. In Unova's own font
-    -- when the sheet is loaded (see BattleCapsule.text).
-    local C = capsule()
+    -- A quiet type tab and a distinct selection marker, independent of type hue.
+    g.setColor(tc[1], tc[2], tc[3], 0.22)
+    g.rectangle("fill", 30, 32, W - 60, 42)
+    text(tname or "MOVE", 43, 40, 24, W - 100, ink)
+    if sel or swap then
+      g.setColor(unpack(muted))
+      g.rectangle("fill", 10, 28, 6, H - 56)
+      BattleHudXY.uiSprite("cursor", W - 57, 44, 15, 20)
+    end
     local name = (def and def.name) or tostring(mv and mv.id or "?")
-    local maxNameW = W - 2 * m - 2 * pad
-    if C then
-      local kk = 40 / 9
-      local tw = C.textWidth(name) * kk
-      if tw > maxNameW and tw > 0 then kk = kk * maxNameW / tw end
-      g.setColor(1, 1, 1, 1)
-      C.text(name, (W - C.textWidth(name) * kk) * 0.5, ly, kk)
-      ly = ly + 9 * kk * 1.5
-    else
-      local tw84 = math.max(1, BattleHudXY.textWidth(name))
-      local th = math.min(44, maxNameW * 84 / tw84)
-      B.shadowText(name, (W - tw84 * (th / 84)) * 0.5, ly, th, B.TEXT)
-      ly = ly + th * 1.5
+    -- Wrap at spaces before shrinking long move names. Two reserved title lines.
+    local title, tail = name, nil
+    if BattleHudXY.textWidth(name) * 32 / 84 > W - 64 then
+      local left, right = name:match("^(.*)%s+(%S+)$")
+      if left then title, tail = left, right end
     end
-
-    local rows = {}
-    if disabled then
-      rows[#rows + 1] = { "DISABLED!", { 1.0, 0.42, 0.38, 1 } }
-    elseif def and (not def.power or def.power == 0
-                    or def.category == "status") then
-      rows[#rows + 1] = { "STATUS", B.TEXT }
-    elseif def then
-      rows[#rows + 1] = { "POWER " .. tostring(def.power), B.TEXT }
-    end
-
-    -- ------- the PP meter
-    --
-    -- A number is a number; the player wants to SEE how much is left.
-    -- A track of pips at the foot of the card, filled in proportion,
-    -- coloured by how much is left (green, amber under 60%, red under
-    -- 30%, an empty track with a red edge at zero), the exact count
-    -- small inside it. A DISABLED move (the foe's Disable) shows its
-    -- pips grey under a hatch, a padlock on the corner, and the whole
-    -- face dimmed -- blocked at a glance, whatever the count says.
-    local meterH = 28
-    local meterY = H - m - pad * 0.75 - meterH
-    local ppState = "none"
-    if pp then
-      local ratio = (maxPP and maxPP > 0) and (pp / maxPP) or 0
-      if disabled then ppState = "disabled"
-      elseif pp <= 0 then ppState = "empty"
-      elseif ratio < 0.30 then ppState = "low"
-      elseif ratio < 0.60 then ppState = "mid"
-      else ppState = "full" end
-      local PPC = BattleFanXY.PP_COLOR
-      local col = PPC[ppState] or PPC.full
-      local bx = m + pad * 0.8
-      local bw = W - 2 * m - pad * 1.6
-      -- the track
-      g.setColor(0, 0, 0, 0.48)
-      g.rectangle("fill", bx, meterY, bw, meterH, 6, 6)
-      -- the pips: one per PP when the move has few, eight otherwise
-      local n = math.max(1, math.min(maxPP or 8, 8))
-      local filled = 0
-      if pp > 0 then filled = math.max(1, math.ceil(ratio * n - 1e-6)) end
-      local gap = 3
-      local pw = (bw - 6 - gap * (n - 1)) / n
-      for i = 1, n do
-        local px = bx + 3 + (i - 1) * (pw + gap)
-        if i <= filled then
-          g.setColor(col[1], col[2], col[3], 1)
-        else
-          g.setColor(1, 1, 1, 0.12)
-        end
-        g.rectangle("fill", px, meterY + 3, pw, meterH - 6, 3, 3)
-      end
-      if ppState == "empty" then
-        g.setColor(PPC.low[1], PPC.low[2], PPC.low[3], 0.9)
-        g.setLineWidth(2)
-        g.rectangle("line", bx, meterY, bw, meterH, 6, 6)
-        g.setLineWidth(1)
-      end
-      if ppState == "disabled" then
-        -- the hatch: dark diagonals across the track, clipped to it
-        local sx, sy, sw, sh = g.getScissor()
-        g.setScissor(bx, meterY, bw, meterH)
-        g.setColor(0, 0, 0, 0.55)
-        g.setLineWidth(3)
-        for x = bx - meterH, bx + bw, 9 do
-          g.line(x, meterY + meterH, x + meterH, meterY)
-        end
-        g.setLineWidth(1)
-        if sx then g.setScissor(sx, sy, sw, sh) else g.setScissor() end
-      end
-      -- the count, small, inside the track
-      local label = ("%d/%d"):format(pp, maxPP or pp)
-      if C then
-        local kk = 17 / 9
-        local tw = C.textWidth(label) * kk
-        g.setColor(0, 0, 0, 0.85)
-        C.text(label, (W - tw) * 0.5 + 2, meterY + (meterH - 17) * 0.5 + 2, kk)
-        g.setColor(1, 1, 1, 1)
-        C.text(label, (W - tw) * 0.5, meterY + (meterH - 17) * 0.5, kk)
-      else
-        local th = 17
-        local tw = BattleHudXY.textWidth(label) * (th / 84)
-        B.shadowText(label, (W - tw) * 0.5, meterY + (meterH - th) * 0.5, th,
-                     B.TEXT)
-      end
-    end
-    slot.ppState = ppState
-
-    local rh = 30
-    local ry = meterY - 10 - #rows * rh * 1.35
-    for _, row in ipairs(rows) do
-      if C then
-        local kk = rh / 9
-        local tw = C.textWidth(row[1]) * kk
-        local col = row[2]
-        g.setColor(col[1], col[2], col[3], col[4] or 1)
-        C.text(row[1], (W - tw) * 0.5, ry, kk)
-        g.setColor(1, 1, 1, 1)
-      else
-        local tw = BattleHudXY.textWidth(row[1]) * (rh / 84)
-        B.shadowText(row[1], (W - tw) * 0.5, ry, rh, row[2])
-      end
-      ry = ry + rh * 1.35
-    end
-
-    -- blocked: the face dimmed, a padlock on the top-right corner
-    if disabled then
-      g.setColor(0, 0, 0, 0.38)
-      g.rectangle("fill", m, m, W - 2 * m, H - 2 * m, r, r)
-      local lx, lyk, ls = W - m - pad - 6, m + pad * 0.6, 26
-      -- shackle
-      g.setColor(0.92, 0.92, 0.95, 1)
-      g.setLineWidth(5)
-      g.arc("line", "open", lx, lyk + ls * 0.45, ls * 0.32,
-            math.pi, 2 * math.pi)
-      g.line(lx - ls * 0.32, lyk + ls * 0.45, lx - ls * 0.32, lyk + ls * 0.62)
-      g.line(lx + ls * 0.32, lyk + ls * 0.45, lx + ls * 0.32, lyk + ls * 0.62)
-      g.setLineWidth(1)
-      -- body
-      g.setColor(1.0, 0.42, 0.38, 1)
-      g.rectangle("fill", lx - ls * 0.5, lyk + ls * 0.6, ls, ls * 0.75, 5, 5)
-      g.setColor(0.15, 0.05, 0.05, 1)
-      g.circle("fill", lx, lyk + ls * 0.92, ls * 0.11)
-      g.rectangle("fill", lx - ls * 0.05, lyk + ls * 0.92, ls * 0.1, ls * 0.2)
-    elseif pp and pp <= 0 then
-      g.setColor(0, 0, 0, 0.22)
-      g.rectangle("fill", m, m, W - 2 * m, H - 2 * m, r, r)
-    end
+    text(title, 32, 95, 32, W - 64)
+    if tail then text(tail, 32, 131, 32, W - 64) end
+    text(moveLine(B, def) or "", 32, 181, 19, W - 64, muted)
+    g.setColor(0.50, 0.58, 0.48, 0.45)
+    g.rectangle("fill", 32, 214, W - 64, 2)
+    text("POWER", 32, 233, 18, 100, muted)
+    text(def and def.power and def.power > 1 and def.power
+      or (def and def.power == 1 and "VAR") or "--", 32, 260, 42, 102)
+    local acc = def and tonumber(def.accuracy)
+    text("ACCURACY", 159, 233, 18, 124, muted)
+    text(acc and ("%d%%"):format(acc) or "--", 159, 260, 42, 112)
+    local ratio = pp and maxPP and maxPP > 0 and math.max(0, math.min(1, pp / maxPP)) or 0
+    local state = disabled and "disabled" or (not pp and "none")
+      or (pp <= 0 and "empty") or (ratio < 0.30 and "low")
+      or (ratio < 0.60 and "mid") or "full"
+    slot.ppState = state
+    text("PP", 32, 322, 20, 60, muted)
+    local count = pp and ("%d / %d"):format(pp, maxPP or pp) or "--"
+    local cw = BattleHudXY.textWidth(count) * 23 / 84
+    text(count, W - 32 - cw, 319, 23, W - 96)
+    g.setColor(unpack(ink))
+    g.rectangle("fill", 32, 352, W - 64, 14)
+    g.setColor(unpack(BattleFanXY.PP_COLOR[state] or BattleFanXY.PP_COLOR.disabled))
+    g.rectangle("fill", 35, 355, (W - 70) * ratio, 8)
+    local status = disabled and "DISABLED" or (pp and pp <= 0 and "NO PP")
+      or (swap and "SWAP") or (sel and "SELECTED") or ""
+    text(status, 32, 387, 18, W - 64,
+      (disabled or (pp and pp <= 0)) and danger or muted)
   end)
   if prevCanvas then g.setCanvas(prevCanvas) else g.setCanvas() end
   g.setBlendMode(prevBlend or "alpha", prevAlpha)
   g.setColor(1, 1, 1, 1)
   if not ok then error(err, 0) end
   return true
+end
+
+-- Compose the existing animation locally, then restore the reading bands.
+-- One reusable canvas per card; text stays cached and pixel-identical.
+local function animateFace(slot, id, tname, strength, disabled)
+  local CardFX = V.require("BattleCardFX")
+  if disabled or not CardFX.ENABLED or not CardFX.TYPES[tname] then return slot.canvas end
+  local g = love.graphics
+  local W, H = BattleFanXY.FACE_W, BattleFanXY.FACE_H
+  if not slot.animated then
+    slot.animated = g.newCanvas(W, H, { dpiscale = 1 })
+    slot.animated:setFilter("nearest", "nearest")
+    slot.reading = {}
+    for _, r in ipairs({ {28,30,W-56,173}, {28,228,W-56,77}, {28,315,W-56,94} }) do
+      slot.reading[#slot.reading + 1] = { g.newQuad(r[1],r[2],r[3],r[4],W,H), r[1],r[2] }
+    end
+  end
+  local previous = g.getCanvas()
+  local blend, alpha = g.getBlendMode()
+  local sx, sy, sw, sh = g.getScissor()
+  local ok, err = pcall(function()
+    g.setCanvas(slot.animated)
+    g.setScissor()
+    g.clear(0,0,0,0)
+    g.setColor(1,1,1,1)
+    g.setBlendMode("alpha", "premultiplied")
+    g.draw(slot.canvas)
+    g.setScissor(20,20,W-40,H-40)
+    g.setBlendMode("alpha", "alphamultiply")
+    CardFX.drawModern(id, function(x,y) return x+20,y+20 end, W-40,H-40,tname,strength)
+    g.setScissor()
+    g.setColor(1,1,1,1)
+    g.setBlendMode("replace", "premultiplied")
+    for _, r in ipairs(slot.reading) do g.draw(slot.canvas,r[1],r[2],r[3]) end
+  end)
+  g.setCanvas(previous)
+  if sx then g.setScissor(sx,sy,sw,sh) else g.setScissor() end
+  g.setBlendMode(blend,alpha)
+  g.setColor(1,1,1,1)
+  if not ok then error(err,0) end
+  return slot.animated
 end
 
 -- ------- one panel's mesh, projected
@@ -778,75 +719,14 @@ function BattleFanXY.draw(battle, shot)
       dbg.raise[i] = slot.raise
       drew = drew + 1
     else
-      -- the glass first: the world blurred through the card's own outline
-      pcall(BattleFanXY.frost, slot, shot, center, cr, cu,
-            BattleFanXY.CARD_W, BattleFanXY.CARD_H,
-            BattleFanXY.FACE_W, BattleFanXY.FACE_H,
-            { 10, 10, BattleFanXY.FACE_W - 20, BattleFanXY.FACE_H - 20 },
-            26, alpha * aDeal)
       local mesh = cardMesh(slot, shot.vp, shot.pw, shot.ph, center, cr, cu,
                             BattleFanXY.CARD_W * 0.5, BattleFanXY.CARD_H * 0.5)
       if not mesh then return false end
+      local tname = def and B and B.typeName(def.type)
+      local strength = 0.30 + 0.55 * math.max(0, math.min(1, slot.raise or 0))
+      mesh:setTexture(animateFace(slot, "card" .. i, tname, strength, disabled))
       g.setColor(1, 1, 1, alpha * aDeal)
       g.draw(mesh)
-
-      -- gold / type-colored additive rim on the selected card
-      if i == sel then
-        local tname = def and B and B.typeName(def.type)
-        local tcol = (tname and B and B.TYPE_COLOR[tname]) or GOLD
-        local hw = BattleFanXY.CARD_W * 0.5 * BattleFanXY.RIM_SCALE
-        local hh = BattleFanXY.CARD_H * 0.5 * BattleFanXY.RIM_SCALE
-        local function corner(sx, sy)
-          return project(shot.vp, shot.pw, shot.ph,
-                         vadd(vadd(center, cr, sx), cu, sy))
-        end
-        local x1, y1 = corner(-hw, hh)
-        local x2, y2 = corner(hw, hh)
-        local x3, y3 = corner(hw, -hh)
-        local x4, y4 = corner(-hw, -hh)
-        if x1 and x2 and x3 and x4 then
-          local prevBlend, prevA = g.getBlendMode()
-          g.setBlendMode("add")
-          local pulse = 0.55 + 0.45 * math.sin(now * 5.2)
-          g.setColor(tcol[1], tcol[2], tcol[3],
-                     BattleFanXY.RIM_ALPHA * pulse)
-          g.polygon("fill", x1, y1, x2, y2, x3, y3, x4, y4)
-          g.setBlendMode(prevBlend or "alpha", prevA)
-        end
-      end
-
-      -- the mark a landed hit's wave leaves on this card -- and, on the
-      -- chosen card once it is up, the move's own element alive on the
-      -- glass (BattleGlassFX.overlayType): the weather, the type's
-      -- crawl, the runner round the rim
-      if FX and (FX.overlayPane or FX.overlayType) then
-        local pane = { 10, 10, BattleFanXY.FACE_W - 20,
-                       BattleFanXY.FACE_H - 20 }
-        local map, ss = BattleFanXY.paneMapper(shot, center, cr, cu,
-                                               BattleFanXY.CARD_W,
-                                               BattleFanXY.CARD_H,
-                                               BattleFanXY.FACE_W,
-                                               BattleFanXY.FACE_H, pane)
-        if FX.overlayPane then
-          pcall(FX.overlayPane, "card" .. i, map, ss, pane[3], pane[4],
-                R.project)
-        end
-        if FX.overlayType and i == sel and p >= 1 and not disabled then
-          local tname = def and B and B.typeName(def.type)
-          -- fades in with the raise, so a card just chosen lights up
-          -- as it lifts rather than before
-          local strength = math.max(0, math.min(1, slot.raise or 0))
-          -- the authored sheets first (BattleCardFX), then the glass's
-          -- own frame: halo, runner, glints
-          local okC, CardFX = pcall(V.require, "BattleCardFX")
-          if okC and CardFX and CardFX.draw then
-            pcall(CardFX.draw, "card" .. i, map, ss, pane[3], pane[4],
-                  tname, strength)
-          end
-          pcall(FX.overlayType, "card" .. i, map, ss, pane[3], pane[4],
-                tname, strength, "frame")
-        end
-      end
 
       local sx, sy = project(shot.vp, shot.pw, shot.ph, center)
       dbg.cx[i], dbg.cy[i], dbg.raise[i] = sx, sy, slot.raise

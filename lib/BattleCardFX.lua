@@ -586,6 +586,94 @@ function BattleCardFX.draw(id, map, ss, W, H, tname, strength)
   return drew
 end
 
+-- Ivory-card treatment: small authored sprites, staggered envelopes and quiet rails.
+-- No additive full-face wash, global random state or accumulating particle pools.
+local MODERN = {
+  ELECTRIC = { "thundersplash", {0.74,0.52,0.12}, 2.8, 0.55, 26 },
+  WATER = { "watersplash", {0.20,0.52,0.73}, 4.8, 1.4, 32 },
+  FIRE = { "firebreath", {0.78,0.37,0.16}, 3.6, 1.8, 28 },
+  GRASS = { "leaf", {0.32,0.54,0.26}, 6.0, 4.5, 17 },
+  BUG = { "leaf", {0.48,0.57,0.23}, 5.5, 3.5, 14 },
+  ICE = { "ice2active", {0.32,0.61,0.70}, 5.2, 2.8, 20 },
+  GHOST = { "dark2", {0.49,0.39,0.64}, 6.4, 3.5, 25 },
+  POISON = { "dark1", {0.57,0.36,0.60}, 5.0, 2.8, 23 },
+  PSYCHIC = { "holy2", {0.69,0.39,0.56}, 5.6, 2.2, 25 },
+  DRAGON = { "holy2", {0.41,0.40,0.69}, 6.2, 2.6, 26 },
+  ROCK = { "rocks", {0.52,0.43,0.29}, 5.4, 1.0, 22 },
+  GROUND = { "earthbump", {0.65,0.46,0.28}, 5.8, 1.1, 24 },
+  FIGHTING = { "hit1", {0.69,0.32,0.25}, 4.0, 0.45, 22 },
+  FLYING = { "breath", {0.43,0.58,0.66}, 5.0, 1.8, 28 },
+  NORMAL = { "hit2", {0.48,0.52,0.43}, 6.0, 0.6, 16 },
+}
+
+function BattleCardFX.drawModern(id, map, W, H, tname, strength)
+  local spec = MODERN[tname]
+  if not BattleCardFX.ENABLED or not spec then return false end
+  local g, t = love.graphics, now()
+  local seed = 0
+  for i = 1, #id do seed = seed + id:byte(i) * i end
+  t = t + seed * 0.037
+  local color, opacity = spec[2], math.max(0, math.min(1, strength or 1))
+  local width = g.getLineWidth()
+  local function line(points, a, lw)
+    local out = {}
+    for i = 1, #points, 2 do
+      local x,y = map(points[i],points[i+1]); out[#out+1]=x; out[#out+1]=y
+    end
+    g.setColor(color[1],color[2],color[3],a * opacity)
+    g.setLineWidth(lw or 1); g.line(out)
+  end
+  if tname == "WATER" then
+    -- Two slow, out-of-phase wavelets in the separator, never over the PP readout.
+    for layer = 1,2 do
+      local pts = {}
+      for x = 4,W-4,4 do
+        pts[#pts+1]=x
+        pts[#pts+1]=H*0.49-layer*3+math.sin(x*0.035-t*1.6+layer)*2
+      end
+      line(pts,layer == 1 and 0.5 or 0.22,1.5)
+    end
+  elseif tname == "ELECTRIC" then
+    -- A brief discharge with a smooth envelope, not a full-card flash.
+    local phase = (t % 3.2) / 0.65
+    if phase < 1 then
+      local a = math.sin(phase * math.pi)^2
+      for side=0,1 do
+        local x = side == 0 and 3 or W-3
+        line({x,54,x+2,72,x-2,87,x+2,100,x,118},0.8*a,1.5)
+      end
+    end
+  else
+    local u = (t/spec[3]) % 1
+    local x = 8 + (W-40)*u
+    line({x,H-8,x+20,H-8},0.32*math.sin(u*math.pi)^2,1.5)
+  end
+  local d, img = BattleCardFX.SHEETS[spec[1]], image(spec[1])
+  if img then
+    for i=1,3 do
+      local age = (t+(i-1)*spec[3]/3) % spec[3]
+      local u = age/spec[4]
+      if u < 1 then
+        local envelope = math.sin(u*math.pi)^2
+        local x = W*(0.18+0.32*(i-1))
+        -- The quiet separator between title and stats is the animation stage.
+        local y = H*0.49
+        if tname == "GRASS" or tname == "BUG" then
+          x = 12+(W-24)*u
+          y = H*0.49+math.sin(u*math.pi*2+i)*4
+        elseif tname == "GHOST" or tname == "POISON" then
+          y = H*0.49+math.sin(u*math.pi*2+i)*3
+        elseif tname == "FIRE" then y = H*0.49+3-u*6 end
+        local frame = math.min(d.n-1,math.floor(u*d.n))
+        drawFrame(map,img,d,frame,x,y,spec[5],spec[5]*d.fh/d.fw,
+          {1,1,1},0.72*opacity*envelope,i%2==0)
+      end
+    end
+  end
+  g.setLineWidth(width); g.setColor(1,1,1,1)
+  return true
+end
+
 -- forget a card's pool (a fan folded away): the next raise starts fresh
 function BattleCardFX.clear(id)
   if id then

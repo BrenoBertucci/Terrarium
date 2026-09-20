@@ -58,6 +58,7 @@ menu.
 | the **DAYTIME** options row | SYNC / DAY / NIGHT / DUSK / DAWN / CYCLE — what time it is outdoors, on the diorama *and* on the flat 2D world; held at SYNC (and off the menu) while VOXEL is FULL |
 | the **SCREEN FX** options row (was **RTX**) | AUTO / SSR / AO / OFF / MAX — the screen-space pass. Not ray tracing, and no RTX hardware involved; see below |
 | the **AMBIENT** options row | ON / OFF — butterflies and ground birds by day (the birds startle and fly off when you get close), dragonflies over the water, fireflies through the night, a flock crossing the sky, leaves on the wind — and civilian NPCs glance at you as you pass. Trainers never turn: their facing is their line of sight |
+| the **CLOUD SHADE** options row | ON / OFF — the shadows of the clouds crossing the ground downwind: a smooth field evaluated per vertex that takes the sun's share of the light (and a little of the sky's) off the patch under a cloud, following the CLOUDS row's coverage; none under a flat overcast |
 | the **WEATHER** options row | AUTO / OFF / RAIN / SNOW — occasional showers, with the whole sky going over with them; snow through the winter of the SYNC clock. See below |
 | the **GROUND** options row | ON / OFF — what the weather leaves behind: puddles that gather through a shower and are still there afterwards, snow that settles in drifts, and footprints behind everybody walking on it. Only on the menu while **WEATHER** is on. See below |
 | the **TREES** options row | VOXEL / 3D — which trees stand on the round-tree sites. VOXEL (default) is the blocky tree grown by `tools/grow_voxel_tree.py`: 2.5-pixel cubes, a visible bole with roots, a crown of lobes with notches and tufts, four shapes (round, tiered, broad, tall) mixed across the wood — and no colour of its own: every leaf cube is painted at map load in the greens the map's own tree tile wears (`TerrainAtlas.tileShades`), so Route 2's trees are Route 2 green and the forest's are the forest's. 3D is `tools/bake_tree.py`'s finer bake: a smoother canopy under a fringe of photographed leaf cards, four species (oak, pine, birch, willow), in its own colours. Both bend in the wind while the trunk stays planted. The old carved ball from the tileset art is no longer a row option; it stands in only where a set fails to load. Flipping the row rebuilds the map's meshes over the next frames |
@@ -448,7 +449,7 @@ crosses it, and leaves.
 | `AUTO` | the row hands itself to the climate — **default** |
 | `BREEZE` | living outdoor air, inside a fixed band |
 | `GALE` | the same air, amplified |
-| `OFF` | silence — accessibility, screenshots, quiet sessions |
+| `OFF` | silence — accessibility, screenshots, quiet sessions. The wave stops; feet, paths, wear and snow's weight do not |
 
 **AUTO** is the answer to the one complaint the older ladder earned: BREEZE
 and GALE are two fixed windows onto the same climate, so a player who wants
@@ -472,9 +473,25 @@ px** under a shower, with nobody touching anything.
   phase offset, and a bearing it slumps along. Nothing is stored per
   instance — the mesh is one buffer for a whole map, and the only thing a
   vertex knows about which tuft it belongs to is where it is.
-- **The gust is a front.** A second, much longer wave on the same bearing
-  modulates the amplitude itself, so the air arrives in bands rather than
-  blowing everywhere at one flat strength.
+- **The wind combs, it does not rock.** Drag only ever pushes downwind, and
+  harder as the square of the air's speed — so a tuft leans OVER with the
+  wind and swings around that lean, rather than rocking upwind and downwind
+  in equal measure. A calm day barely shows it; a gale lays the whole
+  meadow over and a little lower, and at a gust's peak nothing swings back
+  past upright. People and Pokémon keep only the swing: wind does not comb
+  a person.
+- **The gust arrives in patches.** Two much longer waves cross the meadow
+  at an angle to each other, at different lengths and speeds, and modulate
+  the amplitude itself — so the air lands in travelling patches, the cat's
+  paws on a wheat field, rather than one endless straight band. The rain
+  and everything else the air carries ride the same patches.
+- **You see the wind as light.** A bent blade turns more of its lit face to
+  the sky, so the tips lighten with the lean: a gust's crest crosses the
+  field as a band of light and the trough behind it darkens. At dawn and
+  dusk the low sun comes through the tips, gold with the hour.
+- **Every blade flutters on its own.** At FULL each pixel column of a tuft
+  takes its own flutter phase, so a tuft flexes as blades rather than
+  shimmering as one card.
 - **Rain is weight.** Falling rain damps the sway — a wet meadow moves
   *less*, not more — bows the blades down, and adds a fast little tick on
   each tuft's own phase as drops land.
@@ -505,16 +522,22 @@ px** under a shower, with nobody touching anything.
   becomes a smaller upright tuft. A walked blade folds: the tip travels
   outward by most of its own height and comes down by nearly all of it, so
   it ends up along the ground pointing where the walker went.
-- **A walk leaves a TRAIL.** A spring is right about one tuft and wrong
-  about a walk — the crush is a disc that follows the walker, and two steps
-  later nothing says anybody was ever there. So a moving foot drops
-  **crumbs** every ten world pixels: weaker, narrower crushes at the places
-  it just left, spaced closer than their own reach so the eye joins them
-  into one laid line, fading on their own clock over four seconds with no
-  spring, because grass that has been walked flat and left does not snap
-  back, it recovers. Stop, turn around, and the way you came is still there
-  for a couple of seconds. Roamers and street Pokémon lay one too, and
-  flowers are in it — the beds people walk through are the same beds.
+- **A walk leaves a PATH, for minutes.** A spring is right about one tuft
+  and wrong about a walk — the crush is a disc that follows the walker. So
+  the first seconds behind a foot are **crumbs**, fading crushes at the
+  places it just left, and they fade down onto the **laid path**: every
+  grass cell anybody walks into is pressed the way they were going, the
+  blades parted to either side of their line, a little lighter than the
+  standing meadow, and it stands back up over about a hundred seconds.
+  Stop, turn around, and the way you came is still there a minute later.
+  Everyone lays it at their own weight — a wild Pokémon lighter than you,
+  a bicycle harder — a busy path stays down, and a Pokémon standing in the
+  meadow flattens a bed where it stood. Flowers are in it too: the beds
+  people walk through are the same beds.
+- **And at dawn, the dew.** A meadow wakes up silver at the tips; the line
+  somebody walked through it stays green, because they carried the water
+  off — on their legs, which drip for a few seconds after they come out of
+  wet grass (dew, or a meadow still soaked after the rain).
 
 The eight shader slots are split rather than shared: the first three are
 live feet, the rest are trail. A crowd of roamers can never crowd out the
@@ -524,6 +547,15 @@ the grass.
 Roamers standing in the meadow lean on the **same clock** — `Wind.leanAt`
 is the CPU twin of the vertex shader's wave, front and load included, so a
 body and the tuft beside it are never on two schedules.
+
+### Wind you can hear, in the grass
+
+With the SOUNDS row on, the wind swells as each gust patch crosses you and
+falls back in the lull — the same patches the grass bends to — and it is
+fuller in a meadow than on a street. On the crest of a gust the meadow
+itself hisses: little rustles land in the tall grass all around you. Your
+own steps land harder on a bicycle, and softer and duller when the grass is
+wet with dew or rain.
 
 ### Wind you can see, off the grass
 
@@ -575,9 +607,9 @@ hold.
 ## What the meadow remembers — the wear field
 
 Everything above is *reactive*. The wind pushes and the tuft leans back; a boot
-folds a blade over and a spring stands it up; a trail crumb fades in six
-seconds. Walk away and come back and the meadow is exactly as it was. Nothing
-in it had a memory longer than a breath.
+folds a blade over and a spring stands it up; a path stands back up inside two
+minutes. Walk away for an hour and come back and the meadow is exactly as it
+was. Nothing in it had a memory longer than a pause.
 
 So every grass cell now carries a **wear** value that goes up when something
 walks on it and comes back down over in-game **days**. It rides the save file,
@@ -600,11 +632,10 @@ looks like rather than what a path looks like. Underneath, the earth shows
 through as trodden dirt, since sparse tufts standing on vivid green would read
 as a rendering fault.
 
-Two things reach that value besides feet. **Cut** clears a cell outright, and a
-cut cell has no wild encounter until it grows back — so a corridor through a
-forest is something you can make and something that expires. And a **ground
-lightning strike** burns the grass where it lands, leaving a char scar that
-outlives a footpath by a good part of the journey.
+The field also has room for two causes besides feet — a **cut** cell and a
+**burnt** one, each with its own ground decal and a slower regrowth than a
+path — but nothing in play writes them yet: Cut in this game clears trees, not
+grass, and the storm's lightning stays in the clouds.
 
 The same texel carries one more thing, for free: how **sheltered** that cell
 is, baked once per map out of the walls already in it. The wind goes around a

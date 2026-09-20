@@ -20,11 +20,403 @@ The old `-mobile` channel is retired. Historical tags keep it (`v1.28.0-mobile` 
 
 Tags and packages:
 
-- Git tag: `v1.36.0-beta`
-- Zip asset: `TERRARIUM-1.36.0-beta.zip`
-- `manifest.json` / catalog `version` field: `1.36.0-beta`
+- Git tag: `v1.37.0-beta`
+- Zip asset: `TERRARIUM-1.37.0-beta.zip`
+- `manifest.json` / catalog `version` field: `1.37.0-beta`
 
 ## Unreleased
+
+Nothing yet.
+
+## 1.37.0-beta
+
+> **⚠️ BETA -- still full of bugs. / BETA -- ainda cheia de bugs.**
+>
+> A test build and nothing more. Most of what is below was built and measured
+> on ONE desktop (an i3 with Intel UHD graphics); none of this release has been
+> run on a phone. Known rough edges, so nobody has to find them twice:
+>
+> - the far ends of Route 6 (Saffron) and Route 11 (Route 12) still meet DRAWN
+>   ground, and at Route 12's gate Vermilion's terracotta meets Lavender's lilac;
+> - Vermilion's Centre, Mart and Gym are still the classic models, between six
+>   hand-built houses;
+> - sitters on LAVENDER's stools float two voxels (the seat is modelled at 6, a
+>   sitter stands at the `stool` class's 8 -- Vermilion's seats are right);
+> - only the eight lamp pools nearest the player light the ground; a pier's
+>   lanterns past those light their deck by a baked band, not a real pool;
+> - the water's absorption and the sheet's coverage were retuned the day the
+>   bed was first seen from above -- every lake in Kanto changed colour, and
+>   only a handful were looked at;
+> - Gold (Gen 2) is still a first pass. Play Gen 1.
+>
+> Um erro em tempo de desenho derruba o modo 3D para o 2D até fechar o jogo
+> (`mod_storage/.../TERRARIUM/errors.lua` diz qual). Guarde uma cópia do save.
+
+### Bridges and piers, rebuilt as timber
+
+The plank tile (`$3C`, four to a cell -- Route 12's pier, Nugget Bridge,
+Vermilion's dock, the walks of Routes 13, 20 and 21: 618 cells) was laid flat
+at ground height with a bank dropping to the water either side: a causeway
+wearing a drawing of planks. `lib/BridgeKit.lua` stands timber there instead,
+one model per placement SIGNATURE (which sides are water, walkable land,
+blocked land or more bridge; which way it runs; whether a lantern stands):
+
+- a deck six voxels up, boards lying across the way you walk, stepping down
+  to every side you can walk off it;
+- **the water runs under it.** A bridge cell is claimed and is water all the
+  same (`overWater`, through `Buildings.stamp` to `ChunkMesher`): it takes a
+  bed and a surface like the water either side, instead of a bank;
+- square posts OUTSIDE the deck, so its whole width stays walkable: a dark
+  foot, a stone cap, and under the deck the pile -- wet, weeded, in a stone
+  footing at the waterline; an edge beam, knee braces, two rails;
+- **a railing never closes a way.** Rails stand only against water or land
+  nobody can walk (Nugget Bridge's trees); walkable land is a step down, and
+  the rail ends in a post either side of the opening;
+- lanterns on every other cell. Every pane burns after dark (a UV rect of
+  the sheet handed to the shader for that sheet's draw, `Voxel3D.lantern`),
+  and the deck is lit along its whole length: the sheet is four identical
+  bands stacked, and the band a voxel wears is how much lantern reaches it.
+
+New model fields, all opt-in: `sink` (a model may start below the ground
+plane), `overWater`, `noDown` (no undersides), `clearWater` (below).
+Cost, Route 12, the longest pier there is: +0.9 ms a frame.
+
+### The water garden -- and the lake bed, seen for the first time
+
+`lib/ReefKit.lua` grows the big waters (a flood fill per body: 150 connected
+cells or more; a pond, a canal and a fountain stay clean), in the zones a
+shore has, by the EXACT depth of the bed under the cell: reeds and cattails
+standing out of the water along the land's side of a bank cell; water lilies
+lying on the sheet a cell out, on stems that go down to the bed; and from
+five tiles out, in patches with open sand between, seagrass, kelp, branching
+and brain and table corals, sea fans, tube sponges, anemones, mossy stone.
+The sheet over a garden thins to lagoon water (`clearWater`), fading out over
+a few tiles rather than stopping in a square.
+
+**None of it could be seen, and neither could any lake bed in the game.**
+`Skyline` draws an opaque haze-coloured plate under the whole world at y = -4;
+the bed runs from -5 to -13. Everything below the plate failed the depth test
+against it, so from above the "bed" anybody ever saw through the water was the
+plate. It now lies three voxels under the deepest terrace. Found with a probe
+camera BELOW the waterline and a bisect that swallowed one draw at a time.
+
+Sprite sheets that cover a whole route are now cut into 128-pixel chunks with
+a box each and culled like terrain (`ChunkMesher.spriteInBox`, in the scene
+pass and the shadow pass): the garden alone was +2.8 ms as one mesh and is
++0.4 ms cut.
+
+### Vermilion City, from nothing
+
+**The ground** (`tools/vermilion_ground.py`, stood by `LavenderGroundKit`
+through a second index -- one kit, two painted worlds). The white brick
+cobble is only the answer to "is this cell ground". A port, not a village:
+herringbone terracotta streets with a cream soldier course and RULED edges; a
+sixteen-rayed sunburst mosaic where the road from Route 6 meets the avenue; a
+quay on every edge that meets the sea -- pale slabs behind a granite coping,
+an iron mooring bollard every few paces; coastal turf a voxel proud of the
+paving, going to sand toward the water, dune grass and poppies in it;
+planters under the housefronts; rammed earth inside the building lot's kerb.
+A shore cell is laid over its LAND quarters only (`b = "-"`: a void texel),
+which is what took the yellow-and-black hatching off the waterline.
+
+**Routes 6 and 11** are painted on the same canvas in world coordinates and
+cut afterwards, so there is no seam to see: the route's own road in the same
+brick with its edges let go, tall grass and flowers laid but not claimed, the
+shore a beach instead of a quay.
+
+**The fences** (`lib/FenceKit.lua`): the two-peg cell stood as a harbour
+town's crossbuck fence -- one heavy post a cell (tarred foot, iron collar, end
+grain on its cap), two bolted rails, a lattice between. A run ends in a post,
+and carries on ACROSS a map's edge where another map is joined.
+
+**Six houses, no two alike** (`lib/VermilionHouseKit.lua`), chosen by where
+the door leads: the Fishing Guru's clapboard cottage under a shingled gable
+(a net drying, rods by the door, a fish on the sign); a captain's house with
+a widow's walk and a flagstaff; the keeper's cottage and a banded LIGHTHOUSE
+whose lantern burns; the Fan Club under a vermilion mansard with bunting and
+a bay window; the trader's brick-and-half-timber shop with a striped awning
+over a stall; the pigeon-post house with a dovecote astride its ridge. Every
+window lights after dark. No Nintendo mark is drawn: a fish, an anchor, a
+rosette, two arrows.
+
+**Four interiors, each the inside of its house** (`lib/VermilionHomeKit.lua`):
+the Guru's den (rod rack, tackle, a trophy fish, the catch on a trestle
+table, half-barrels to sit on), the trader's counting room (cloth and tins,
+an iron-bound strongbox, a balance and coin on green baize), the pigeon post
+(a wall of pigeonholes, a dovecote with somebody home, a writing table whose
+north-east quarter is kept bare for the LETTER), and the Fan Club -- its own
+plan -- with a banner, prize rosettes, a sideboard of cups, tea on lace round
+the biggest cup of all, and pink velvet couches the fans really sit on. (The
+tileset draws a statue on that table; a cup stands there instead.)
+
+Frame cost on the square, all of it on: within a millisecond of all of it off.
+
+### Battles without Nintendo art
+
+The battle costume was switched off when the repository was cleared on
+2026-09-15. It is back in free art: LOVE's vector font, a CC0 interface kit
+(`assets/battlexy/ui`, from the Mana Soul GUI), an interface atlas made for this
+mod (`assets/ui/gen1-modern`), and 411 creatures from Tuxemon
+(`assets/creatures`, CC BY-SA 4.0, credited in `assets/creatures/CREDITS.md`)
+paired to species by type (`lib/CreaturePack.lua`). Plus a first cut of the
+concept's PARRY (`lib/BattleParry.lua`) and charge (`lib/BattleCharge.lua`).
+Rough, and the likeliest place in this release to find a bug.
+
+### The water garden moves, and every plant its own way
+
+The reef (`lib/ReefKit.lua`) grew in the big waters but stood still in them:
+one wind sine, the trees' own, ran through weed and reed alike, and the lily
+pads did not move at all while the sheet rose and fell around them. Now every
+voxel of it knows which plant it belongs to -- kind, a draw of its own, and
+the heights its give is measured between -- packed into the shade its corners
+already carried (`Kit.pack`), and the vertex stage answers three things with
+it:
+
+- **the water.** A pad rides the sheet's own swell, evaluated at its STALK,
+  so the leaf and its flower move as one rigid thing and can never sink into
+  a crest or hang over a trough. Under it, everything goes to and fro with
+  the trains passing overhead (the parcel's own excursion), kelp with a slow
+  wave climbing its stalk and a lean down the current, seagrass quicker,
+  clover bobbing, a sea fan flexing across its plane, an anemone's crown
+  stirring. Coral, sponge and stone stay still: that is what the rest moves
+  against. `FLAT` stills all of it; a freeze already did.
+- **the wind.** The reeds and cattails, above the waterline only, on the
+  `WIND` row (it was a constant before, and ignored the row entirely).
+- **a swimmer.** The player on Surf and every water roamer now shove the
+  garden out of the way and leave it RINGING behind them: `lib/WakeFX.lua`
+  lays a point of wake every ten pixels of travel and the shader answers each
+  with that kind's own spring -- a reed whips back in a fraction of a second,
+  kelp comes back heavy, and a lily is repelled, floats a third of a cell
+  away and takes five seconds to drift home. It rides the eight crush slots
+  the meadow already had, so no uniform was added.
+
+Measured on Route 12 (`tests/run_reef_motion.cmd` + `tests/reef_motion_sheet.py`),
+against the same garden rebuilt rigid: a pad strays 22 px of screen with the
+swell alone and 60 px when the player surfs through it, against 4 px and 0.5 px
+rigid. Cost there, the longest pier and the biggest garden: the reef was
++0.4 ms a frame and is now +0.54 ms, inside the spread of two runs.
+`tests/reef_kit_check.py` checks the packing end to end through float32 and
+that every voxel is the kind its palette says.
+
+### Fix: the LIFT KEY that never dropped (Yellow, Rocket Hideout B4F)
+
+Engine 0.2.57 drops Yellow's LIFT KEY in the callback of the grunt's TALK
+handler. Beat him from his line of sight instead and the handler never runs:
+the win is recorded, every later talk only reprints "I dropped the LIFT KEY!",
+and the game cannot go on. `lib/StoryFixes.lua` runs the event's own two lines
+(set `EVENT_ROCKET_DROPPED_LIFT_KEY`, show the ball) whenever the player stands
+on that floor with the grunt beaten and the key never dropped. Probe:
+`tests/run_liftkey.cmd`.
+
+### The roads into Lavender, floored as one picture with the town
+
+Routes 8, 10 and 12 now wear the town's ground: their own roads flagged in
+the same crazy paving with the edges let go ragged, lawn a voxel proud of the
+stones, Route 12's pier in weathered planks, Route 10's brick yard in setts,
+its stretch of checker as an overgrown court, lavender straying out along the
+roads and thinning with every step from town. The road's drawn MARKINGS are
+kept and stood up -- they rule the lane a bicycle keeps to: tile $10/$20 a
+dressed kerb two voxels wide with its drain beside it, $21 a round bollard
+on a dark collar, on flush dressed slabs. Under the trees lies a ground of
+its own -- loam, leaf litter, moss, a few ferns and mushrooms -- spilling a
+ragged step out on to the lawn. Tree, tall grass, flower and sign
+cells are laid but not claimed, so the blades, blooms and boards still stand.
+
+No seam, by construction: `tools/lavender_ground.py` paints all four maps on
+ONE canvas in world coordinates -- every noise, stone and street is a
+function of world position -- and only then cuts a sheet and a data file per
+map (`assets/buildings/lavground_<MAP>.png`, `data/lavground_<MAP>.lua`,
+`data/lavground_index.lua`). The kit reads a neighbour's cells ACROSS a map's
+edge through the index, so hidden faces and corner AO do not stop there
+either, and `lift` puts walkers at one level on both sides. The tool's check
+walks flagged ground from the west gate to every door and on into each route.
+
+Engine: a `wild` template flag (the kit's data, not a tile grid, says what a
+cell is -- each cell checked against the tiles it was painted for); the
+ground's sheet is never read back (`sp` is arithmetic, not half a million
+texels in Lua tables) and its per-cell models are not cached; and a crisp
+floor's open runs now merge down z as well as along x, which took plain
+ground from sixteen quads a cell to one. 102k quads over the four maps.
+Measured: no steady-state cost against the drawn ground once the maps have
+built (7.1 vs 7.2 ms a step), but the build runs longer in the background
+after a map change, and the four maps' quads hold about 130 MB of Lua heap.
+The far ends of the three routes still meet drawn ground (Saffron, Route 9,
+Routes 11 and 13): add a map to `MAPS` in the tool to carry on.
+
+### The Pokemon Tower, outside, in the town's stone
+
+`lib/LavenderTowerKit.lua`: the tower rebuilt from nothing on the Centre's
+authored sheet -- a battered plinth and steps up to a deep pointed portal
+with its doors ajar on a cold light, clasping buttresses that step back into
+pinnacles, a rose window, slit lights, damp under every cornice, three
+storeys of paired lancets (a few lit by nothing living), an OPEN belfry with
+the bronze bell in view, a battlemented parapet and an eight-sided slate
+spire with lucarnes and a gilt ball. Same plot, same terrace wall, same
+`haunt` (the wisps still rise from belfry, portal and spire). Taken by the
+Lavender branch in `Buildings.build` while the TOWER row is NEW;
+`lib/TowerKit.lua`'s tower is the fallback and CLASSIC is still the fold.
+25.5k quads (the old one: 24.5k). Checked by `tools/lavender_civic.py` and
+`tests/run_lavender_civic.cmd`.
+
+### Lavender's Centre and Mart, outside
+
+Every city stands the same two templates -- a flat-roofed Centre, a flat-
+roofed Mart -- and between Lavender's hand-built cottages they read as two
+appliances on a village green. `lib/LavenderCivicKit.lua` builds them from
+nothing for this one town, in the cottages' own language (coursed limestone,
+lime plaster in a timber frame, bell-cast violet slate, stone chimneys that
+smoke). The CENTRE is the town's hospice: a hipped roof under a louvred
+cupola, an entrance bay with its own gable, a columned porch roofed in red
+clay tile, red awnings over arched windows, a bench, lavender in stone
+troughs -- and a red heart on a white roundel for a sign. The MART is the
+general store: a half-hipped gable with a loft hoist, a boarded lean-to, a
+glazed shop front with the goods behind it, a blue and cream striped awning
+under a painted fascia that says MART, barrels and crates. No Nintendo mark is
+drawn: no ball, no logotype (see `assets/buildings/LICENSE.md`).
+
+Selected before the dispatch chain in `Buildings.build`, for `pokecenter` /
+`pokemart` on `LAVENDER_TOWN` only; a kit that fails leaves the classic
+building standing. Each plot paves its own forecourt in the town's flags, so
+no ring of the drawn checker is left round the walls. New, opt-in per model:
+`lights` -- a model's lanterns, recorded by `Buildings.stamp` and taken by
+`StreetLamps.lights` with the street lamps, so the porch and the shop door are
+lit after dark (an authored sheet has no glass mask, and a hand-built house
+was otherwise the one dark thing in a lit street). Sheet
+`assets/buildings/lavender_civic.png` and previews by
+`tools/lavender_civic.py`; 10.2k + 8.1k quads. Probe:
+`tests/run_lavender_civic.cmd` (both doors are walked in and out).
+
+### Lavender's ground, from nothing
+
+The town's floor was the generic Gen 1 checker laid as one flat plane. It is
+not re-skinned, it is replaced: `lib/LavenderGroundKit.lua` stands a village
+green drawn from scratch as ONE picture of the whole town
+(`assets/buildings/lavender_ground.png`, 320x288, one texel a voxel --
+painted by `tools/lavender_ground.py`, which also writes
+`data/lavender_ground.lua`). Crazy-paved paths in pale lilac stone run where
+feet go -- from the west gate past the Centre to the Tower's gate, down from
+Route 10, between the houses and the Mart, past every door and out to Route
+12 -- with an apron at each door, stepping stones to the signs, and edges
+that break up into single flags. Everything else is lawn standing one voxel
+PROUD of the stones, with clumps of grass along the verges, clover, worn
+earth, and lavender: in beds under the house fronts and the Tower's wall, by
+the signs, and wild in drifts in the quiet corners. The tool's check walks
+the plan: every door and road is reachable over flagged ground.
+
+Engine side, all opt-in per model: `lift` (a floor says how high its walking
+surface stands; `VoxelScene.groundAt` reports it, so walkers, puddles and
+footfalls land ON the stones), `covers` (the mesher leaves the drawn ground
+off under a slab that hides it), `looseSides` and `crispTops` in
+`Buildings.emit` (flanks merge across texels; a floor's contact AO stays one
+voxel wide instead of smearing down a merged run), and a template `grid`
+flag (a one-cell ground template only lands on the cell grid). Rain puddles
+and snow cover were checked on it. 26.7k quads; against the drawn checker,
+two runs of three A/B pairs gave medians of +1.3 and +0.2 ms a step on the
+dev machine -- inside the noise of a second game instance that was open,
+so: small, and not pinned down better than that. Lavender only (`maps`);
+the routes keep their drawn ground, so the style changes at the town's
+edges. Probe: `tests/run_lavender_ground.cmd`.
+
+### Lavender's three homes, inside
+
+Mr. Fuji's house, the Cubone house and the Name Rater's house share one
+16x16 plan with every other town house, so `lib/LavenderHomeKit.lua` models
+the room once as a function of position and lets the MAP decide who lives
+there: a warm shelter with tea for four, toys and lavender; a house in
+mourning with drawn curtains, a bare table and a memorial altar; a walnut
+study with ledgers, a felt desk, lamp, globe and card catalogue. Each lays
+its own floor (oak boards, worn boards, parquet) over the tileset's white
+tile. Authored sheet `assets/buildings/lavender_home.png`
+(`tools/lavender_home.py`, which also checks the kit and renders a 9-second
+preview), templates under `buildings.HOUSE` gated by `maps`, a fixed shot per
+home in `data/camera_shots.lua`, and the wireframe and cel step held off as
+in the Mart. Seats are their own templates because their cells are walkable
+(`standH`). Every other town's houses are untouched. Probe:
+`tests/run_lavender_homes.cmd`.
+
+### The meadow, top tier
+
+- **The wind stopped pushing the grass UPWIND.** The sway was a wave with a
+  mean of zero, so half the time a gale laid the meadow into its own teeth.
+  Drag only ever pushes one way and goes as the square of the air's speed,
+  so a tuft is now COMBED downwind and swings around that: a calm day barely
+  changes (~0.1 px), a gale lays the whole field over and down, and at a
+  gust's peak nothing swings upwind at all. It saturates, and a stem near its
+  limit has less swing left. Bodies do not take it (`Wind.leanAt` stays the
+  oscillation): wind does not comb a person.
+- **Gusts arrive in patches, not bands.** The squall front was one long wave
+  -- an endless straight stripe, a barcode sliding over a big meadow. It is
+  two waves crossing at +-32 degrees off the bearing at different lengths and
+  speeds (`Wind.patchAt`), so the air lands in cat's paws that travel
+  downwind. The grass, the bodies standing in it and everything the air
+  carries (`Wind.flowAt`) read the same field.
+- **You can SEE the wind now.** A bent blade shows more of its lit face, so
+  the tips lighten with the lean -- signed, so a gust's crest runs across
+  the field as a band of light and the trough behind it darkens -- and at
+  dawn and dusk the low sun burns through the tips (off at noon, off in the
+  rain). Every pixel column of a tuft flutters on its own phase at FULL, so
+  a tuft flexes as blades rather than shimmering as one card.
+- **A walked path stays for minutes.** Grass somebody pushed through stayed
+  down for six seconds and then nothing held it. `GrassWear.lay` keeps a
+  second field on the wear grid -- a texel a cell -- that every walker
+  presses: the path is PARTED to either side of the line they took, reads a
+  little lighter, and stands back up over about a hundred seconds. Everyone
+  lays it at their own weight (a mon lighter than you), a busy path stays
+  down, and a mon standing in the meadow flattens a bed. It replaced the
+  384 px crumb window Grass3D rebuilt from scratch every frame -- up to ~9600
+  `setPixel`s through `pcall` and a whole-image upload per frame even with
+  nobody walking -- and the same shader seam now reads it (`crushMap`).
+- **Dew.** A meadow at dawn is silver at the tips (`Wind.dew`: night into
+  the morning's golden light; rain and snow take over), and the line
+  somebody walked through it stays green -- they knocked the water off. And
+  onto their legs: wading through wet grass (dew, or a meadow still soaked
+  after rain) soaks a walker from the knees, and they drip for a few
+  seconds after (`RainOnFX.soakLegs`).
+- **WIND OFF stilled everything, not just the wind.** `sway > 0` is what
+  marks a draw as vegetation, and the row's zero drew the meadow as
+  terrain: no foot-crush, no trail, no wear thinning, no snow weight -- the
+  worn-earth decal showing under full-height tufts. The grass pass is drawn
+  at `Voxel3D.SWAY_FLOOR` now: the wave is still, the feet are not.
+- **Fixed on the way:** a battle hit's dent lay along the WIND on the old
+  crumb window (a splat had no direction there); it is radial again. A GPU
+  without vertex textures at RES 1/2 or FULL lost the whole walked trail
+  (the crumbs were neither packed nor sampled); they are always packed now.
+  Grass3D's speed factor measured distance since the last crumb over one
+  frame, not speed, and pulsed the live foot's radius every frame; gone with
+  the window. A bicycle ploughs a wider, harder wake than a boot.
+- **And you HEAR the gust cross the meadow.** The wind bed follows the gust
+  patch over the listener (the same `Wind.patchAt` the grass bends to):
+  full on the crest, ~60% in the lull, a touch higher in pitch as it
+  swells, and fuller over tall grass than over a street. On the crest,
+  grains of the step's own rustle land on tall-grass cells around you at
+  a rate that follows the patch and the gale -- the meadow hissing, from
+  the recording already shipped. A step lands harder and brighter on a
+  bicycle, and duller and softer when the blades are wet. The gust's
+  grains have voices of their own, so they never steal a footstep's.
+- **Tuning knobs**, per frame, for a probe to zero and a person to taste:
+  `Voxel3D.GRASS_TUNE` (comb gain, comb ceiling, sheen, glow) and
+  `Voxel3D.GRASS_FX` (per-column flutter, dew). Probe:
+  `tests/grass_aaa_probe.lua` (`tests/run_grass_aaa.cmd`) -- each knob an
+  interleaved A/B against a control on a pinned scene; offline:
+  `tests/grass_wear_offline.lua` (LAID) and `tests/grass_crush_offline.lua`,
+  whose tier-0 hash is unchanged.
+
+### The clouds throw shadows
+
+- **CLOUD SHADE, a new row (ON / OFF).** The sky had a cloud deck, the wind
+  pushed it, and the ground never once went dark under it. Now soft patches
+  of shade cross the fields downwind, at a cloud's pace, and the lake goes
+  dull and bright again as they pass. Drawn in the scene shader's VERTEX
+  stage (`lib/CloudShade.lua`): a periodic sum of five sines on the flat
+  world position, handed to the fragment in the spare lane of the sun-view
+  varying, where it gates the SUN's share of the light and a small share of
+  the sky's -- a cloud takes the sun away and leaves the sky, which is what
+  a cast shadow does, so the two are one cool colour. Per vertex, highp
+  everywhere, no new fetch, no new pass: it costs nothing a phone can
+  measure. Coverage follows `Sky.cloudAmount()` (a few patches on a fair
+  day, bright gaps in a thickening deck) and fades to nothing under a flat
+  overcast, where there are no patches to throw. Off indoors, off with the
+  CLOUDS row.
 
 ### The snow came off the drawing
 

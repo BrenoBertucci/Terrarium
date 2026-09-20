@@ -53,11 +53,23 @@ BattleBoxXY.ASSET_DIR = "assets/battlexy/"
 -- the X/Y buttons, and redrawing them to translate the label would make them
 -- something else. `label` is kept beside each for the tooltip-less case where
 -- the art fails to load and the fallback has to say something.
+-- ...and with the pack's buttons gone, `label` is no longer the fallback --
+-- it is the button. So it carries the concept board's own words, which are
+-- English for the reason above and were already an open want (ROADMAP: "EN
+-- labels").
+--
+-- THREE of the board's four map onto a real command and the fourth does not.
+-- The board reads ATTACK / SKILLS / ITEMS / SWITCH; Generation 1 has no
+-- separate skill list -- the moves ARE the attack menu -- and its fourth slot
+-- is RUN, which runs away. Labelling a button SWITCH when pressing it flees
+-- the battle is the one mistake a relabel can make that costs the player a
+-- fight, so SWITCH sits on the slot that actually swaps the mon (index 2, the
+-- engine's PKMN) and index 4 says what it does.
 BattleBoxXY.COMMANDS = {
-  { art = "cmd_fight",   label = "LUTAR", color = { 0.86, 0.24, 0.21 } },
-  { art = "cmd_pokemon", label = "PKMN",  color = { 0.24, 0.70, 0.36 } },
-  { art = "cmd_bag",     label = "ITENS", color = { 0.93, 0.66, 0.16 } },
-  { art = "cmd_run",     label = "FUGIR", color = { 0.20, 0.52, 0.86 } },
+  { art = "cmd_fight",   label = "ATTACK", color = { 0.86, 0.24, 0.21 } },
+  { art = "cmd_pokemon", label = "SWITCH", color = { 0.24, 0.70, 0.36 } },
+  { art = "cmd_bag",     label = "ITEMS",  color = { 0.93, 0.66, 0.16 } },
+  { art = "cmd_run",     label = "FLEE",   color = { 0.20, 0.52, 0.86 } },
 }
 
 -- X/Y stands FIGHT on its own, big, with the other three along the bottom
@@ -220,8 +232,9 @@ local function lines(text)
 end
 
 local function panel(x, y, w, h)
+  if BattleHudXY.uiSprite("dialogue", x, y, w, h, true) then return end
   local r = math.min(16, h * 0.45, w * 0.45)
-  setColor(BattleBoxXY.PANEL)
+  setColor(BattleHudXY.PANEL)
   love.graphics.rectangle("fill", x, y, w, h, r, r)
   setColor(BattleBoxXY.PANEL_EDGE)
   love.graphics.setLineWidth(2)
@@ -300,6 +313,12 @@ BattleBoxXY.shadowText = shadowText
 -- slot they float with air under them and read as clipped rather than seated.
 -- `mul` is the selection's animated scale (popScale); 1 when still.
 local function button(x, y, w, h, cmd, selected, align, mul)
+  if BattleHudXY.uiSprite(selected and "selected" or "button", x, y, w, h, true) then
+    local th = math.min(h * 0.38, (w - 24) * 84 / math.max(1, BattleHudXY.textWidth(cmd.label)))
+    local tw = BattleHudXY.textWidth(cmd.label) * th / 84
+    BattleHudXY.text(cmd.label, x + (w - tw) * 0.5, y + (h - th) * 0.5, th, BattleHudXY.INK)
+    return
+  end
   local img = art(cmd.art)
   if not img then
     -- the art did not load: a coloured rounded rectangle with the game's own
@@ -370,7 +389,7 @@ local function drawMessage(battle, x, y, w, h, shot)
   local th = h * BattleBoxXY.TEXT_H
   local ly = y + pad
   for _, line in ipairs(shownLines) do
-    BattleHudXY.text(line, x + pad, ly, th, BattleBoxXY.TEXT)
+    BattleHudXY.text(line, x + pad, ly, th, BattleHudXY.INK)
     ly = ly + th * BattleBoxXY.LINE_GAP
   end
 end
@@ -429,7 +448,7 @@ local function drawMenu(battle, x, y, w, h, shot)
   local th = h * BattleBoxXY.TEXT_H
   local ly = my + pad
   for _, line in ipairs(msgLines) do
-    BattleHudXY.text(line, x + pad, ly, th, BattleBoxXY.TEXT)
+    BattleHudXY.text(line, x + pad, ly, th, BattleHudXY.INK)
     ly = ly + th * BattleBoxXY.LINE_GAP
   end
 
@@ -628,6 +647,13 @@ local function drawMoves(battle, x, y, w, h, shot)
   -- With the hand up, the selected move's info card stays DOWN: every card
   -- already wears its own type, power and PP, so the panel would repeat
   -- the raised card word for word -- over the player's mon.
+  -- The board's prompt, in the message pane the menu already owns. Authored
+  -- here: the engine prints "What will X do?" from its own layout and has
+  -- nothing to say once the move list is up, so this row is the mod's own
+  -- sentence rather than a string lifted from anywhere.
+  local P = panels3d()
+  if P and shot then pcall(P.message, battle, shot, { "Choose a move." }) end
+
   local F = fan()
   if F and shot then
     local okFan, drew = pcall(F.draw, battle, shot)

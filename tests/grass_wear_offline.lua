@@ -62,6 +62,8 @@ local V = {
   },
 }
 function V.require(name)
+  -- the shelter bake asks where water is; the fake map has none
+  if name == "WaterMap" then return { surfaceCell = function() return false end } end
   error("GrassWear should not require anything, asked for: " .. tostring(name))
 end
 
@@ -322,6 +324,55 @@ local q4 = GW.takeBucketChanges()
 print(string.format("    after fading out: %s",
                     q4 and (#q4 / 2) .. " cell(s)" or "nil"))
 check("a faded path takes its decal with it", q4 ~= nil)
+
+-- ================= LAID: the path held for minutes =================
+print("--- LAID field (GrassWear.lay)")
+GW.bindHeadless("route1", fakeMap(false))
+local me, mon = {}, {}
+-- walk east through ten cells, one entry each (a cell is 16 px)
+for x = 8, 168, 4 do GW.lay(me, x, 40, 1, 0, 1.0) end
+local walked = GW.laidCount()
+print(string.format("    cells laid by one walk: %d", walked))
+check("every cell walked into is laid", walked == 11)
+local fresh = GW.laidAt(24, 40)
+check("a crossing leaves the cell at LAID_HOLD",
+      math.abs(fresh - GW.LAID_HOLD) < 1e-6,
+      string.format("%.3f", fresh))
+-- standing in a cell keeps it down; nobody standing lets it up
+GW.advance(30)
+local half = GW.laidAt(24, 40)
+local held = GW.laidAt(168, 40)
+GW.lay(me, 168, 40, 1, 0, 1.0)            -- same cell: still standing there
+print(string.format("    30 s later: left behind %.3f, stood in %.3f", half, held))
+check("left behind, the path is still there at 30 s", half > 0.25)
+check("and standing back up (less than it was)", half < fresh)
+check("the cell stood in stays down", GW.laidAt(168, 40) >= held)
+GW.advance(GW.LAID_TTL)
+for _ = 1, 20 do GW.step(0) end
+check("after LAID_TTL the path has stood back up",
+      GW.laidAt(24, 40) == 0 and GW.laidCount() <= 1,
+      string.format("count=%d", GW.laidCount()))
+-- walking the same cells again stacks: a busy path stays down
+GW.bindHeadless("route1", fakeMap(false))
+GW.lay(me, 40, 72, 0, 1, 0.35); GW.lay(me, 40, 88, 0, 1, 0.35)
+GW.lay(me, 40, 72, 0, -1, 0.35)
+local twice = GW.laidAt(40, 72)
+check("a second crossing lays a cell harder than one",
+      twice > 0.35 * GW.LAID_HOLD + 1e-6, string.format("%.3f", twice))
+-- a mon lays lighter than the player; ghosts / nil walkers lay nothing
+GW.lay(mon, 200, 200, 1, 0, 0.35)
+check("a mon's weight lays its cell lighter than a crossing",
+      GW.laidAt(200, 200) < GW.LAID_HOLD * 0.5)
+GW.lay(nil, 232, 200, 1, 0, 1.0)
+check("no walker, no path", GW.laidAt(232, 200) == 0)
+-- eight walkers at once: every one of them lays its own cell (the old
+-- crumb window registered eight; the uniforms alone hold four)
+GW.bindHeadless("route1", fakeMap(false))
+for i = 1, 8 do GW.lay({}, i * 48, 300, 1, 0, 1.0) end
+check("eight walkers at once each lay a cell", GW.laidCount() == 8)
+-- and a map change forgets the last map's paths
+GW.bindHeadless("route2", fakeMap(false))
+check("a new map starts with no laid paths", GW.laidCount() == 0)
 
 print("")
 if fails == 0 then

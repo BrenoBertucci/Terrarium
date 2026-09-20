@@ -333,6 +333,38 @@ function Wind.climateTarget()
   return d
 end
 
+-- ------- THE GUST ARRIVES IN PATCHES
+--
+-- The squall front is two long waves riding the grass ripple's bearing,
+-- crossing at +-32 degrees off it at different lengths and speeds. One wave
+-- alone is an endless straight band -- over a screen of meadow, a barcode
+-- sliding past. Two crossing interfere into PATCHES that travel downwind,
+-- the cat's paws on a wheat field, and because their speeds differ the
+-- lattice they make keeps re-forming instead of locking.
+--
+-- Byte for byte with the squall front in Voxel3D's vertex sway: every
+-- number below is written there as a literal, so change them in pairs.
+-- Many cells across either way (the shorter is ~12), or the rain that
+-- rides the same field would sort itself into stripes you can count.
+local PATCH_K_A, PATCH_K_B = 0.30, 0.40   -- wave number, of the ripple's
+local PATCH_W_A, PATCH_W_B = 0.53, 0.64   -- clock, of the ripple's
+local PATCH_C, PATCH_S = 0.848, 0.530     -- cos and sin of 32 degrees
+
+local function patchVectors()
+  local fx, fz = Wind.FREQ[1], Wind.FREQ[2]
+  local ax, az = fx * PATCH_K_A, fz * PATCH_K_A
+  local bx, bz = fx * PATCH_K_B, fz * PATCH_K_B
+  return ax * PATCH_C - az * PATCH_S, ax * PATCH_S + az * PATCH_C,
+         bx * PATCH_C + bz * PATCH_S, bz * PATCH_C - bx * PATCH_S
+end
+
+-- The gust envelope at world XZ for a given phase, -1..1.
+function Wind.patchAt(wx, wz, phase)
+  local ax, az, bx, bz = patchVectors()
+  return 0.5 * (math.sin(wx * ax + wz * az - phase * PATCH_W_A)
+              + math.sin(wx * bx + wz * bz - phase * PATCH_W_B))
+end
+
 -- Advance natural wind. Called from Weather's tick (and safe if missed).
 function Wind.step(dt)
   dt = tonumber(dt) or 0
@@ -415,8 +447,9 @@ function Wind.step(dt)
   local gust = clamp01(Wind.gustNow)
   local f = Wind.flow
   f.vx, f.vz = Wind.DIR[1] * v, Wind.DIR[2] * v
-  f.fx, f.fz = Wind.FREQ[1] * Wind.BAND, Wind.FREQ[2] * Wind.BAND
-  f.p0 = -Wind.phase() * 0.37
+  f.ax, f.az, f.bx, f.bz = patchVectors()
+  local ph = Wind.phase()
+  f.pa, f.pb = -ph * PATCH_W_A, -ph * PATCH_W_B
   -- A squall does not merely blow harder, it blows harder IN PLACES: the
   -- envelope lifts the mean and deepens the trough at the same time, so a
   -- gale is a field of fast air with slow holes in it and not a uniformly
@@ -478,26 +511,24 @@ end
 -- call. Reading the setting through a pcall two hundred times a frame,
 -- which is what the obvious version of this does, is most of a millisecond.
 Wind.FLOW = 17          -- world px/s of air per unit of Wind.amount
--- How much longer the gust band's wave is than the grass ripple it rides
--- on. A band has to be many cells across or the rain sorts itself into
--- stripes you can count; this is the number that makes it weather rather
--- than a barcode.
-Wind.BAND = 0.21
-
 -- Filled by Wind.step. The fallback values are the ones a caller gets if
 -- it asks before the first step ever ran, and they are deliberately a dead
--- calm rather than a guess. tax..tbz are the two lattices' accumulated
--- travels; turbEnv is the eddies' strength this frame and turbV the world
--- px/s flowAt's own callers convert them at.
-Wind.flow = { vx = 0, vz = 0, fx = 0, fz = 0, p0 = 0, amp = 0, base = 0,
+-- calm rather than a guess. ax..pb are the two gust waves (Wind.patchAt);
+-- tax..tbz are the two lattices' accumulated travels; turbEnv is the
+-- eddies' strength this frame and turbV the world px/s flowAt's own callers
+-- convert them at.
+Wind.flow = { vx = 0, vz = 0, ax = 0, az = 0, bx = 0, bz = 0, pa = 0, pb = 0,
+              amp = 0, base = 0,
               tax = 0, taz = 0, tbx = 0, tbz = 0,
               turbEnv = 0, turbV = 0 }
 
 function Wind.flowAt(wx, wz)
   local f = Wind.flow
   if f.amp <= 0 then return f.vx, f.vz, 0 end
-  local p = (wx or 0) * f.fx + (wz or 0) * f.fz + f.p0
-  local band = f.base + f.amp * (math.sin(p) + 0.58 * math.sin(p * 2.7 + 1.1))
+  local pa = (wx or 0) * f.ax + (wz or 0) * f.az + f.pa
+  local pb = (wx or 0) * f.bx + (wz or 0) * f.bz + f.pb
+  local band = f.base + f.amp * (0.5 * (math.sin(pa) + math.sin(pb))
+                                 + 0.58 * math.sin(pa * 2.7 + 1.1))
   if band < 0 then band = 0 end
   local vx, vz = f.vx * band, f.vz * band
   -- the eddies, on top of the band: same field for the rain that slants
@@ -546,6 +577,26 @@ function Wind.load()
   return clamp01(Wind.grassWet), clamp01(Wind.grassSnow), Wind.gust()
 end
 
+-- ------- DEW: the water a meadow wakes up wearing
+--
+-- Condensed overnight, on every blade by dawn, gone by the time the day
+-- plateau arrives: the dial's night (forming), dawn, and the MORNING golden
+-- plateau -- the evening one is dry, the day has been drying it for hours.
+-- Rain supersedes it (the blades are simply wet) and settled snow buries
+-- it. 0..1, read by the grass shader (silver on the tips, and none where a
+-- walker knocked it off -- GrassWear.lay) and by the legs of whoever
+-- wades through it (RainOnFX.soakLegs).
+function Wind.dew()
+  local okt, t = pcall(DayNight.time)
+  local okm, m = pcall(DayNight.mix, okt and t or 0)
+  if not (okt and okm and m) then return 0 end
+  local morning = (t % DayNight.CYCLE) < (DayNight.DAY_LEN or 600) * 0.5
+  local d = (m.dawn or 0) + 0.6 * (m.night or 0) + 0.3 * (m.violet or 0)
+            + (morning and (m.golden or 0) or 0)
+  return clamp01(d) * (1 - clamp01(Wind.grassWet))
+         * (1 - clamp01(Wind.grassSnow))
+end
+
 -- The phase, from absolute time rather than an accumulator: this is read
 -- once per frame by the scene and once more by a staged battle, and an
 -- accumulator advanced per read would run at whatever rate it happened to
@@ -560,10 +611,16 @@ end
 
 -- How far a point at world XZ leans with the wind, in world pixels on each
 -- axis.  The same travelling wave the grass vertex shader rides
--- (Voxel3D.lua: sway * bend * (sin p + 0.35 sin 2.3p)), so a mon standing
+-- (Voxel3D.lua: sway * bend * (sin p + 0.38 sin 2.25p)), so a mon standing
 -- in the meadow and the tuft next to it lean together rather than on two
 -- clocks.  `heightFrac` is 0 at the ground and 1 at the tip -- squared the
 -- same way the shader does, so the feet stay planted and the body gives.
+--
+-- The oscillation only. The shader also COMBS the grass downwind (its
+-- `comb`, drag going as the square of the reach), and that half is
+-- deliberately not here: every caller is a body -- a mon in the meadow, the
+-- townsfolk's whole card -- and wind does not comb a person. Taking it
+-- would slide the whole town a few pixels off its cells in a gale.
 --
 -- Returns (dx, dz).  Zero under WIND OFF or a zero amount.
 function Wind.leanAt(wx, wz, heightFrac)
@@ -578,9 +635,7 @@ function Wind.leanAt(wx, wz, heightFrac)
   -- the same bearing, so the air arrives in bands rather than at one flat
   -- amplitude everywhere. A body standing in a meadow has to be inside the
   -- same band as the tufts around it or it reads as leaning on its own.
-  local front = 0.72 + 0.28 * math.sin(wx * Wind.FREQ[1] * 0.21
-                                       + wz * Wind.FREQ[2] * 0.21
-                                       - phase * 0.37)
+  local front = 0.72 + 0.28 * Wind.patchAt(wx, wz, phase)
   -- Rain and snow are load, and load is the same on a person as on a blade:
   -- water damps, settled snow stiffens. No per-tuft stiffness here -- that
   -- one is the meadow's own scatter and a walker has no tuft.

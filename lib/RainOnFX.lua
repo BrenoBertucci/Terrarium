@@ -81,6 +81,20 @@ function RainOnFX.soak(ent, k)
   wet[ent] = math.max(wet[ent] or 0, math.min(1, tonumber(k) or 1))
 end
 
+-- Wading through WET GRASS -- dew, or a meadow still soaked after the
+-- rain -- soaks the legs, not the hat: the drops let go from the knee.
+-- VoxelScene calls this for walkers stepping through tall grass with the
+-- blades' wetness; a shower on the figure soaks all of it and takes over.
+RainOnFX.LEG_TOP = 6
+local legs = setmetatable({}, { __mode = "k" })
+function RainOnFX.soakLegs(ent, k)
+  if not ent then return end
+  local w = math.min(1, tonumber(k) or 0)
+  if w <= (wet[ent] or 0) then return end
+  wet[ent] = w
+  legs[ent] = true
+end
+
 -- How much of the rivulet painting the scene shader should draw on this
 -- figure: the wetness if PAINT is on, nothing otherwise. What VoxelScene
 -- hands the shader.
@@ -97,7 +111,8 @@ local function shed(e, dt, w, power)
     due = due - 1
     local x = e.px + 3 + love.math.random() * 10
     local z = e.py + RainOnFX.DRIP_FRONT + love.math.random() * 4
-    local top = RainOnFX.DRIP_TOP + love.math.random() * 3
+    local top = (legs[e] and RainOnFX.LEG_TOP or RainOnFX.DRIP_TOP)
+                + love.math.random() * 3
     local ok, made = pcall(Weather.figureDrip, x, z, top, RainOnFX.DRIP_SIZE)
     if ok and made then RainOnFX.drips = RainOnFX.drips + 1 end
   end
@@ -126,11 +141,12 @@ local function figure(e, dt, raining, power)
   if open then
     w = w + power * dt / RainOnFX.SOAK
     if w > 1 then w = 1 end
+    legs[e] = nil                   -- the sky soaks all of it
   else
     w = w - dt / RainOnFX.DRY
     if w < 0 then w = 0 end
   end
-  if w > 0 then wet[e] = w else wet[e] = nil end
+  if w > 0 then wet[e] = w else wet[e], legs[e] = nil, nil end
   -- and the drops: while it rains on them, and for the few seconds after
   -- that they are still wet (a coat keeps dripping after the sky stops)
   if w > 0.05 and RainOnFX.DRIP_RATE > 0 then

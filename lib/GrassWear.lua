@@ -574,11 +574,188 @@ end
 
 -- ------- binding a map
 
+-- ------- LAID: which way a walked path lies, for the minutes after
+--
+-- Wear remembers days and thins a cell; the foot-crush remembers a breath.
+-- Nothing held a path in between: a walk through a meadow was gone six
+-- seconds later, where grass somebody pushed through stays LAID the way
+-- they went for minutes and stands back up slowly. So every walker in a
+-- grass cell presses it here -- at their own weight, the way they were
+-- going -- and the cell comes back upright over LAID_TTL once they leave.
+--
+-- One texel per cell, on the wear field's grid but its own image, read by
+-- the vertex shader through the trail seam Voxel3D already had
+-- (`crushMap`, which used to carry Grass3D's 384 px window of crumbs,
+-- rebuilt from scratch every frame): R = how laid, G/B = which way (0..1
+-- -> -1..1). The first seconds behind a foot stay Grass3D's crumbs, on
+-- uniforms, fading down onto LAID_HOLD -- the partial spring back -- and
+-- this carries the path from there. Not saved: minutes, not days.
+GrassWear.LAID_TTL = 100      -- seconds a laid cell takes to stand back up
+GrassWear.LAID_HOLD = 0.6     -- what a crossing leaves after the spring back
+GrassWear.LAID_BUDGET = 48    -- cells re-evaluated per frame
+
+local laid = {}               -- idx -> { s, t, dx, dz, v } on the bound map
+local laidIdata, laidImg = nil, nil   -- nil untried, false unavailable
+local laidDirty, laidFresh, laidIdle = false, false, 0
+local laidCursor = nil
+local lastCell = setmetatable({}, { __mode = "k" })   -- walker -> idx
+local lastGrass = setmetatable({}, { __mode = "k" })  -- walker -> in grass?
+
+local function laidValue(e)
+  local u = (age - e.t) / GrassWear.LAID_TTL
+  if u >= 1 then return 0 end
+  if u < 0 then u = 0 end
+  return e.s * GrassWear.LAID_HOLD * (1 - u) * (1 - u)
+end
+
+local function laidPaint(idx, v, dx, dz, knock)
+  if laidIdata == nil then
+    laidIdata = false
+    if love and love.image and love.image.newImageData then
+      local ok, d = pcall(love.image.newImageData,
+                          GrassWear.RES, GrassWear.RES)
+      if ok and d then
+        pcall(d.mapPixel, d, function() return 0, 0.5, 0.5, 1 end)
+        laidIdata = d
+      end
+    end
+  end
+  if not laidIdata then return end
+  -- alpha 0 = this cell's dew was knocked off by whoever laid it
+  pcall(laidIdata.setPixel, laidIdata, idx % GrassWear.RES,
+        math.floor(idx / GrassWear.RES),
+        v, dx * 0.5 + 0.5, dz * 0.5 + 0.5, knock and 0 or 1)
+  laidDirty = true
+end
+
+-- A map change: this map's paths are not the last map's. Only the texels
+-- actually laid get repainted neutral, and every walker's "last cell" is
+-- forgotten, since an index names a different place on a different map.
+local function laidRebind()
+  for idx in pairs(laid) do laidPaint(idx, 0, 0, 0) end
+  laid = {}
+  laidCursor = nil
+  laidFresh = true          -- up this frame, not in six: a phantom path
+  lastCell = setmetatable({}, { __mode = "k" })
+  lastGrass = setmetatable({}, { __mode = "k" })
+end
+
+-- `who` (any key that is the same walker every frame) standing at world
+-- (wx, wz), going (dx, dz), pressing with `weight` (a W_* times how hard
+-- they are stepping). Entering a cell lays it -- on top of what is still
+-- laid there, so a busy path stays down -- and standing in it keeps it
+-- laid for as long as they stay. `dew` is the morning's (Wind.dew): a
+-- cell laid while there is any has had it knocked off. Answers whether
+-- the walker is in tall grass at all (RainOnFX.soakLegs asks).
+function GrassWear.lay(who, wx, wz, dx, dz, weight, dew)
+  if not bound or who == nil then return false end
+  local cx = math.floor((tonumber(wx) or 0) / GrassWear.CELL)
+  local cy = math.floor((tonumber(wz) or 0) / GrassWear.CELL)
+  local idx = idxOf(cx, cy)
+  if not idx then return false end
+  local e = laid[idx]
+  weight = tonumber(weight) or 0
+  if lastCell[who] == idx then
+    if e then e.t = age end               -- still standing in it
+    return lastGrass[who] or false
+  end
+  lastCell[who] = idx
+  local grass = true
+  if boundMap and boundMap.isGrassCell then
+    local ok, isGrass = pcall(boundMap.isGrassCell, boundMap, cx, cy)
+    grass = ok and isGrass and true or false
+  end
+  lastGrass[who] = grass
+  if not grass then return false end
+  local was = e and (laidValue(e) / GrassWear.LAID_HOLD) or 0
+  local knock = (e and e.knock) or (tonumber(dew) or 0) > 0.05
+  e = { s = math.min(1, was + weight), t = age,
+        dx = tonumber(dx) or 0, dz = tonumber(dz) or 0, knock = knock }
+  e.v = laidValue(e)
+  laid[idx] = e
+  laidPaint(idx, e.v, e.dx, e.dz, e.knock)
+  laidFresh = true
+  return true
+end
+
+-- How laid the cell under world (wx, wz) is right now, 0..LAID_HOLD.
+function GrassWear.laidAt(wx, wz)
+  local idx = idxOf(math.floor((tonumber(wx) or 0) / GrassWear.CELL),
+                    math.floor((tonumber(wz) or 0) / GrassWear.CELL))
+  local e = idx and laid[idx]
+  return e and laidValue(e) or 0
+end
+
+-- Whether the cell under world (wx, wz) had its dew knocked off (probe seam).
+function GrassWear.laidKnocked(wx, wz)
+  local idx = idxOf(math.floor((tonumber(wx) or 0) / GrassWear.CELL),
+                    math.floor((tonumber(wz) or 0) / GrassWear.CELL))
+  local e = idx and laid[idx]
+  return (e and e.knock) or false
+end
+
+function GrassWear.laidCount()
+  local n = 0
+  for _ in pairs(laid) do n = n + 1 end
+  return n
+end
+
+-- A rolling revisit, like the wear prune: a cell standing back up is
+-- written by nobody, so this walk is what carries its texel down.
+local function laidStep()
+  local k, n, retire = laidCursor, 0, nil
+  while n < GrassWear.LAID_BUDGET do
+    local idx, e = next(laid, k)
+    if idx == nil then k = nil break end
+    k, n = idx, n + 1
+    local v = laidValue(e)
+    if v <= 0 then
+      retire = retire or {}
+      retire[#retire + 1] = idx
+    elseif math.abs(e.v - v) >= 1 / 255 then
+      e.v = v
+      laidPaint(idx, v, e.dx, e.dz, e.knock)
+    end
+  end
+  laidCursor = k
+  if retire then
+    for i = 1, #retire do
+      laid[retire[i]] = nil
+      laidPaint(retire[i], 0, 0, 0)
+    end
+    laidCursor = nil
+  end
+  -- A new crossing goes up this frame; a cell only standing back up can
+  -- wait a few -- a 255th of a hundred seconds is nothing to see late.
+  laidIdle = laidIdle + 1
+  if not (laidDirty and (laidFresh or laidIdle >= 6)) then return end
+  if laidImg == nil and laidIdata then
+    local ok, img = pcall(love.graphics.newImage, laidIdata)
+    laidImg = (ok and img) or false
+    if laidImg then
+      pcall(laidImg.setFilter, laidImg, "linear", "linear")
+      pcall(laidImg.setWrap, laidImg, "clamp", "clamp")
+    end
+  elseif laidImg and laidImg.replacePixels then
+    pcall(laidImg.replacePixels, laidImg, laidIdata)
+  end
+  laidDirty, laidFresh, laidIdle = false, false, 0
+end
+
+-- What VoxelScene hands to Voxel3D.crushMap, for the map underfoot only
+-- (a neighbour's cells are not this map's -- same rule as the wear).
+function GrassWear.laidState()
+  if not laidImg then return nil end
+  local inv = 1 / GrassWear.EXTENT
+  return { img = laidImg, on = 1, ox = 0, oz = 0, ix = inv, iz = inv }
+end
+
 function GrassWear.bind(map, key)
   key = key or (map and (map.id or map.name)) or "?"
   if boundKey ~= key then
     boundKey = key
     bound = entry(key)
+    laidRebind()
     -- Every texel the previous map dirtied is wrong for this one, and so
     -- is every texel this one wants. Both sets go in: repainting a stale
     -- texel writes decayed()=0 and shelter=1 through the same paint()
@@ -769,6 +946,7 @@ function GrassWear.step(dt)
   end
 
   flush()
+  laidStep()
 end
 
 -- Drain the whole dirty set in one go, whatever it costs.
@@ -901,6 +1079,7 @@ function GrassWear.bindHeadless(key, map)
   boundKey = key or "probe"
   bound = entry(boundKey)
   boundMap = map
+  laidRebind()
   mapIdata = false
   mapImg = false
   bakeShelter(bound, map)
@@ -982,6 +1161,9 @@ function GrassWear.dropGPU()
   if bound then
     for idx in pairs(bound.live) do bound.dirty[idx] = true end
   end
+  if laidImg and laidImg.release then pcall(laidImg.release, laidImg) end
+  laidImg, laidIdata = nil, nil
+  laid, laidCursor = {}, nil
 end
 
 return GrassWear

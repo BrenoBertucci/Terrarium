@@ -91,7 +91,11 @@ Water.BED_TILES = 2            -- tiles per terrace step
 Water.SAND = { 0.92, 0.86, 0.66 }
 -- Absorption per world pixel of depth, per channel. Four pixels down the
 -- sand is already a green shallow; twelve down it is the deep blue.
-Water.ABSORB = { 0.220, 0.090, 0.030 }
+-- (Retuned 2026-09-19, the day the bed was first SEEN from above: until then
+-- Skyline's plate lay over every basin and these were set blind. At 0.22 the
+-- sand was grey-blue by the second terrace; this keeps the shallows a sandy
+-- turquoise and still reaches the deep blue by the last one.)
+Water.ABSORB = { 0.160, 0.062, 0.028 }
 -- The surface sheet's own body colour, as a tint on the tile's blue, reached
 -- SHORE_MAX tiles out from the bank.
 Water.DEEP_TINT = { 0.42, 0.58, 0.92 }
@@ -99,7 +103,7 @@ Water.DEEP_TINT = { 0.42, 0.58, 0.92 }
 -- rather than the bed seen through it, at the bank and in the deep. The
 -- Fresnel share of the sky lands on top of both.
 Water.ALPHA_SHALLOW = 0.15
-Water.ALPHA_DEEP = 0.62
+Water.ALPHA_DEEP = 0.50
 Water.REFLECT = 0.85           -- how much of the Fresnel share the sky gets
 Water.SHORE_MAX = 6            -- tiles from the bank where "deep" saturates
 Water.SHORE_FOAM = 0.25        -- tiles from the bank the foam ring reaches

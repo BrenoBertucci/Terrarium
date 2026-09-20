@@ -38,6 +38,30 @@ Upstream Dramatic Shape still uses `3` / `5` / `6` / `7` / `8` / `9`.
 - Wild Pokemon visible in the grass; ecology / shelter / city life systems
 - Tuned defaults for lower-end / mobile hardware
 
+## New in 1.37.0-beta
+
+**⚠️ BETA -- still full of bugs. / BETA -- ainda cheia de bugs.**
+BETA -- expect bugs. This is a test build, not a finished release: things break, whole features are half done, and a bad frame can drop the 3D mode back to 2D for the session. Keep a copy of your save, and report what you find.
+
+BETA -- cheia de bugs. Esta é uma versão de teste, não um lançamento pronto: coisas quebram, há recursos pela metade, e um erro pode derrubar o modo 3D para o 2D até o fim da sessão. Guarde uma cópia do seu save e avise o que encontrar.
+
+- **Bridges and piers rebuilt as timber**: decks on piles with the water running under them, posts with
+  stone caps, railings that never close a way on or off, lanterns that light the whole deck after dark.
+- **A water garden in the big waters**: reeds and cattails on the bank, water lilies on the sheet, corals,
+  kelp and seagrass on the bed -- and the lake bed is finally VISIBLE from above (a horizon plate had been
+  lying over every basin in Kanto). Every plant moves its own way; swimmers push it aside.
+- **Vermilion City from nothing**: herringbone brick streets, a sunburst square, a stone quay with mooring
+  bollards, coastal turf and poppies; Routes 6 and 11 floored in the same picture with no seam; timber
+  crossbuck fences; **six houses, each its own building** (fisherman's cottage, captain's house with a
+  widow's walk, a lighthouse, the Fan Club under a mansard, the trader's shop, the pigeon-post house with a
+  dovecote) and **four interiors, each its own room**.
+- **Lavender Town from nothing**: ground, roads into it, the Centre, the Mart, the Tower outside, three
+  homes inside.
+- Meadow pass, cloud shadows, snow lying on figures, a Porygonal renderer adapter, the LIFT KEY fix (Yellow),
+  RTX renamed SCREEN FX, battles dressed in free art (no Nintendo art ships in this repository).
+
+Full reasoning for every item: `CHANGELOG.md`.
+
 ## New in 1.36.0-beta
 
 **Beta para testes e nada mais.**

@@ -411,6 +411,12 @@ function OverworldBattle.begin(state, battle)
   -- optional any more (see forceOG)
   OverworldBattle.forceOG()
 
+  -- The free creature shelf needs the species table to pair against, and the
+  -- battle is the first place in the frame that reliably HAS one (it is
+  -- extracted from the player's ROM, so there is no build-time copy of it).
+  -- Cheap after the first fight: bind returns the map it already built.
+  pcall(function() V.require("CreaturePack").bind(battle and battle.data) end)
+
   session = { state = state, arena = arena, battle = battle, shot = nil,
               armed = false, token = 0 }
   cullCast(state)
@@ -1064,7 +1070,7 @@ function OverworldBattle.install()
                    and MonPack.has(species, side == "back")
     local snapped = math.max(1, math.floor((tonumber(base) or 1) + 0.5))
     if texturing then
-      if packed then return MonPack.SCALE end
+      if packed then return MonPack.scaleFor(species, side == "back") end
       -- the back view stands at the GB's own 2x (BACK SPRITES): the pack's
       -- back art lands at the same 64 px through SCALE, so either road puts
       -- the same-sized mon on the cell and BACK_HERO means the same thing
@@ -1077,7 +1083,9 @@ function OverworldBattle.install()
       return 1
     end
     if not OverworldBattle.shot() then return base end
-    if packed then return snapped * MonPack.MENU_SCALE end
+    if packed then
+      return snapped * MonPack.scaleFor(species, side == "back", true)
+    end
     return snapped
   end
 
@@ -1310,6 +1318,15 @@ function OverworldBattle.install()
     end)
   end
 
+  -- The two RULE modules, installed last and each behind its own guard, so a
+  -- throw in either leaves the costume above it wired. They patch the same
+  -- table this block does and nothing else -- the parry defers executeAction
+  -- and scales applyDamage, the charge meter gates chooseMove and pays out on
+  -- endOfTurn. Both answer "off" from their own OPTIONS row without being
+  -- uninstalled, which is what makes flipping either row mid-battle safe.
+  pcall(function() V.require("BattleParry").install(BattleState) end)
+  pcall(function() V.require("BattleCharge").install(BattleState) end)
+
   BattleState.dramaticShapeBattleHook = true
 end
 
@@ -1394,10 +1411,21 @@ function OverworldBattle.drawXYBlock(battle, shot, side)
   local fh = capsule
              and (side == "enemy" and BattleCapsule.ENEMY_H
                                    or BattleCapsule.PLAYER_H)
-             or BattleHudXY.FRAME_H
+             or (side == "enemy" and BattleHudXY.ENEMY_H
+                                  or BattleHudXY.PLAYER_H)
   local h = w * fh / fw
   local x, y
-  if side == "enemy" then
+  -- The concept boards hang BOTH plates along the top -- player left, foe
+  -- right -- and leave the whole lower half to the cards, the prompt and the
+  -- command row. The pack's own cut wanted the opposite diagonal, so the
+  -- flag (BattleDynamic owns it) is what tells the two layouts apart rather
+  -- than an edit that would strand CLASSICA in a placement it was not cut
+  -- for. Both plates stay clear of the text box either way: at the top there
+  -- is nothing to clear.
+  if BattleHudXY.CONCEPT_CORNERS and not capsule then
+    x = (side == "enemy") and (shot.pw - w - m) or m
+    y = shot.ly + m
+  elseif side == "enemy" then
     x, y = m, shot.ly + m
   else
     x = shot.pw - w - m
@@ -1585,6 +1613,10 @@ function OverworldBattle.snapHUDs(battle, shot)
     -- not the other way round. Only once both mons are on the field,
     -- never over the party or bag screens.
     if enemy and player and not screenUp then
+      -- the aim arc goes down FIRST, under the ribbon and the plates: it is
+      -- the deepest thing in this group -- a line lying in the arena -- and
+      -- anything strung above the mons has to cross over it, not under
+      pcall(BattleHitFX.aim, battle, shot)
       pcall(BattleRibbon.draw, battle, shot)
     end
     for side, band in pairs(OverworldBattle.HUD_BAND) do
@@ -1623,6 +1655,13 @@ function OverworldBattle.snapHUDs(battle, shot)
     -- the damage figure rises from the defender's capsule, over the
     -- capsules and the panels (see BattleHitFX.drawTop)
     if not screenUp then pcall(BattleHitFX.drawTop, battle, shot) end
+    -- the parry ring and its chip, over even that: while the window is open
+    -- it is the only thing on screen the player can act on, and a damage
+    -- figure from the previous turn drawn on top of it would be the frame
+    -- telling them to read the wrong number
+    if not screenUp then
+      pcall(function() V.require("BattleParry").draw(battle, shot) end)
+    end
     -- Poke Ball hop, after the chips so it sits on them
     pcall(function() V.require("BattleNav").draw(shot) end)
   end)

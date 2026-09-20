@@ -40,6 +40,11 @@ local GATES = {
   { "BattleGlassFX", "ENABLED" },
   { "BattleRibbon", "ENABLED" },
   { "BattleHitFX", "ENABLED" },
+  -- Where the two HP plates hang. The concept boards put both along the top,
+  -- player left and foe right, with the whole lower half left to the cards
+  -- and the command row; the pack's own frames were cut for the opposite
+  -- diagonal, so CLASSICA gets that back (see BattleHudXY.CONCEPT_CORNERS).
+  { "BattleHudXY", "CONCEPT_CORNERS" },
 }
 
 function BattleDynamic.apply()

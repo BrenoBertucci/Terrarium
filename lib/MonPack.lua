@@ -186,9 +186,48 @@ local function load(side, key)
   return nil
 end
 
+-- ------- the other shelf
+--
+-- assets/mons is Nintendo's art: not redistributable, gitignored, installed on
+-- the player's own machine. lib/CreaturePack.lua is the shelf that can ship --
+-- Tuxemon's own creatures, CC BY-SA. It answers the same question in the same
+-- shape, so it is asked FIRST and everything below is the fallback: a build
+-- with the free pack serves it, a build without falls through to whatever the
+-- player installed, and a build with neither degrades to the engine's own pic
+-- exactly as it always did.
+local creatures = nil
+local function freePack()
+  if creatures == nil then
+    local ok, C = pcall(V.require, "CreaturePack")
+    creatures = (ok and C) or false
+  end
+  return creatures or nil
+end
+
+-- Which shelf's blow-up applies. Asked per species and side rather than read
+-- off the constant, because the two shelves draw at different sizes (96 px
+-- against 64) and the one actually serving this battler is the one whose
+-- numbers put it on the cell at the right height.
+function MonPack.scaleFor(species, back, menu)
+  local C = freePack()
+  if C and C.available and C.available() and C.has(species, back) then
+    return menu and C.MENU_SCALE or C.SCALE
+  end
+  return menu and MonPack.MENU_SCALE or MonPack.SCALE
+end
+
 -- the sprite for a species, front or back; nil when the pack has none
 function MonPack.image(species, back)
   if not MonPack.ENABLED then return nil end
+  local C = freePack()
+  if C and C.available and C.available() then
+    local img = C.image(species, back)
+    if img then
+      stats.served = stats.served + 1
+      stats.lastKey = species
+      return img
+    end
+  end
   local key = keyOf(species)
   if not key then return nil end
   -- animated first: the live canvas showing the current frame
@@ -211,6 +250,10 @@ end
 
 function MonPack.has(species, back)
   if not MonPack.ENABLED then return false end
+  local C = freePack()
+  if C and C.available and C.available() and C.has(species, back) then
+    return true
+  end
   local key = keyOf(species)
   if not key then return false end
   local side = back and "back" or "front"

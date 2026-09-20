@@ -876,6 +876,106 @@ local function drawDebris(g, shot, project)
 end
 
 -- ------- onto the finished 3D image, under the frost and the HUD
+-- ------- the aim: who this turn is pointed at
+--
+-- The concept boards draw a thin arc leaving one mon and landing in a ring
+-- around the other, and it is up in every frame of them -- while the move list
+-- is open, and again while the blow is in the air. It is the one thing on
+-- those boards that says 1v1 out loud, and with the camera swinging around the
+-- arena it is also the only thing that says WHICH WAY the turn is going.
+--
+-- Strung in the world, not on the glass: same quadratic the turn ribbon uses,
+-- same projection the projectile uses (projectUsingShotVp), so it swings with
+-- the attack camera instead of sliding over it. Sampled and bailed on the
+-- first point behind the eye, which is what a projected curve has to do.
+-- The crest sits LOW. The turn ribbon strings its own bezier between the same
+-- two mons at CREST_UP 10.5, and at 9.5 this drew a second white curve a
+-- hand's width under it -- two arcs saying different things in the same shape,
+-- which reads as one arc with a rendering fault. Down here the aim skims the
+-- ground between the two and the ribbon keeps the air.
+BattleHitFX.AIM_LIFT = 4.0        -- the crest, in cells over the midpoint
+BattleHitFX.AIM_END_UP = 2.2      -- how far over each mon's cell it starts
+BattleHitFX.AIM_SAMPLES = 18
+BattleHitFX.AIM_COLOR = { 1.00, 0.97, 0.88 }
+
+local function aimEnds(battle, shot)
+  -- a blow in the air owns the arc: it points from whoever threw it
+  if S.playing and S.fromCell and S.toCell then
+    return S.fromCell, S.toCell, 1
+  end
+  -- a parry window open means the arc is pointed AT the player, which is the
+  -- whole reason they are being asked to press something
+  local okP, Parry = pcall(V.require, "BattleParry")
+  if okP and Parry and Parry.debug and Parry.debug() then
+    return shot.enemyCell, shot.playerCell, 1
+  end
+  local phase = battle.phase
+  if phase == "menu" or phase == "moveSelect" then
+    return shot.playerCell, shot.enemyCell, 0.8
+  end
+  return nil
+end
+
+function BattleHitFX.aim(battle, shot)
+  if not BattleHitFX.ENABLED then return false end
+  if not (battle and shot and shot.vp and shot.canvas
+          and shot.playerCell and shot.enemyCell) then
+    return false
+  end
+  local from, to, alpha = aimEnds(battle, shot)
+  if not (from and to) then return false end
+  local g = love.graphics
+  local project = projectUsingShotVp(shot)
+  local gy = S.groundY or shot.groundY or 0
+  local x0, y0 = project(from[1], gy + BattleHitFX.AIM_END_UP, from[2])
+  local x2, y2 = project(to[1], gy + BattleHitFX.AIM_END_UP, to[2])
+  local cxw = (from[1] + to[1]) * 0.5
+  local czw = (from[2] + to[2]) * 0.5
+  local x1, y1 = project(cxw, gy + BattleHitFX.AIM_LIFT, czw)
+  if not (x0 and x1 and x2) then return false end
+
+  -- the arc is a screen-space quadratic through the three PROJECTED points:
+  -- the curve's own shape is already the world's, and sampling it in the
+  -- world would cost eighteen more matrix multiplies for the same line
+  local pts = {}
+  for i = 0, BattleHitFX.AIM_SAMPLES do
+    local t = i / BattleHitFX.AIM_SAMPLES
+    local a, b, c = (1 - t) ^ 2, 2 * (1 - t) * t, t * t
+    pts[#pts + 1] = a * x0 + b * x1 + c * x2
+    pts[#pts + 1] = a * y0 + b * y1 + c * y2
+  end
+  local C = BattleHitFX.AIM_COLOR
+  local prevBlend, prevAlphaMode = g.getBlendMode()
+  pcall(g.setBlendMode, "add", "alphamultiply")
+  g.setColor(C[1], C[2], C[3], 0.16 * alpha)
+  g.setLineWidth(7)
+  g.line(pts)
+  g.setColor(C[1], C[2], C[3], 0.92 * alpha)
+  g.setLineWidth(2)
+  g.line(pts)
+
+  -- the reticle: a ring on the target with four ticks, sized off the target's
+  -- own on-screen span so it frames the mon at any camera distance
+  local span = (to == shot.playerCell) and shot.playerSpan or shot.enemySpan
+  local r = math.max(14, (span or 64) * 0.52)
+  g.setColor(C[1], C[2], C[3], 0.30 * alpha)
+  g.setLineWidth(6)
+  g.circle("line", x2, y2, r)
+  g.setColor(C[1], C[2], C[3], 0.95 * alpha)
+  g.setLineWidth(2)
+  g.circle("line", x2, y2, r)
+  for i = 0, 3 do
+    local a = i * math.pi * 0.5 + math.pi * 0.25
+    local ca, sa = math.cos(a), math.sin(a)
+    g.line(x2 + ca * r * 0.82, y2 + sa * r * 0.82,
+           x2 + ca * r * 1.22, y2 + sa * r * 1.22)
+  end
+  g.setLineWidth(1)
+  pcall(g.setBlendMode, prevBlend, prevAlphaMode)
+  g.setColor(1, 1, 1, 1)
+  return true
+end
+
 function BattleHitFX.draw(shot)
   if not BattleHitFX.ENABLED then return false end
   if not (shot and shot.canvas and shot.vp) then return false end

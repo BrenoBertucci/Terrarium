@@ -139,6 +139,16 @@ function Structures.peek(map)
   return (map and map.id and cache[map.id]) or nil
 end
 
+-- How high a modelled FLOOR stands over the tile (tx, ty) -- a slab a kit
+-- laid over the drawn ground (Buildings.stamp, `lift`) -- or nil. Read
+-- without building, for the same reason as peek: the caller is asking where
+-- to stand somebody, every frame.
+function Structures.liftAt(map, tx, ty)
+  local S = map and map.id and cache[map.id]
+  local lift = S and S.lift
+  return lift and lift[keyOf(tx, ty)] or nil
+end
+
 function Structures.forMap(map)
   local S = cache[map.id]
   if S then return S end
@@ -242,7 +252,8 @@ function Structures.forMap(map)
         hideBareRing = hullRingOnly or nil,
         runs = {}, skip = {}, ground = {}, doorFold = {}, objectQuads = {},
         grassQuads = {}, grassInstances = {}, flowerQuads = {}, spriteQuads = {},
-        roundStamps = {}, treeSites = {}, figures = {}, noFigure = {} }
+        roundStamps = {}, treeSites = {}, figures = {}, noFigure = {},
+        lift = {}, covered = {} }
   Structures.stage = { map = map.id, pass = "buildings" }
   Buildings.build(S, map, pixels(tileset), perRow)
 

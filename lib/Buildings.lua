@@ -93,6 +93,7 @@ local function profile()
 end
 
 local models = {}          -- "<tileset>:<index>" -> prebuilt local quads
+local sheets = {}          -- authored sheet path -> readSprite's answer
 
 -- Instruments for the probes: what the ledge branch did in this session.
 Buildings.ledgeLog = { placements = 0, builds = 0, seconds = 0, lastKey = nil,
@@ -1130,20 +1131,70 @@ local function emit(m, sp, atlasW, atlasH)
   end
 
   -- ---- faces along +-Y (roof surfaces, undersides): merge along x ----
+  -- `crispTops`: the corner AO is sampled at a merged run's four corners
+  -- and interpolated between them, which is right for a roof and wrong for
+  -- a FLOOR: a sixteen-voxel run of paving with turf standing over one end
+  -- wore that one contact shadow as a smear the length of the run (the
+  -- first in-game frames of Lavender's ground were streaked with them). A
+  -- model that asks cuts its up-facing runs wherever the ring of voxels
+  -- standing round the lid changes, so occlusion stays one voxel wide and a
+  -- straight verge -- every voxel of it the same ring -- still merges.
+  local crisp = m.crispTops
+  local function ring(x, yo, z)
+    local s = 0
+    if ci(x - 1, yo, z - 1) then s = s + 1 end
+    if ci(x, yo, z - 1) then s = s + 2 end
+    if ci(x + 1, yo, z - 1) then s = s + 4 end
+    if ci(x - 1, yo, z) then s = s + 8 end
+    if ci(x + 1, yo, z) then s = s + 16 end
+    if ci(x - 1, yo, z + 1) then s = s + 32 end
+    if ci(x, yo, z + 1) then s = s + 64 end
+    if ci(x + 1, yo, z + 1) then s = s + 128 end
+    return s
+  end
   if Buildings.progress then Buildings.progress.step = "emit:y" end
   for _, d in ipairs({ 1, -1 }) do
     local shade = d == 1 and SHADE.top or SHADE.bottom
     for y = 0, ytop do
       Budget.tick()
+      -- ...and a crisp floor's OPEN runs (nothing standing anywhere round
+      -- them, so no AO to carry) merge down z as well: the same run, one
+      -- atlas row on, is the same sheet of ground a row further south. A
+      -- cell of plain lawn is one quad instead of sixteen, which is what
+      -- lets a whole route be floored at all.
+      local open = (crisp and d == 1 and not contactOf) and {} or nil
       -- the underside of the bottom layer is the ground it stands on
-      if not (d == -1 and y == 0) then
+      -- (`noDown`: nor is any underside drawn -- a deck over water, which
+      -- no camera here looks up at)
+      if not (d == -1 and (y == 0 or m.noDown)) then
         for z = zmin, zmax do
           local x = xmin
           while x <= xmax do
             local v = ci(x, y, z)
             if v and v >= 0 and not ci(x, y + d, z) then
               local i, strip, n = runX(y, z, 0, d, 0, x)
+              local first = nil
+              if crisp and d == 1 then
+                first = ring(x, y + 1, z)
+                local k = 1
+                while k < n and ring(x + k, y + 1, z) == first do k = k + 1 end
+                n = k
+              end
               local u0, u1, v0, v1 = uvOf(i, strip, n)
+              local grown = false
+              if open then
+                local o = open[x]
+                if first == 0 and o and o.n == n and o.z1 == z and o.strip == strip
+                   and o.ax == sp.ax[i] and o.ay + 1 == sp.ay[i] then
+                  local q = o.q
+                  q[3][3], q[4][3] = z + 1, z + 1
+                  q.uv[3][2], q.uv[4][2] = v1, v1
+                  o.z1, o.ay = z + 1, sp.ay[i]
+                  grown = true
+                elseif first ~= 0 then
+                  open[x] = nil
+                end
+              end
               local yf = d == 1 and (y + 1) or y
               -- corner AO in the layer the face looks into
               local yo = y + d
@@ -1154,13 +1205,19 @@ local function emit(m, sp, atlasW, atlasH)
               local f2 = aoCorner(ci(xr, yo, z), ci(xe1, yo, zd), ci(xr, yo, zd))
               local f3 = aoCorner(ci(xr, yo, z), ci(xe1, yo, zu), ci(xr, yo, zu))
               local f4 = aoCorner(ci(xl, yo, z), ci(xe0, yo, zu), ci(xl, yo, zu))
-              if d == 1 then
+              if grown then
+                -- the run above took this row in
+              elseif d == 1 then
                 put({ x, yf, z }, { x + n, yf, z },
                     { x + n, yf, z + 1 }, { x, yf, z + 1 },
                     { { u0, v0 }, { u1, v0 }, { u1, v1 }, { u0, v1 } },
                     shades(lit(shade, y, i, "up"),
                            f1 * cf(x, yf, z), f2 * cf(x + n, yf, z),
                            f3 * cf(x + n, yf, z + 1), f4 * cf(x, yf, z + 1)))
+                if open and first == 0 then
+                  open[x] = { q = quads[#quads], n = n, z1 = z + 1, strip = strip,
+                              ax = sp.ax[i], ay = sp.ay[i] }
+                end
               else
                 put({ x, yf, z + 1 }, { x + n, yf, z + 1 },
                     { x + n, yf, z }, { x, yf, z },
@@ -1178,6 +1235,13 @@ local function emit(m, sp, atlasW, atlasH)
   end
 
   -- ---- faces along +-X (the flanks): merge along z, one texel each ----
+  -- `looseSides`: a model whose flanks are slivers (the Lavender ground's
+  -- turf stands ONE voxel proud of its stones) lets a run wear its first
+  -- texel whatever the rest are. A flank's texels differ down every run
+  -- when the top is a painted texture, so without this each voxel of every
+  -- edge is its own quad -- a third of that model's faces, for a strip of
+  -- green nobody can tell from the next.
+  local loose = m.looseSides
   if Buildings.progress then Buildings.progress.step = "emit:x" end
   for _, d in ipairs({ 1, -1 }) do
     for y = 0, ytop do
@@ -1189,7 +1253,10 @@ local function emit(m, sp, atlasW, atlasH)
             local n = 1
             while z + n <= zmax do
               local j = ci(x, y, z + n)
-              if j ~= i or ci(x + d, y, z + n) then break end
+              if (j ~= i and not (loose and j and j >= 0))
+                 or ci(x + d, y, z + n) then
+                break
+              end
               n = n + 1
             end
             local u0, u1, v0, v1 = uvOf(i, false, n)
@@ -1228,6 +1295,17 @@ local function emit(m, sp, atlasW, atlasH)
   -- and so does the haunt (TowerKit): the box the cold glass burns in and
   -- where the wisps rise, in model space until stamp places them too
   quads.haunt = m.haunt
+  -- and a FLOOR's walking height (`lift`), for stamp to record per cell,
+  -- and whether it hides the whole of the ground it lies on (`covers`)
+  quads.lift = m.lift
+  quads.covers = m.covers
+  -- and its lanterns (`lights`), which burn after dark
+  quads.lights = m.lights
+  -- and how far below the ground plane it starts (`sink`: a bridge's piles),
+  -- and the water tile that still runs under it (`overWater`)
+  quads.sink = m.sink
+  quads.overWater = m.overWater
+  quads.clearWater = m.clearWater
   return quads
 end
 
@@ -1364,11 +1442,19 @@ function Buildings.build(S, map, data, perRow)
           -- second building behind the tower. First claim wins, so the
           -- list order below is the priority order -- the tower's own
           -- templates come first precisely so they take those cells.
-          local free = S.tileAt[keyOf(tx, ty)] == first
+          -- `wild`: the template stands for whatever its KIT says is
+          -- there (the routes' ground is a dozen tile patterns, and the
+          -- kit's data already knows every one of them)
+          local free = t.wild or S.tileAt[keyOf(tx, ty)] == first
           if free and where then
             free = tx >= where[1] and ty >= where[2]
                    and tx <= where[3] and ty <= where[4]
           end
+          -- `grid`: a template that stands for ONE CELL of ground may only
+          -- land on the cell grid. A checker of two tiles matches itself
+          -- again one tile down and one across, and a placement there
+          -- would straddle four cells.
+          if free and t.grid then free = tx % 2 == 0 and ty % 2 == 0 end
           if free then
             for r = 0, bh - 1 do
               for c = 0, bw - 1 do
@@ -1380,9 +1466,66 @@ function Buildings.build(S, map, data, perRow)
               if not free then break end
             end
           end
-          if free and matches(S, t, tx, ty) then
+          if free and (t.wild or matches(S, t, tx, ty)) then
             Buildings.progress.phase = "model"
             Buildings.progress.tx, Buildings.progress.ty = tx, ty
+            -- Lavender's Centre and Mart (lib/LavenderCivicKit.lua): the
+            -- same two templates every city stands, built by hand for this
+            -- one town. Tried BEFORE the chain rather than inside it, so a
+            -- kit that will not build leaves `built` alone and the classic
+            -- Centre -- or the Mart's authored band -- stands as it always
+            -- did, through its own branch below.
+            -- The Tower goes the same way (lib/LavenderTowerKit.lua) while
+            -- the TOWER row is on NEW; lib/TowerKit.lua's is what stands if
+            -- this one will not, and CLASSIC is still the fold.
+            local lavKit = ((t.id == "pokecenter" or t.id == "pokemart")
+                            and "LavenderCivicKit")
+                           or (t.id == "pokemon_tower" and towerOn()
+                               and "LavenderTowerKit") or nil
+            if lavKit and (map.def.id or map.def.name) == "LAVENDER_TOWN" then
+              local key = tileset.id .. ":" .. index .. "@lavender-civic"
+              if not models[key] then
+                local okK, Kit = pcall(V.require, lavKit)
+                local sp = okK and Kit and readSprite(Kit.SHEET)
+                local tex = sp and loadSpriteImage(Kit.SHEET)
+                local okM, m, why = false, nil, nil
+                if sp and tex then okM, m, why = pcall(Kit.model, sp, t) end
+                if okM and m then
+                  local q = emit(m, sp, sp.W, sp.H)
+                  q.tex = Kit.SHEET
+                  models[key] = q
+                else
+                  Buildings.lastError = "lavender civic " .. tostring(t.id)
+                                        .. ": " .. tostring(why or m or Kit)
+                end
+              end
+              if models[key] then built = models[key] end
+            end
+            -- Vermilion's six houses (lib/VermilionHouseKit.lua): two templates,
+            -- six placements, each its own building -- so the model is cached
+            -- per PLACEMENT. Same terms as Lavender's above: tried before the
+            -- chain, and a kit that will not build leaves `built` alone, so
+            -- the classic brick box stands through its own branch.
+            if (t.id == "flat_commercial" or t.id == "flat_block_4x4")
+               and (map.def.id or map.def.name) == "VERMILION_CITY" then
+              local key = tileset.id .. ":" .. index .. "@vermilion:" .. tx .. ":" .. ty
+              if not models[key] then
+                local okK, Kit = pcall(V.require, "VermilionHouseKit")
+                local sp = okK and Kit and readSprite(Kit.SHEET)
+                local tex = sp and loadSpriteImage(Kit.SHEET)
+                local okM, m, why = false, nil, nil
+                if sp and tex then okM, m, why = pcall(Kit.model, sp, t, tx, ty) end
+                if okM and m then
+                  local q = emit(m, sp, sp.W, sp.H)
+                  q.tex = Kit.SHEET
+                  models[key] = q
+                else
+                  Buildings.lastError = "vermilion house " .. tx .. ":" .. ty
+                                        .. ": " .. tostring(why or m or Kit)
+                end
+              end
+              if models[key] then built = models[key] end
+            end
             if t.bank then
               -- (`bank`, not `ledge`: the band templates already spell
               -- their awning as `ledge`, and a Center's awning read as
@@ -1539,6 +1682,211 @@ function Buildings.build(S, map, data, perRow)
                 end
                 built = models[key]
               end
+            elseif t.bridge then
+              -- A bridge or pier (lib/BridgeKit.lua): one model per
+              -- signature -- which sides are water, which land, which way
+              -- it runs. An empty model on failure stamps and claims
+              -- nothing, and the mesher lays the drawn planks as before.
+              built = {}
+              local okK, Kit = pcall(V.require, "BridgeKit")
+              local sig = okK and Kit and Kit.signature and Kit.signature(
+                function(x, y) return S.tileAt[keyOf(x, y)] end, tx, ty,
+                -- past the map's edge it is the next map's land: a way on
+                function(cx, cy)
+                  if cx < 0 or cy < 0 or cx * 2 >= tw or cy * 2 >= th then
+                    return true
+                  end
+                  return map:isWalkableCell(cx, cy)
+                end)
+              if sig then
+                local key = "bridge@" .. sig
+                if not models[key] then
+                  local sp = readSprite(Kit.SHEET)
+                  local tex = sp and loadSpriteImage(Kit.SHEET)
+                  local okM, m, why = false, nil, nil
+                  if sp and tex then okM, m, why = pcall(Kit.model, sp, sig) end
+                  if okM and m then
+                    local q = emit(m, sp, sp.W, sp.H)
+                    q.tex = Kit.SHEET
+                    models[key] = q
+                  else
+                    Buildings.lastError = "bridge: " .. tostring(why or m or Kit)
+                    models[key] = {}
+                  end
+                end
+                built = models[key]
+              end
+            elseif t.reef then
+              -- The reef (lib/ReefKit.lua): corals and weed on the bed of
+              -- the big waters, one model per variant. Most water cells
+              -- grow nothing: an empty model stamps and claims nothing.
+              built = {}
+              local okK, Kit = pcall(V.require, "ReefKit")
+              local seed = 0
+              for ch in tostring(map.def.id or map.def.name):gmatch(".") do
+                seed = (seed * 31 + ch:byte()) % 9973
+              end
+              local key = okK and Kit and Kit.spec and Kit.spec(
+                function(x, y) return S.tileAt[keyOf(x, y)] end, tx, ty, seed)
+              if key then
+                if not models["reef@" .. key] then
+                  local sp = readSprite(Kit.SHEET)
+                  local tex = sp and loadSpriteImage(Kit.SHEET)
+                  local okM, m, why = false, nil, nil
+                  if sp and tex then okM, m, why = pcall(Kit.model, sp, key) end
+                  if okM and m then
+                    local q = emit(m, sp, sp.W, sp.H)
+                    q.tex = Kit.SHEET
+                    -- MOTION. The whole sheet is drawn with Voxel3D's
+                    -- packedShade on, so EVERY corner's shade is packed
+                    -- (Kit.pack): its brightness, which plant the voxel
+                    -- behind it is part of, and how far up that plant the
+                    -- corner stands. The shader's reef branch moves each
+                    -- kind its own way.
+                    for _, quad in ipairs(q) do
+                      local packed = {}
+                      for i = 1, 4 do
+                        local s = type(quad.shade) == "table" and quad.shade[i] or quad.shade
+                        packed[i] = Kit.pack(s, Kit.plantAt(m, quad, i),
+                                             quad[i][1], quad[i][2], quad[i][3])
+                      end
+                      quad.shade = packed
+                    end
+                    models["reef@" .. key] = q
+                  else
+                    Buildings.lastError = "reef: " .. tostring(why or m or Kit)
+                    models["reef@" .. key] = {}
+                  end
+                end
+                built = models["reef@" .. key]
+              end
+            elseif t.fence then
+              -- A timber fence (lib/FenceKit.lua): one model per signature
+              -- -- which neighbours carry the run on. An empty model on
+              -- failure stamps and claims nothing, and the profile's `post`
+              -- class stands the two pegs as it always did.
+              built = {}
+              local okK, Kit = pcall(V.require, "FenceKit")
+              local joined = map.def.connections or {}
+              local sig = okK and Kit and Kit.signature and Kit.signature(
+                function(x, y) return S.tileAt[keyOf(x, y)] end, tx, ty,
+                function(x, y)
+                  return (x < 0 and joined.west ~= nil) or (x >= tw and joined.east ~= nil)
+                      or (y < 0 and joined.north ~= nil) or (y >= th and joined.south ~= nil)
+                end)
+              if sig then
+                local key = "fence@" .. sig
+                if not models[key] then
+                  local sp = readSprite(Kit.SHEET)
+                  local tex = sp and loadSpriteImage(Kit.SHEET)
+                  local okM, m, why = false, nil, nil
+                  if sp and tex then okM, m, why = pcall(Kit.model, sp, sig) end
+                  if okM and m then
+                    local q = emit(m, sp, sp.W, sp.H)
+                    q.tex = Kit.SHEET
+                    models[key] = q
+                  else
+                    Buildings.lastError = "fence: " .. tostring(why or m or Kit)
+                    models[key] = {}
+                  end
+                end
+                built = models[key]
+              end
+            elseif t.lavground then
+              -- Lavender's ground (lib/LavenderGroundKit.lua): stepping
+              -- stones set in a lawn, one model per (variant, neighbours).
+              -- The kit decides both from the placement; an empty model on
+              -- any failure stamps and claims nothing, and the mesher lays
+              -- the drawn checker exactly as it does in every other town.
+              --
+              -- Two things are unlike every other kit. The sheet is never
+              -- READ: it is a map's whole plan (Route 12's is 320x1728) and
+              -- readSprite would stand half a million texels up in five Lua
+              -- tables to answer "texel i is at (i % W, i / W)", which is
+              -- all emit asks of it -- so `sp` is that arithmetic. And the
+              -- model is not CACHED: every cell's is its own, used once.
+              built = {}
+              local okK, Kit = pcall(V.require, "LavenderGroundKit")
+              local lay = okK and Kit and Kit.spec and Kit.spec(
+                function(x, y) return S.tileAt[keyOf(x, y)] end, tx, ty,
+                map.def.id or map.def.name)
+              if lay then
+                local sp = sheets[lay.sheet]
+                if sp == nil then
+                  local SW = lay.w
+                  sp = loadSpriteImage(lay.sheet) and {
+                    W = SW, H = lay.h,
+                    ax = setmetatable({}, { __index = function(_, i) return i % SW end }),
+                    ay = setmetatable({}, { __index = function(_, i)
+                      return math.floor(i / SW)
+                    end }),
+                  } or false
+                  sheets[lay.sheet] = sp
+                end
+                local okM, m, why = false, nil, nil
+                if sp then okM, m, why = pcall(Kit.model, lay) end
+                if okM and m then
+                  built = emit(m, sp, sp.W, sp.H)
+                  built.tex = lay.sheet
+                  built.claimMask = m.claimMask
+                else
+                  Buildings.lastError = "lavender ground: "
+                                        .. tostring(why or m or Kit)
+                end
+              end
+            elseif t.home then
+              -- The three Lavender homes, inside (lib/LavenderHomeKit.lua):
+              -- one plan, and the MAP decides who lives in it, so the map
+              -- id is part of the cache key. An empty model on failure
+              -- stamps and claims nothing, and the HOUSE class pins stand
+              -- the furniture exactly as they do in every other town.
+              -- (...and three of Vermilion's, lib/VermilionHomeKit.lua: the
+              -- same plan, the same templates, another kit. The map says which.)
+              local mapId = tostring(map.def.id or map.def.name)
+              local key = tileset.id .. ":" .. index .. "@home:" .. mapId
+              if not models[key] then
+                local okV, VKit = pcall(V.require, "VermilionHomeKit")
+                local kitName = (okV and VKit and VKit.MAPS and VKit.MAPS[mapId])
+                                and "VermilionHomeKit" or "LavenderHomeKit"
+                local okK, Kit = pcall(V.require, kitName)
+                local sp = okK and Kit and readSprite(Kit.SHEET)
+                local tex = sp and loadSpriteImage(Kit.SHEET)
+                local okM, m, why = false, nil, nil
+                if sp and tex then okM, m, why = pcall(Kit.model, sp, t, mapId) end
+                if okM and m then
+                  local q = emit(m, sp, sp.W, sp.H)
+                  q.tex = Kit.SHEET
+                  q.standH, q.noFigure, q.claimMask = m.standH, m.noFigure, m.claimMask
+                  models[key] = q
+                else
+                  Buildings.lastError = "lavender home: " .. tostring(why or m or Kit)
+                  models[key] = {}
+                end
+              end
+              built = models[key]
+            elseif t.id == "gabled_cottage"
+                and (map.def.id or map.def.name) == "LAVENDER_TOWN" then
+              -- A placement-local cache: three authored homes in Lavender;
+              -- the same cottage template everywhere else keeps its model.
+              local key = tileset.id .. ":" .. index .. "@lavender:" .. tx .. ":" .. ty
+              if not models[key] then
+                local okK, Kit = pcall(V.require, "LavenderHouseKit")
+                local sp = okK and Kit and readSprite(Kit.SHEET)
+                local tex = sp and loadSpriteImage(Kit.SHEET)
+                local okM, m = false, nil
+                if sp and tex then okM, m = pcall(Kit.model, sp, t, tx, ty) end
+                if okM and m then
+                  local q = emit(m, sp, sp.W, sp.H)
+                  q.tex = Kit.SHEET
+                  models[key] = q
+                else
+                  Buildings.lastError = "lavender house: " .. tostring(m or Kit)
+                  local original = read(t, data, perRow)
+                  models[key] = emit(model(original, measure(original, t), t),
+                                     original, atlasW, atlasH)
+                end
+              end
+              built = models[key]
             elseif not built then
               local key = tileset.id .. ":" .. index
               if not models[key] then
@@ -1765,6 +2113,25 @@ function Buildings.stamp(S, map, quads, tx, ty, bw, bh)
         -- the same cell (Structures.buildFigures). Opt-in per model --
         -- RoomKit's couch claims its cell and still wants its man.
         if quads.noFigure and S.noFigure then S.noFigure[k] = true end
+        -- `lift`: this model is a FLOOR, and this is how high its walking
+        -- surface stands (VoxelScene.groundAt, through Structures.liftAt)
+        if quads.lift and S.lift then S.lift[k] = quads.lift end
+        -- `covers`: a slab over every voxel of its cell. The mesher paints
+        -- ground under every model, and under this one it is a whole town's
+        -- floor shaded by the scene shader and then drawn over, every frame
+        -- (ChunkMesher reads this and leaves the lid off).
+        if quads.covers and S.covered then S.covered[k] = true end
+        -- `overWater` (lib/BridgeKit.lua): the cell is claimed and is water
+        -- all the same -- the mesher lays the bed and the surface under it
+        if quads.overWater then
+          S.overWater = S.overWater or {}
+          S.overWater[k] = quads.overWater
+        end
+        -- `clearWater` (lib/ReefKit.lua): how thin the sheet over it reads
+        if quads.clearWater then
+          S.clearWater = S.clearWater or {}
+          S.clearWater[k] = quads.clearWater
+        end
       end
     end
   end
@@ -1773,7 +2140,7 @@ function Buildings.stamp(S, map, quads, tx, ty, bw, bh)
   local top = 0
   for _, q in ipairs(quads) do
     for i = 1, 4 do
-      if q[i][2] > top then top = q[i][2] end
+      if q[i][2] - (quads.sink or 0) > top then top = q[i][2] - (quads.sink or 0) end
     end
   end
   if top > 0 and map then
@@ -1789,6 +2156,7 @@ function Buildings.stamp(S, map, quads, tx, ty, bw, bh)
   end
 
   local mx, mz = tx * 8, ty * 8
+  local my = -(quads.sink or 0)
   -- the chimney's mouth in WORLD space, on the map's structure cache,
   -- so whatever puts something on it (HearthFX) asks the cache and
   -- never the model. tx/ty ride along as the stable name a per-house
@@ -1799,6 +2167,18 @@ function Buildings.stamp(S, map, quads, tx, ty, bw, bh)
     if not list then list = {} S.chimneys = list end
     list[#list + 1] = { x = mx + c.x, y = c.y, z = mz + c.z,
                         tx = tx, ty = ty }
+  end
+  -- A model's lanterns, in WORLD space on the same cache: StreetLamps takes
+  -- them with its own posts after dark, so a porch lights the step under
+  -- it. (An authored sheet has no glass mask -- Voxel3D.glass is off for
+  -- sprite-sheet draws -- so without this a hand-built house is the one
+  -- dark thing in a lit street.)
+  if quads.lights and S then
+    local list = S.lights
+    if not list then list = {} S.lights = list end
+    for _, l in ipairs(quads.lights) do
+      list[#list + 1] = { x = mx + l.x, y = l.y, z = mz + l.z }
+    end
   end
   -- The haunt, in WORLD space on the same cache, for the scene (the cold
   -- glass box, Voxel3D.haunt) and the wisps (lib/GhostFX.lua) to read.
@@ -1826,10 +2206,10 @@ function Buildings.stamp(S, map, quads, tx, ty, bw, bh)
   local out = quads.tex and S.spriteQuads or S.objectQuads
   for _, q in ipairs(quads) do
     out[#out + 1] = {
-      { q[1][1] + mx, q[1][2], q[1][3] + mz },
-      { q[2][1] + mx, q[2][2], q[2][3] + mz },
-      { q[3][1] + mx, q[3][2], q[3][3] + mz },
-      { q[4][1] + mx, q[4][2], q[4][3] + mz },
+      { q[1][1] + mx, q[1][2] + my, q[1][3] + mz },
+      { q[2][1] + mx, q[2][2] + my, q[2][3] + mz },
+      { q[3][1] + mx, q[3][2] + my, q[3][3] + mz },
+      { q[4][1] + mx, q[4][2] + my, q[4][3] + mz },
       uv = q.uv, shade = q.shade, tex = quads.tex,
       -- placements only ever scan the BODY, so a building is always this
       -- map's own structure: the mesher's edge keep-rules must not eat
@@ -1861,6 +2241,7 @@ end
 function Buildings.invalidate()
   spec = nil
   models = {}
+  sheets = {}
   for k in pairs(spriteImg) do spriteImg[k] = nil end
   Buildings.clearTall()
 end

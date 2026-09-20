@@ -138,6 +138,90 @@ local function art(name)
   return img
 end
 
+-- ------- Gen 1 Modern atlas (generated for this project)
+-- Nearest filtering and atlas quads preserve the source pixel edges.
+BattleHudXY.UI_DIR = "assets/ui/gen1-modern/"
+BattleHudXY.INK = { 0.09, 0.15, 0.18, 1 }
+-- Pixel rectangles in the generated atlas; no duplicate textures or runtime cuts.
+BattleHudXY.UI_REGIONS = {
+  panel = { 25, 50, 729, 182 },
+  dialogue = { 25, 265, 897, 221 },
+  button = { 25, 529, 350, 107 },
+  selected = { 404, 529, 350, 107 },
+  bar = { 25, 683, 350, 51 },
+  charge_empty = { 239, 867, 53, 59 },
+  charge_full = { 624, 867, 53, 59 },
+  cursor = { 37, 867, 44, 59 },
+}
+
+-- Insets cover the complete stepped border, including its sage inner rule.
+BattleHudXY.PANEL_INSET = { l = 40, r = 40, t = 32, b = 32 }
+
+local uiImages = {}
+local function uiArt(name)
+  name = "ui-pack"
+  local hit = uiImages[name]
+  if hit ~= nil then return hit or nil end
+  local okA, Assets = pcall(require, "src.render.Assets")
+  if not okA or not Assets then uiImages[name] = false; return nil end
+  local path = V.path .. "/" .. BattleHudXY.UI_DIR .. name .. ".png"
+  local okE, exists = pcall(Assets.exists, path)
+  if not (okE and exists) then uiImages[name] = false; return nil end
+  local ok, img = pcall(Assets.image, path)
+  if not (ok and img) then uiImages[name] = false; return nil end
+  pcall(img.setFilter, img, "nearest", "nearest")
+  uiImages[name] = img
+  return img
+end
+
+-- Nine quads out of one image: corners at `k` pixels per source pixel, edges
+-- stretched along their own axis, the middle stretched both ways. `k` rather
+-- than "scale to fit" because the ornament has a size it reads at -- letting
+-- a wide plate stretch its own corners is how a pixel-art frame turns to mush.
+function BattleHudXY.nineSlice(img, x, y, w, h, ins, k, region)
+  local g = love.graphics
+  local aw, ah = img:getDimensions()
+  local ox, oy = region and region[1] or 0, region and region[2] or 0
+  local iw, ih = region and region[3] or aw, region and region[4] or ah
+  local l, r, t, b = ins.l, ins.r, ins.t, ins.b
+  local mw, mh = iw - l - r, ih - t - b
+  if mw <= 0 or mh <= 0 then return false end
+  -- the borders cannot eat more than the box: shrink k rather than overlap
+  local kk = math.min(k, w / (l + r), h / (t + b))
+  if kk <= 0 then return false end
+  local dl, dr, dt, db = l * kk, r * kk, t * kk, b * kk
+  local cw, ch = math.max(0, w - dl - dr), math.max(0, h - dt - db)
+  local function q(qx, qy, qw, qh, dx, dy, dw, dh)
+    if qw <= 0 or qh <= 0 or dw <= 0 or dh <= 0 then return end
+    g.draw(img, g.newQuad(ox + qx, oy + qy, qw, qh, aw, ah), dx, dy, 0, dw / qw, dh / qh)
+  end
+  q(0, 0, l, t, x, y, dl, dt)
+  q(l, 0, mw, t, x + dl, y, cw, dt)
+  q(iw - r, 0, r, t, x + w - dr, y, dr, dt)
+  q(0, t, l, mh, x, y + dt, dl, ch)
+  q(l, t, mw, mh, x + dl, y + dt, cw, ch)
+  q(iw - r, t, r, mh, x + w - dr, y + dt, dr, ch)
+  q(0, ih - b, l, b, x, y + h - db, dl, db)
+  q(l, ih - b, mw, b, x + dl, y + h - db, cw, db)
+  q(iw - r, ih - b, r, b, x + w - dr, y + h - db, dr, db)
+  return true
+end
+
+function BattleHudXY.uiSprite(name, x, y, w, h, sliced)
+  local img, region = uiArt(name), BattleHudXY.UI_REGIONS[name]
+  if not (img and region) then return false end
+  local g = love.graphics
+  g.setColor(1, 1, 1, 1)
+  if sliced then
+    return BattleHudXY.nineSlice(img, x, y, w, h,
+      BattleHudXY.PANEL_INSET, math.min(0.6, h / 150), region)
+  end
+  local iw, ih = img:getDimensions()
+  g.draw(img, g.newQuad(region[1], region[2], region[3], region[4], iw, ih),
+    x, y, 0, w / region[3], h / region[4])
+  return true
+end
+
 local function glyphData()
   if glyphs == nil then
     local ok, g = pcall(V.data, "hudxy_glyphs")
@@ -146,14 +230,55 @@ local function glyphData()
   return glyphs or nil
 end
 
--- Whether the whole feature can run: the art loaded and the boxes parsed.
--- One question, asked once per draw, so a missing file degrades to the old
--- frosted-glass HUD rather than to a half-drawn one.
+-- ------- the NATIVE alphabet: what this HUD says when there is no art
+--
+-- The 5X strips and data/hudxy_glyphs.lua left the tree in 2026-09-15 (they
+-- were a dump of somebody else's interface), and with them every module that
+-- asks this file to spell something: the cards, the panels, the ribbon, the
+-- box. The whole costume degraded to the Game Boy's own HUD in one step,
+-- which is the ladder working -- and also the costume being gone.
+--
+-- What replaces them is not another dump. LOVE carries a scalable face of its
+-- own (love.graphics.newFont with no file: Vera Sans, permissively licensed,
+-- always present), and the battle concepts this HUD is drawn from ask for a
+-- typeset line rather than a pixel strip anyway -- lowercase prose on a move
+-- card is not something a 5x Game Boy alphabet could ever have set.
+--
+-- The one thing that has to survive the swap is ARITHMETIC. Every caller in
+-- lib/ measures with `textWidth(s) * (th / 84)` and `numberWidth(s) * (h / 56)`
+-- -- 84 and 56 are the two strips' own cell heights, hardcoded at a dozen
+-- sites. So the native metrics are reported in those same units and nothing
+-- downstream has to learn a second convention.
+local FONT_CELL, DIGIT_CELL = 84, 56
+
+-- One baked size, scaled per draw. Baking per requested height would allocate
+-- a rasteriser every frame the HP numbers changed.
+local BAKE_PX = 64
+local vecFont = nil        -- Font | false
+
+local function nativeFont()
+  if vecFont == nil then
+    local ok, f = pcall(love.graphics.newFont, BAKE_PX)
+    vecFont = (ok and f) or false
+  end
+  return vecFont or nil
+end
+
+-- True when this file is spelling with its own face rather than the strips.
+-- Asked per call rather than cached: `ENABLED` and the assets are both things
+-- a probe flips mid-run.
+local function native()
+  return not (glyphData() and art("font") and art("digits"))
+end
+
+-- Whether the whole feature can run. Two roads now: the strips if they are
+-- there, the native face if they are not. Only a LOVE that cannot make a font
+-- at all falls through to lib/BattleHud.lua's frosted Game Boy block.
 function BattleHudXY.available()
   if not BattleHudXY.ENABLED then return false end
-  if not glyphData() then return false end
+  if native() then return nativeFont() ~= nil end
   return art("frame_player") ~= nil and art("frame_enemy") ~= nil
-    and art("hp_fill") ~= nil and art("font") ~= nil and art("digits") ~= nil
+    and art("hp_fill") ~= nil
 end
 
 -- ------- drawing text off the strips
@@ -213,6 +338,11 @@ local function glyphOf(g, ch)
 end
 
 function BattleHudXY.textWidth(text, tracking)
+  if native() then
+    local f = nativeFont()
+    if not (f and text) then return 0 end
+    return f:getWidth(text) * (FONT_CELL / f:getHeight())
+  end
   local g = glyphData()
   if not (g and text) then return 0 end
   local w, i = 0, 1
@@ -231,6 +361,22 @@ end
 -- real gaps (no apostrophe, no `<`), and a row of question marks in a
 -- Pokemon's name is worse than a missing punctuation mark.
 function BattleHudXY.text(text, x, y, h, color)
+  if native() then
+    local f = nativeFont()
+    if not (f and text) then return 0 end
+    -- `h` names the CELL, and a rasterised face's cell is its own line
+    -- height -- so the scale is that ratio and not h/ascender, which would
+    -- set every caller's name one size too large.
+    local s = h / f:getHeight()
+    local prev = love.graphics.getFont()
+    love.graphics.setColor(color and color[1] or 1, color and color[2] or 1,
+                           color and color[3] or 1, color and color[4] or 1)
+    love.graphics.setFont(f)
+    love.graphics.print(text, x, y, 0, s, s)
+    if prev then love.graphics.setFont(prev) end
+    love.graphics.setColor(1, 1, 1, 1)
+    return f:getWidth(text) * s
+  end
   local g, img = glyphData(), art("font")
   if not (g and img and text) then return 0 end
   local s = h / g.fontHeight
@@ -256,6 +402,11 @@ function BattleHudXY.text(text, x, y, h, color)
 end
 
 function BattleHudXY.numberWidth(text, tracking)
+  if native() then
+    local f = nativeFont()
+    if not (f and text) then return 0 end
+    return f:getWidth(text) * (DIGIT_CELL / f:getHeight())
+  end
   local g = glyphData()
   if not g then return 0 end
   local w = 0
@@ -270,6 +421,20 @@ end
 -- packed to a single baseline, and `Lv.` and `/` are shorter than a digit --
 -- top-aligning them would float them above the numbers they belong to.
 function BattleHudXY.number(text, x, baseline, h, color)
+  if native() then
+    local f = nativeFont()
+    if not (f and text) then return 0 end
+    local s = h / f:getHeight()
+    local prev = love.graphics.getFont()
+    love.graphics.setColor(color and color[1] or 1, color and color[2] or 1,
+                           color and color[3] or 1, color and color[4] or 1)
+    love.graphics.setFont(f)
+    -- bottom-aligned, like the strip: `baseline` is where the digits SIT
+    love.graphics.print(text, x, baseline - f:getHeight() * s, 0, s, s)
+    if prev then love.graphics.setFont(prev) end
+    love.graphics.setColor(1, 1, 1, 1)
+    return f:getWidth(text) * s
+  end
   local g, img = glyphData(), art("digits")
   if not (g and img and text) then return 0 end
   local s = h / g.digitHeight
@@ -340,7 +505,7 @@ function BattleHudXY.read(side)
   if not mon then return nil end
   local maxHP = (side.curStats and side.curStats.hp) or (mon.stats and mon.stats.hp)
   local now = side.shownHP or mon.hp or 0
-  return {
+  local info = {
     name = side.name or mon.species or "?",
     level = mon.level or 0,
     hp = math.max(0, math.floor(now + 0.5)),
@@ -348,6 +513,16 @@ function BattleHudXY.read(side)
     isPlayer = side.isPlayer and true or false,
     status = mon.status,
   }
+  -- CHARGE is the player's alone (the foe spends no pips, and a meter on a
+  -- side nothing can read is a meter that lies). Pulled rather than passed so
+  -- block()'s signature -- and both of drawXYBlock's call sites -- stay put.
+  if info.isPlayer then
+    local ok, Charge = pcall(V.require, "BattleCharge")
+    if ok and Charge and Charge.read then
+      info.charge, info.chargeMax = Charge.read()
+    end
+  end
+  return info
 end
 
 -- The fraction of the way through the current level, for the EXP slot.
@@ -383,8 +558,161 @@ end
 -- frame's own aspect fixes the height. Everything inside is placed in the
 -- frame's 640x160 texture space and scaled by one number, so the layout
 -- cannot come apart at a different window size.
+-- ------- the native plate
+--
+-- Drawn, not blitted: smoked glass with a pale double rim and gold L-corners,
+-- which is the language lib/BattlePanelsXY.lua already speaks for the message
+-- box and the command chips (concept 12/13). It is redrawn here in six lines
+-- rather than required from there, because BattlePanelsXY requires THIS file
+-- and a cycle through V.require is a stack overflow, not a warning.
+BattleHudXY.PANEL = { 0.98, 0.97, 0.91 }
+BattleHudXY.GOLD  = { 0.29, 0.39, 0.32 }
+
+-- Plate heights in the same 640-wide space FRAME_W measures, so the caller's
+-- `h = w * fh / fw` needs no new convention. The player's is taller because
+-- it carries two rows the foe's does not: the CHARGE pips and the EXP rule.
+BattleHudXY.PLAYER_H = 170
+BattleHudXY.ENEMY_H  = 124
+
+-- Where the two plates sit. The 5X frames were hung foe top-left / player
+-- bottom-right (see drawXYBlock); the concept boards put BOTH along the top,
+-- player left and foe right, with the whole lower half left to the cards, the
+-- prompt and the command row. BattleDynamic owns this flag, so CLASSICA keeps
+-- the corners the pack was cut for.
+BattleHudXY.CONCEPT_CORNERS = true
+
+-- CHARGE: how many pips the player's plate shows. The value itself is the
+-- economy's (lib/BattleCharge.lua); this file only draws what it is handed.
+BattleHudXY.CHARGE_PIPS = 5
+
+-- Shared opaque ivory panel for status blocks and attack cards.
+function BattleHudXY.plateArt(g, x, y, w, h, k)
+  return BattleHudXY.uiSprite("panel", x, y, w, h, true)
+end
+
+BattleHudXY.PLATE_FILL = BattleHudXY.PANEL
+
+local function plate(g, x, y, w, h)
+  if BattleHudXY.plateArt(g, x, y, w, h) then return end
+  g.setColor(unpack(BattleHudXY.PANEL))
+  g.rectangle("fill", x, y, w, h)
+  g.setColor(unpack(BattleHudXY.INK))
+  g.setLineWidth(2)
+  g.rectangle("line", x, y, w, h)
+  g.setLineWidth(1)
+end
+
+-- A length of lit liquid in a glass tube: the trough first (so an empty bar
+-- is still a bar), then the fill cropped to `frac`, then a highlight down its
+-- top half. `frac` is clamped, never trusted -- shownHP can lead mon.hp by a
+-- frame during a drain and a bar wider than its trough is a visible bug.
+local function tube(g, x, y, w, h, frac, color, dim)
+  frac = math.max(0, math.min(1, frac or 0))
+  local rim = uiArt("bar")
+  if rim then
+    g.setColor(1, 1, 1, 1)
+    BattleHudXY.nineSlice(rim, x, y, w, h,
+      { l = 20, r = 20, t = 16, b = 16 }, h / 51, BattleHudXY.UI_REGIONS.bar)
+  else
+    g.setColor(unpack(BattleHudXY.INK))
+    g.rectangle("fill", x, y, w, h)
+  end
+  local inset = h * 0.30
+  g.setColor(color[1], color[2], color[3], dim or 1)
+  g.rectangle("fill", x + inset, y + inset,
+    math.max(0, w - inset * 2) * frac, h - inset * 2)
+  g.setColor(1, 1, 1, 1)
+end
+
+-- The CHARGE row: diamonds, filled to `n` of `max`. Diamonds and not squares
+-- because the same shape is the move cards' COST (BattleFanXY.drawFace), and
+-- one shape for one currency is what makes "this move costs three of those"
+-- legible without a legend.
+function BattleHudXY.pips(g, x, y, size, gap, n, max, color)
+  for i = 1, max do
+    local px = x + (i - 1) * (size + gap)
+    local sprite = i <= n and "charge_full" or "charge_empty"
+    if not BattleHudXY.uiSprite(sprite, px, y, size, size) then
+      g.setColor(unpack(color or BattleHudXY.GOLD))
+      g.rectangle(i <= n and "fill" or "line", px, y, size, size)
+    end
+  end
+  g.setColor(1, 1, 1, 1)
+  return max * (size + gap) - gap
+end
+
+local function nativeBlock(info, x, y, w, expFrac)
+  local g = love.graphics
+  local isP = info.isPlayer
+  local S = w / BattleHudXY.FRAME_W            -- one scale for the whole plate
+  local H = (isP and BattleHudXY.PLAYER_H or BattleHudXY.ENEMY_H) * S
+  local PAD = 30 * S
+  plate(g, x, y, w, H)
+
+  local nameH = 42 * S
+  local top = 18 * S
+
+
+  -- Lv. right-aligned to the plate. Drawn as one string so the tag and the
+  -- number can never drift apart by a rounding difference the way two
+  -- separately-placed draws did on the pack's frame.
+  local lv = ("Lv. %d"):format(info.level or 0)
+  local lvH = 34 * S
+  local lvW = BattleHudXY.textWidth(lv) * (lvH / 84)
+  local nameW = math.max(1, w - PAD * 2 - lvW - 20 * S)
+  nameH = math.min(nameH, nameW * 84 / math.max(1, BattleHudXY.textWidth(info.name)))
+  BattleHudXY.text(info.name, x + PAD, y + top, nameH, BattleHudXY.INK)
+  BattleHudXY.text(lv, x + w - PAD - lvW, y + top + (nameH - lvH) * 0.55, lvH,
+                   BattleHudXY.GOLD)
+
+  -- the HP row
+  local barY, barH = y + 74 * S, 24 * S
+  local labH = 24 * S
+  BattleHudXY.text("HP", x + PAD, barY + (barH - labH) * 0.5, labH,
+                   BattleHudXY.GOLD)
+  local barX = x + PAD + 46 * S
+  local barR = x + w - PAD
+  local pair
+  if isP then
+    pair = ("%d / %d"):format(info.hp, info.maxHP)
+    barR = barR - (BattleHudXY.textWidth(pair) * (labH / 84) + 14 * S)
+  end
+  local frac = info.hp / math.max(1, info.maxHP)
+  tube(g, barX, barY, math.max(1, barR - barX), barH, frac,
+       BattleHudXY.hpColor(frac))
+  if isP then
+    BattleHudXY.text(pair, barR + 14 * S, barY + (barH - labH) * 0.5, labH,
+                     BattleHudXY.INK)
+  end
+
+  if isP then
+    -- CHARGE, on the row the concept boards give it -- and ONLY when the
+    -- economy is live. With its row switched off BattleCharge.read answers
+    -- nothing, and a meter drawn empty forever would be the plate promising a
+    -- resource the fight does not have.
+    if info.chargeMax then
+      local chH = 22 * S
+      local chY = y + 106 * S
+      BattleHudXY.text("CHARGE", x + PAD, chY, chH, BattleHudXY.GOLD)
+      -- past the label's own width, not at the HP tube's left rule: "CHARGE"
+      -- is four glyphs longer than "HP" and ran under its own first pip there
+      BattleHudXY.pips(g, x + PAD + 132 * S, chY, 20 * S, 7 * S,
+                       info.charge or 0, info.chargeMax)
+    end
+    -- EXP as a thin filament along the plate's foot, never an orphan bar
+    if expFrac then
+      local ey = y + H - 17 * S
+      tube(g, x + PAD, ey, w - PAD * 2, 7 * S, expFrac,
+           BattleHudXY.EXP_COLOR, 0.95)
+    end
+  end
+  g.setColor(1, 1, 1, 1)
+  return true
+end
+
 function BattleHudXY.block(info, x, y, w, expFrac)
   if not (info and BattleHudXY.available()) then return false end
+  if native() then return nativeBlock(info, x, y, w, expFrac) end
   local side = info.isPlayer and "player" or "enemy"
   local frame = art(info.isPlayer and "frame_player" or "frame_enemy")
   if not frame then return false end

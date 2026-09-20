@@ -1,0 +1,14 @@
+Use case: stylized-concept
+Asset type: production game UI sprite atlas, single coherent asset sheet.
+Create an original modernized first-generation Pokemon inspired pixel-art battle UI asset pack for a monster-catching game. Clean early handheld RPG visual language with modern spacing and restrained color. Actual transparent background, no checkerboard painted in.
+Canvas landscape 1536x1024. All elements front-facing flat orthographic pixel art, sharp uniform pixel grid, no anti-aliasing, no blur, no perspective, no decoration outside the assets. Warm ivory panel interiors, charcoal blue double stepped pixel borders, small muted sage shadow along bottom and right, emerald HP, amber warning, coral critical, pale cyan XP, amber charge. Corners subtly stepped, restrained geometric handheld console feel. Absolutely no gold filigree, scrollwork, purple glass, gradients, glossy bevels, creatures, branding or text anywhere.
+Organize assets in a spacious aligned sprite sheet, no overlaps and transparent gutters of at least 24 pixels:
+Top row: two wide blank battle status panels, each approximately 640x176, with empty generous interiors for dynamically drawn name, level, HP and charge. Left default ivory, right selected with small sage accent at left edge.
+Second row: one wide blank dialogue panel about 800x208; one blank command menu panel about 480x208 with subtle two by two cell dividers.
+Third row: four separate blank compact rectangular button assets about 288x88 each: default ivory, selected sage green, pressed darker green, disabled gray.
+Fourth row: four horizontal thin HP bar assets: empty charcoal track, full emerald health, amber half health, coral low health. Each framed cleanly with stepped ends. Also a thin cyan experience progress bar.
+Bottom row: small reusable pixel UI sprites in evenly spaced cells: right-pointing selection cursor, down continuation triangle, five empty charge diamonds, five amber filled charge diamonds, six miniature team-slot discs in full/empty/fainted variants; small elemental glyphs for water droplet, fire flame, leaf, lightning bolt, snowflake, rock. Keep all sprites visibly separated.
+This is an engine-ready art atlas, NOT a presentation poster. No headings, labels, letters, numbers, captions or sample typography. Every panel must have a solid opaque ivory interior and only outside the assets is transparent.
+
+Transparency refinement:
+Edit this game UI atlas. Preserve every asset, its exact location, dimensions, colors, and layout. Remove only the dark gray backdrop and all outer haze/glow between and around the separate assets. Replace that backdrop with actual transparent alpha, not black, white or a checkerboard. Keep panel interiors opaque ivory, green or gray; keep bar interiors opaque and all black sprite outlines intact. Crisp pixel edges, no soft drop shadows or glow outside sprites. Output the same 1536x1024 sprite atlas with real transparency.

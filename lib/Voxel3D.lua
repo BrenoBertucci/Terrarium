@@ -219,7 +219,8 @@ precision highp sampler2D;
   // runs to a few thousand across a route, which a mediump varying would
   // quantise away into bands.
   varying LOVE_HIGHP_OR_MEDIUMP vec3 vWorld;
-  varying VXFP vec3 vSun;     // this fragment's place in the sun's view
+  varying VXFP vec4 vSun;     // xyz: this fragment's place in the sun's view;
+                              // w: how much sun the CLOUDS let through (CloudShade)
   // Snow SETTLED on a grass blade, 0..1, weighted by how far up the tuft
   // this fragment sits. Grass is the one thing in the world whose snow the
   // face normal cannot answer for: a blade is a SIDE by every honest
@@ -244,6 +245,12 @@ precision highp sampler2D;
   // unconditional change would corrupt the brightness of every mesh that
   // does not pack.
   uniform VXHP float packedShade;
+  // THE REEF (lib/ReefKit.lua): 1 for the length of its sheet's draw. What
+  // stands under the waterline then takes the water's absorption and its
+  // caustics like the bed does, but keeps its OWN colour instead of sand --
+  // and the vertex stage moves the garden (THE WATER GARDEN MOVES), which is
+  // why it is declared here, for both stages, and carries VXHP.
+  uniform VXHP float reefOn;
   varying float vGrassCap;
   varying float vWater;       // 1 when swell/ice paint runs, 0 otherwise
   varying float vWaterSurf;   // 1 on recessed water geometry always (y < -1)
@@ -460,6 +467,12 @@ precision highp sampler2D;
   uniform vec4 curve;         // xy = the focus in world XZ, z = k; 0 = off
                               // w = the deepest the bend may go (see below)
   uniform float sway;         // wind reach at the tip, world px; 0 = planted
+  // The clouds' shadows (lib/CloudShade.lua): xy = the deck's drift in
+  // world px, z = the field's wave scale (rad per world px), w = how much
+  // of the sun a cloud takes. cloudB: xy = the coverage window over the
+  // noise, w = 1 while the shade is on at all.
+  uniform vec4 cloudA;
+  uniform vec4 cloudB;
   // Foot-crush on grass (packed vec4: xz pos, radius, strength). crushN is
   // how many are live this draw. Zero when not the grass pass so terrain
   // never folds under a walker.
@@ -477,11 +490,11 @@ precision highp sampler2D;
   // the path instead of a pure radial dent -- blades peel to the sides and
   // lean with the walker's travel (see FOOT CRUSH block below).
   uniform vec2 crushPush[8];
-  // World-space trail field. Live feet stay on crush[] (the spring lives
-  // there); this is the walked path, one tap instead of N distance tests.
-  // Same vertex-texture contract as waterField: GLES2 with zero vertex
-  // texture units reads vec4(0), which is "no trail", which is the build
-  // this replaced. Unbound is a crash, crushMapOn is the switch.
+  // The LAID field (GrassWear.lay): the walked path, held for minutes, a
+  // texel a cell over the map underfoot. Live feet and the first crumbs
+  // stay on crush[] (the spring lives there). The name is older than the
+  // field -- it carried a 384 px window of crumbs before. Unbound is a
+  // crash, crushMapOn is the switch; see VERTEX_TEX for the rung without.
 #ifdef VERTEX_TEX
   uniform Image crushMap;
 #endif
@@ -490,8 +503,8 @@ precision highp sampler2D;
   uniform vec2 crushInv;      // 1 / its extent in world pixels
   // ------- the WEAR field: what this meadow remembers
   //
-  // crushMap is seconds of memory in a window that follows the player.
-  // This is the other clock entirely -- one texel per 16px overworld cell,
+  // crushMap is minutes of memory: which way a path lies. This is the
+  // other clock entirely -- one texel per 16px overworld cell,
   // covering a whole map, persisted in the save, decaying over in-game
   // DAYS. It is how a route you have crossed forty times looks crossed.
   //
@@ -530,6 +543,15 @@ precision highp sampler2D;
   uniform vec2 windFreq;      // phase gained per world pixel, per axis
   uniform float windPhase;    // advanced by the clock
   uniform float grassH;       // tuft height in world px -- the bend normaliser
+  // x = the set's gain (1/px), y = its ceiling (px of reach at hN 1),
+  // z = the sheen a bend lifts, w = the low sun through the tips. Per FRAME
+  // from Voxel3D.GRASS_TUNE + the hour; zeroing one is how a probe A/Bs it.
+  uniform vec4 grassTune;
+  // x = how far each pixel column flutters on its own phase (0 = the tuft
+  // as one card), y = the morning's dew (Wind.dew), z = the shade shared
+  // at the roots, w = the meadow's quiet clump-to-clump variation. Per
+  // frame, from Voxel3D.GRASS_FX, like grassTune.
+  uniform vec4 grassFx;
   // How much of the physics this device is paying for (Quality.grassDetail):
   // 0 = the travelling wave alone, 1 = + per-tuft stiffness and the squall
   // front, 2 = + flutter, cross-axis drift, tip bob and the rain's tick.
@@ -565,6 +587,25 @@ precision highp sampler2D;
   float smoothTri(float x) {
     float t = abs(fract(x + 0.5) * 2.0 - 1.0);
     return t * t * (3.0 - 2.0 * t);
+  }
+  // The WATER GARDEN's springs (THE WATER GARDEN MOVES): how a plant of
+  // `kind` answers a kick `a` seconds ago. A damped sine, so it starts at
+  // rest -- it has mass, the swimmer is past it before it has moved -- is
+  // thrown out, swings back through upright and rings down at its own pitch
+  // (rad/s, and the seconds it takes to lose two thirds):
+  //   lily 1.2/2.6 floats off and takes its time coming home
+  //   reed 10/0.45 a whip                             kelp 2.2/1.6 heavy
+  //   grass 7/0.5    clover 5/0.6                     fan 6/0.5
+  // An anemone does not spring: it CLOSES, fast, and opens again slowly.
+  float reefKick(float kind, float a) {
+    if (kind > 7.5) return (1.0 - exp(-a * 8.0)) * exp(-a * 0.45);
+    vec2 k = vec2(6.0, 0.5);
+    if (kind < 2.5) k = vec2(1.2, 2.6);
+    else if (kind < 3.5) k = vec2(10.0, 0.45);
+    else if (kind < 4.5) k = vec2(2.2, 1.6);
+    else if (kind < 5.5) k = vec2(7.0, 0.5);
+    else if (kind < 6.5) k = vec2(5.0, 0.6);
+    return sin(k.x * a) * exp(-a / k.y);
   }
   vec4 position(mat4 transform_projection, vec4 vertex_position) {
     // magnitude is the shading, sign is the face normal's Y (see vUp). A
@@ -622,6 +663,181 @@ precision highp sampler2D;
     // for the same reason: a varying left over from the previous draw is
     // a snowed hedge on a bare wall.
     vGrassCap = 0.0;
+    // ------- THE WATER GARDEN MOVES (lib/ReefKit.lua)
+    //
+    // Its sheet packs, in the fraction the canopy uses, which PLANT a corner
+    // belongs to -- kind * 8 + a draw of its own -- and how far up that plant
+    // it stands (ReefKit.pack; this is the inverse). Each kind then answers
+    // the water, the wind and whoever swims past in its own way:
+    //   pad     FLOATS: rides the sheet's swell exactly -- the same swellEval
+    //           the sheet is displaced by, so it can never sink into a crest
+    //           or hang over a trough -- and circles with it; shoved off by a
+    //           hull it drifts home on its stem, and dips where it is pressed
+    //   reed    the wind, above the water: a stiff stalk, the head lagging
+    //   kelp    a slow wave climbing the stalk, leaning down the current
+    //   grass   to and fro with every crest that passes overhead
+    //   clover  its leaves bob
+    //   fan     flexes across its own plane
+    //   anemone its crown stirs, and CLOSES when something passes over it
+    // Under the water everything rides `swell`: FLAT is a still garden, and a
+    // freeze has already taken the swell to zero on the CPU.
+    //
+    // The swimmers come in the crush slots, packed ReefKit's way (VoxelScene
+    // swaps Voxel3D.stir in for this one draw; lib/WakeFX.lua lays it): w >= 0
+    // is a HULL and how present it is, w < 0 a point of WAKE, -(age + 1) in
+    // seconds, with how hard it was laid in the length of its bearing.
+    if (reefOn > 0.5 && packedShade > 0.5) {
+      float c = vCanopy * 32768.0;
+      float code = floor(c / 256.0);             // kind * 8 + its own draw
+      float v = floor(c - code * 256.0);         // how far up... or a stalk
+      float kind = floor(code / 8.0);
+      float ph = (code - kind * 8.0) * 0.8976;   // this plant's own, 0..2pi
+      float wt = v * 0.00392157;                 // 1/255
+      // A PAD reads everything at its STALK, never at the corner asking:
+      // that is what makes the leaf rigid -- it drifts and bobs whole
+      // instead of stretching toward whatever passed nearest to it.
+      vec2 at = w.xz;
+      if (kind > 0.5 && kind < 1.5) {
+        float ax = floor(v / 16.0);
+        at += vec2(ax - 5.0, (v - ax * 16.0) - 5.0) + 0.5;
+        wt = 1.0;
+      }
+      // only the reeds, standing out of the ice, keep the snow crown their
+      // tips wore before; nothing under the sheet wears one
+      vCanopy = (kind > 2.5 && kind < 3.5) ? wt * 0.55 : 0.0;
+      if (kind > 0.5 && wt > 0.0) {
+        vec4 shape; vec3 ang; float ah;
+        float h = swellEval(at, shape, ang, ah);
+        float amp = swell * shape.w;        // what the sheet moves here, px
+        // ...and what a plant is let move with it: a storm's chop on a
+        // SWELL row reaches three pixels, and kelp at twice that is a blur
+        float ampU = min(amp, 2.2);
+        // The water's own excursion under the trains: a parcel under a wave
+        // sin(theta) is carried a*cos(theta) along it (Airy). (inversesqrt of
+        // a floored square rather than normalize: a train not yet sent is
+        // zero, and zero times a NaN is still a NaN.)
+        vec2 surge = swellA * (inversesqrt(max(dot(swellA, swellA), 1e-8)) * cos(ang.x) * shape.x)
+                   + swellB * (inversesqrt(max(dot(swellB, swellB), 1e-8)) * cos(ang.y) * shape.y)
+                   + swellC * (inversesqrt(max(dot(swellC, swellC), 1e-8)) * cos(ang.z) * shape.z);
+        // The trains' own clock is slow -- a crest every ten seconds -- and a
+        // garden that only breathed with it barely moved at all (measured:
+        // half a pixel at a blade's tip, invisible at any camera this game
+        // uses). So each kind also has a clock of its OWN, phased by where
+        // the plant stands, which is the water working under the swell
+        // rather than the swell itself: a drift through the lagoon.
+        vec2 drift = vec2(-waterCurrent.y, waterCurrent.x);   // across it
+        float run = swellPhase + dot(at, vec2(0.071, 0.053)) + ph;
+        vec2 give = vec2(0.0);
+        float lift = 0.0;
+        if (kind < 2.5) {
+          // A LILY. The pad rides the sheet's own rise exactly and circles
+          // with the parcel under it, with the wind pushing the leaf lying
+          // in the open; its stalk does the same thing by how high up it is,
+          // so the foot stays planted and the top goes with the leaf.
+          lift = wt * (amp * h + iceLift);
+          give = (surge * (amp * 1.2)
+                + windDir * (sway * 0.45 * sin(run * 0.7))
+                + drift * (sway * 0.25 * sin(run * 0.5 + 1.7))) * wt;
+        } else if (kind < 3.5) {
+          float p = dot(w.xz, windFreq) - windPhase * (0.85 + 0.048 * ph)
+                  - wt * 0.6 + ph;
+          float wave = sin(p) + 0.35 * sin(p * 2.3 + 1.3);
+          if (grassDetail >= 2.0) {
+            // a wet stalk ticks under the drops, as the canopy does
+            wave += clamp(grassLoad.x, 0.0, 1.0) * 0.30 * sin(p * 3.7 + ph);
+          }
+          give = windDir * (sway * 1.35 * (0.7 + 0.095 * ph) * wt * wt * wave);
+        } else if (kind < 4.5) {
+          // the wave climbs the stalk: the tip is always a moment behind the
+          // root, which is what says a long soft thing and not a stick
+          float climb = sin(run * 1.6 - wt * 2.6);
+          give = (surge * 2.6 + drift * (climb * 1.8) + waterCurrent * 0.9)
+               * (ampU * wt * sqrt(wt));
+        } else if (kind < 5.5) {
+          give = (surge * 1.5 + waterCurrent * 0.5 + drift * (1.4 * sin(run * 3.6)))
+               * (ampU * wt * wt * (0.75 + 0.08 * ph));
+          if (grassDetail >= 2.0) {
+            give += drift * (ampU * 0.4 * wt * sin(run * 9.0));
+          }
+        } else if (kind < 6.5) {
+          give = (surge + drift * (0.8 * sin(run * 2.2))) * (ampU * wt * wt);
+          lift = ampU * 0.5 * wt * sin(run * 1.7);
+        } else if (kind < 7.5) {
+          give = vec2(0.0, (surge.y * 1.4 + 0.9 * sin(run * 2.4)) * ampU * wt * wt);
+        } else {
+          float a = run * 2.0;
+          give = (vec2(cos(a), sin(a)) * 0.7 + surge * 0.6) * (ampU * wt);
+        }
+
+        // ------- the swimmers: a hull shoves, a wake rings
+        if (crushN > 0.5) {
+          vec2 shove = vec2(0.0);
+          float press = 0.0;
+          for (int ci = 0; ci < 8; ci++) {
+            if (float(ci) >= crushN) break;
+            vec4 cr = crush[ci];
+            vec2 d = at - cr.xy;
+            float d2 = dot(d, d);
+            if (d2 < cr.z * cr.z) {
+              float dist = sqrt(d2);
+              float fall = 1.0 - dist / cr.z;
+              fall *= fall;
+              vec2 radial = (dist > 0.05) ? (d / dist) : windDir;
+              vec2 bear = crushPush[ci];
+              float kick = length(bear);
+              vec2 dir = radial;
+              if (kick > 0.05) {
+                // the V a bow opens: out to the side it passes on, and a
+                // little along its way (the meadow's walk wake)
+                vec2 hd = bear / kick;
+                vec2 side = vec2(-hd.y, hd.x);
+                float sg = (dot(radial, side) >= 0.0) ? 1.0 : -1.0;
+                // a rooted thing is parted -- pushed to the side the bow
+                // passes on; a floating leaf is simply shoved away from it
+                dir = (kind < 2.5)
+                    ? normalize(radial * 0.85 + side * (sg * 0.25) + hd * 0.35)
+                    : normalize(radial * 0.5 + side * (sg * 0.8) + hd * 0.3);
+              }
+              float r = (cr.w >= 0.0) ? cr.w : kick * reefKick(kind, -cr.w - 1.0);
+              shove += dir * (fall * r);
+              press += fall * r;
+            }
+          }
+          // many points on one plant add up to a shove, never a flight
+          float sl = length(shove);
+          if (sl > 1.2) shove *= 1.2 / sl;
+          press = clamp(press, -1.0, 1.2);
+          if (kind < 2.5) {
+            // A LEAF FLOATS AWAY. It is not rooted where it lies -- only
+            // tethered -- so what passes pushes it a long way off and it
+            // comes back slowly, whole (see reefKick), and dips a little
+            // where it is pressed under.
+            give += shove * (10.0 * wt);
+            lift -= press * 0.5 * wt;
+          } else if (kind < 3.5) {
+            give += shove * (3.5 * wt * wt);
+          } else if (kind < 4.5) {
+            give += shove * (4.5 * wt * sqrt(wt));
+          } else if (kind < 5.5) {
+            give += shove * (3.0 * wt * wt);
+            lift -= press * 2.0 * wt;
+          } else if (kind < 6.5) {
+            give += shove * (1.6 * wt);
+          } else if (kind < 7.5) {
+            give.y += shove.y * 2.0 * wt * wt;
+          } else {
+            float shut = clamp(press, 0.0, 1.0);
+            give *= 1.0 - shut;
+            lift -= shut * 2.2 * wt;
+          }
+        }
+        w.xz += give;
+        w.y += lift;
+        // a pad's waterline is its own: it rides the sheet, so the
+        // fragment's "is this under the water" has to ride with it
+        if (kind < 2.5) vWorld.y += lift;
+      }
+    }
     // ------- THE CANOPY TAKES THE WIND
     //
     // Trees are the other thing out here with a base planted in the ground
@@ -642,7 +858,8 @@ precision highp sampler2D;
     // crush, no wear thinning, no per-tuft stiffness scatter, and no
     // snow-cap ramp (canopyCap in the fragment stage already does that
     // off the same vCanopy).
-    if (sway > 0.0 && packedShade > 0.5) {
+    // (the reef packs its shade too, and has just moved above: not a tree)
+    if (sway > 0.0 && packedShade > 0.5 && reefOn < 0.5) {
       float bend = vCanopy;
       if (bend > 0.0) {
         float wet  = clamp(grassLoad.x, 0.0, 1.0);
@@ -795,7 +1012,7 @@ precision highp sampler2D;
           }
         }
       }
-    } else if (sway > 0.0) {
+    } else if (sway > 0.0 && packedShade < 0.5) {
       // Height fraction. `grassH` is what the mesh in front of the shader
       // actually stands (the bake's own height for a 3D tuft, the slab's
       // for the classic path) rather than the flat 0.1 that used to stand
@@ -847,14 +1064,29 @@ precision highp sampler2D;
         ph = id * 6.2831;
         // ------- the squall front
         //
-        // A second wave on the same bearing at a fifth of the frequency
-        // and a third of the clock -- so the amplitude ITSELF travels. The
-        // wave below says which way a blade is leaning this instant; this
-        // says whether the air is on it at all. Without it a meadow is
-        // uniformly windy forever, which is the tell that separates an
-        // animation from weather no matter how good the wave is.
-        front = 0.72 + 0.28 * sin(dot(w.xz, windFreq * 0.21)
-                                  - windPhase * 0.37);
+        // A second, much longer wave on the same bearing -- so the
+        // amplitude ITSELF travels. The wave below says which way a blade
+        // is leaning this instant; this says whether the air is on it at
+        // all. Without it a meadow is uniformly windy forever, which is the
+        // tell that separates an animation from weather no matter how good
+        // the wave is.
+        //
+        // And it is TWO such waves crossing at +-32 degrees off the bearing,
+        // at different lengths and speeds, rather than one: a single wave
+        // is an endless straight stripe, and over a screen of meadow it
+        // reads as a barcode sliding past. Two crossing interfere into
+        // PATCHES that travel downwind -- the cat's paws on a wheat field.
+        // Byte for byte with Wind.patchAt, which is what the bodies standing
+        // in the meadow and everything the air carries read.
+        vec2 fqA = windFreq * 0.30;
+        vec2 fqB = windFreq * 0.40;
+        float patchA = sin(dot(w.xz, vec2(fqA.x * 0.848 - fqA.y * 0.530,
+                                          fqA.x * 0.530 + fqA.y * 0.848))
+                           - windPhase * 0.53);
+        float patchB = sin(dot(w.xz, vec2(fqB.x * 0.848 + fqB.y * 0.530,
+                                          fqB.y * 0.848 - fqB.x * 0.530))
+                           - windPhase * 0.64);
+        front = 0.72 + 0.14 * (patchA + patchB);
         // ------- the one tap, and it carries two things
         //
         // Sampled on vWorld rather than w.xz for the same reason `id` is:
@@ -888,10 +1120,30 @@ precision highp sampler2D;
       // the stems it is sitting on, so it takes most of the give away.
       amp *= (1.0 - 0.28 * wet) * (1.0 - 0.62 * snow);
 
+      // ------- the SET: drag only ever pushes DOWNWIND
+      //
+      // The wave below has a mean of zero, so on its own it laid the
+      // meadow UPWIND half the time -- grass leaning into a gale, which no
+      // grass has ever done. Drag goes as the square of the air's speed
+      // and points one way, so a tuft is combed downwind by `comb` and
+      // swings AROUND that, not around upright. Square of amp, so a calm
+      // day barely changes (0.6 px of reach sets about 0.1) and a gale
+      // combs the whole meadow over -- and down, through the arc-length
+      // drop below. It saturates at grassTune.y, the most a slab tuft lies
+      // before it would be folded rather than bent, and a stem already
+      // near that has less room left to swing, so the oscillation gives
+      // up to half of itself as the set climbs. Bodies do not take the set
+      // (Wind.leanAt): wind does not comb a person.
+      float setMax = max(grassTune.y, 0.001);
+      float setX = grassTune.x * amp * amp / setMax;
+      float comb = setMax * setX / (1.0 + setX);
+      float osc = amp * (1.0 - 0.5 * comb / setMax);
+
       // The travelling gust and the shove in it. Two sines, every tier:
       // this is the motion itself and there is no cheaper version of it.
       float wave = sin(p) + 0.38 * sin(p * 2.25 + 1.7);
-      vec2 lean = windDir * (amp * bend * wave);
+      float along = bend * (comb + osc * wave);
+      vec2 lean = windDir * along;
 
       // TIER 2 -- the texture on top of the motion. Flutter so a meadow
       // shimmers rather than waving like a flag, a cross-axis drift so
@@ -899,12 +1151,55 @@ precision highp sampler2D;
       // as drops land. Three more sines, and on a device that chose FULL
       // they are what the choice was for.
       if (grassDetail >= 2.0) {
-        wave += 0.14 * sin(p * 5.3 + hN * 2.1 + 0.4)
+        // Each pixel COLUMN flutters on its own phase. The slab merges a
+        // run of pixels into one quad, so this twists a run at its two
+        // ends -- blades flexing apart rather than one card shimmering.
+        // Rounded, not floored: run edges sit on whole pixels, and a floor
+        // would flip between two columns at 2.9999.
+        float colPh = tuftHash(vec2(floor(vWorld.x + 0.5),
+                                    floor(vWorld.z * 0.125)))
+                    * 6.2831 * grassFx.x;
+        wave += 0.14 * sin(p * 5.3 + hN * 2.1 + 0.4 + colPh)
               + wet * 0.22 * sin(p * 9.1 + ph * 3.0);
         vec2 crossDir = vec2(-windDir.y, windDir.x);
         float cross = 0.18 * sin(p * 1.6 + 0.9) * bend;
         // recomputed rather than added to, because `wave` moved under it
-        lean = windDir * (amp * bend * wave) + crossDir * (amp * cross);
+        along = bend * (comb + osc * wave);
+        lean = windDir * along + crossDir * (osc * cross);
+      }
+      // ------- what the eye actually reads as wind: LIGHT (tier 1 up)
+      //
+      // A meadow's gust is seen far more than it is measured: a bent blade
+      // turns more of its lit face to the sky, so the patch the air is on
+      // runs LIGHTER across the field and the lull behind it darker. At a
+      // few pixels of reach the displacement alone is nearly invisible;
+      // this is what makes it read. SIGNED, on purpose: the crest of the
+      // wave (leaning further than the comb) lightens and the blade
+      // springing back darkens, so the gust crosses the field as a band of
+      // light rather than a flicker at twice its frequency. `along`
+      // already carries the bend, so the tips take it and the roots do
+      // not. The glow is the low sun
+      // coming through the tip of a blade -- a number the CPU sets per
+      // frame from the hour (Voxel3D.grassTune), zero outside it -- and it
+      // brightens the TINT the fragment already multiplies in, so it burns
+      // gold at dusk without a colour of its own.
+      if (grassDetail >= 1.0) {
+        vShade *= 1.0 + grassTune.z * clamp(along / H, -0.5, 1.0) * hN
+                      + grassTune.w * smoothstep(0.45, 0.8, hN);
+      }
+      // Neighbours bury the roots in shade but leave the tips in open
+      // sky. Bend one long wave with the other so the meadow has broad,
+      // irregular clumps instead of a second grid laid over its tiles.
+      // Rest coordinates keep those clumps attached when the wind turns.
+      if (grassDetail >= 1.0) {
+        float rootShade = mix(1.0 - grassFx.z, 1.0,
+                              smoothstep(0.0, 0.55, hN));
+        float meadowWave = sin(dot(vWorld.xz, vec2(0.033, 0.021)));
+        float clump = 0.6 * meadowWave
+                    * sin(dot(vWorld.xz, vec2(-0.019, 0.029))
+                          + meadowWave * 1.7)
+                    + 0.8 * (id - 0.5);
+        vShade *= clamp(rootShade * (1.0 + grassFx.w * clump), 0.6, 1.4);
       }
       w.xz += lean;
       // ------- and the tip comes DOWN as it goes over
@@ -923,7 +1218,7 @@ precision highp sampler2D;
       w.y -= min(dot(lean, lean) / (2.0 * H), vertex_position.y * 0.5);
       // tip bob: a little vertical give under the same gust (tier 2)
       if (grassDetail >= 2.0) {
-        w.y += amp * bend * 0.07 * sin(p * 1.85 + 0.6);
+        w.y += osc * bend * 0.07 * sin(p * 1.85 + 0.6);
       }
 
       // ------- WEIGHT: what is lying on the blade, which is not the wind
@@ -961,6 +1256,9 @@ precision highp sampler2D;
       // wider-lived, so the path somebody walked stays parted behind them.
       // Nothing here needs to know which is which -- a crumb is a foot
       // that is fading.
+      // the most any slot lays this tuft, for the laid field below to MAX
+      // against rather than add to
+      float crushMax = 0.0;
       if (crushN > 0.5) {
         for (int ci = 0; ci < 8; ci++) {
           if (float(ci) >= crushN) break;
@@ -982,6 +1280,7 @@ precision highp sampler2D;
             float ring = u * (1.0 - u) * 4.0;   // 0 at centre/edge, 1 at mid
             float t = (1.0 - u);
             t = t * t * (0.55 + 0.45 * ring) * cr.w;
+            crushMax = max(crushMax, t);
             vec2 radial = (dist > 0.05) ? (d / dist) : windDir;
             vec2 push = crushPush[ci];
             float pLen = length(push);
@@ -1015,32 +1314,55 @@ precision highp sampler2D;
         }
       }
 
-      // ------- TRAIL FIELD (the path behind the live feet)
+      // ------- the LAID field: the path, held for minutes
       //
-      // One tap. The value already has the crumb's ring and its squared
-      // recovery baked in on the CPU, so this is "how laid is this tuft"
-      // rather than another disc test. Direction rides G/B when a crumb
-      // wrote one; otherwise the wind, which is a hint not a corridor --
-      // the live-foot uniforms still open the wake under the walker.
+      // One tap on a texel a CELL, map-wide (GrassWear.lay): how laid the
+      // cell is and which way its walker was going. Read at the TUFT's
+      // centre, so a tuft lies down as one piece rather than its tip
+      // reading the next cell over as it leans. MAX'd with the live feet
+      // above, not added: a crumb fading down onto the field is one blade
+      // lying down once, not twice.
+      //
+      // PARTED, not combed one way: a path pushes the grass to either side
+      // of the line the walker took -- the V the live foot opens, held -- so
+      // each tuft leans off its cell's centre line, on its own side of it.
+      // And a flattened blade turns its lit face up, so the path reads
+      // lighter than the standing meadow either side of it. Tier 1 up,
+      // like the wear tap: tier 0 keeps the crumbs and nothing else.
+      // Alpha is the DEW that path knocked off (0 = knocked), read below.
+      vec4 sm = vec4(0.0, 0.5, 0.5, 1.0);
 #ifdef VERTEX_TEX
-      if (crushMapOn > 0.5) {
-        vec2 uv = (w.xz - crushOrigin) * crushInv;
+      if (crushMapOn > 0.5 && grassDetail >= 1.0) {
+        vec2 uv = (tuftC - crushOrigin) * crushInv;
         if (uv.x > 0.0 && uv.x < 1.0 && uv.y > 0.0 && uv.y < 1.0) {
-          vec4 sm = Texel(crushMap, uv);
-          float tm = sm.r;
+          sm = Texel(crushMap, uv);
+          float tm = sm.r - max(crushMax, 0.0);
           if (tm > 0.008) {
             float t = tm * bend;
             vec2 dir = sm.gb * 2.0 - 1.0;
             if (dot(dir, dir) < 0.0025) dir = windDir;
             else dir = normalize(dir);
+            vec2 side = vec2(-dir.y, dir.x);
+            float ss = dot(tuftC - (floor(tuftC * 0.0625) + 0.5) * 16.0, side);
+            if (abs(ss) > 0.5) {
+              dir = normalize(dir * 0.55 + side * (sign(ss) * 0.85));
+            }
             w.xz += dir * (t * H * 1.22)
                   + windDir * (t * H * 0.06);
             w.y -= t * vertex_position.y * 0.92;
             w.y *= clamp(1.0 - t * (0.10 + 0.26 * hN), 0.62, 1.14);
+            vShade *= 1.0 + 0.2 * tm * hN;
           }
         }
       }
 #endif
+      // ------- DEW (tier 1 up): a meadow at dawn is silver at the tips,
+      // and the line somebody walked through it is GREEN -- they carried
+      // the water off on their legs (the laid texel's alpha, see
+      // GrassWear.lay). The oldest tell of who crossed a field this morning.
+      if (grassFx.y > 0.0 && grassDetail >= 1.0) {
+        vShade *= 1.0 + 0.26 * grassFx.y * sm.a * smoothstep(0.3, 0.8, hN);
+      }
 
       // ------- and what has piled on this blade (see vGrassCap)
       //
@@ -1053,6 +1375,14 @@ precision highp sampler2D;
       // per vertex of every meadow in the world.
       if (snow > 0.0) {
         vGrassCap = snow * smoothstep(0.30, 0.95, hN);
+      }
+
+      // A meadow's skyline is not a row of copies. Reuse the tuft's
+      // identity for a little stature, about its own root, AFTER bending
+      // and crushing so a flattened blade stays flat. Retired tufts still
+      // collapse to their root below; no new cards or hashes are needed.
+      if (grassDetail >= 1.0) {
+        w.y = baseY + (w.y - baseY) * (0.86 + 0.28 * id);
       }
 
       // ------- and WEAR, which does not bend a blade -- it removes it
@@ -1158,7 +1488,20 @@ precision highp sampler2D;
     // with the card's position asks the question the sun actually
     // answered. (The pull below is excluded for the same reason: it is a
     // depth trick aimed at the camera's own buffer.)
-    vSun = (sunVP * (sunModel * vertex_position)).xyz;
+    vSun = vec4((sunVP * (sunModel * vertex_position)).xyz, 1.0);
+    // The clouds' shadows: a periodic sum of sines on the FLAT world
+    // position (w, before the curve and the pull), once per vertex --
+    // a cloud's shade has no edge worth a per-pixel evaluation, and the
+    // vertex stage is highp on every driver. See lib/CloudShade.lua.
+    if (cloudB.w > 0.5) {
+      vec2 cp = (w.xz - cloudA.xy) * cloudA.z;
+      float cn = 0.5
+               + 0.28 * sin(cp.x * 4.0 + 0.7) * sin(cp.y * 5.0 - 1.3)
+               + 0.17 * sin(cp.x * 7.0 - cp.y * 9.0 + 2.1)
+               + 0.12 * sin(cp.y * 11.0 - cp.x * 6.0 + 4.4)
+               + 0.08 * sin(cp.x * 13.0 + cp.y * 4.0 + 0.9);
+      vSun.w = 1.0 - smoothstep(cloudB.x, cloudB.y, cn) * cloudA.w;
+    }
     // The curved world (see WorldCurve): drop every vertex by the square
     // of how far its column stands from the camera's focus. Applied AFTER
     // the shadow lookup above and clear of the wireframe's model space, so
@@ -1199,6 +1542,7 @@ precision highp sampler2D;
   // the static outlived 1.34.2: a sixteen-bit depth compared at fp16.
   uniform VXFP Image sunMap;
   uniform VXFP float sunDark; // >0 = there is a map to sample; see Light.lua
+  uniform VXFP float cloudFill; // share of the sky's fill a cloud's shade takes
   uniform VXFP float sunBias;
   uniform VXFP vec2 sunTexel;
 
@@ -1475,6 +1819,19 @@ precision highp sampler2D;
   // tileset", and the shop's say "these UVs address a sheet whose ROWS are
   // banded by material".
   uniform float shopOn;
+  // LANTERN GLASS on an authored sheet (lib/BridgeKit.lua): the UV rect of
+  // the sheet's glass texels, sent for the length of that one draw like
+  // shopOn. glassMask cannot answer for a sprite sheet (see glassOn), and a
+  // bridge's lanterns outnumber the eight lamp pools, so every pane past the
+  // nearest few stood dark. Zero rect = off.
+  uniform vec4 lanternUV;
+  // ...and the lamplight BAKED into that sheet: it is `x` identical bands
+  // stacked down v, and the band a texel was taken from says how much
+  // lantern reaches that voxel (0 = none). `y` is the strength. This is how
+  // a pier of sixty lanterns lights its whole deck with eight lamp pools.
+  uniform vec2 lanternGlow;
+  // (reefOn, the reef's sheet, is declared with the shared uniforms: the
+  // vertex stage moves the garden)
   // ...and its sibling, which is a fact about the FRAME rather than about
   // the draw: this map is a Mart, so its floor is polished ceramic. The two
   // cannot be one uniform. The floor is drawn in the TERRAIN pass, before
@@ -1846,8 +2203,11 @@ precision highp sampler2D;
     // time for it would pay the shadow map's four-to-twelve texture fetches
     // twice per fragment -- the most expensive line in this shader, doubled,
     // on every frame of a snowfall.
-    float lit = sunlight(vSun);
-    vec3 light = skyTint + sunTint * lit;
+    float lit = sunlight(vSun.xyz);
+    // and the clouds: a shade takes the sun away and leaves the sky, the
+    // same thing a cast shadow does, so the two are one cool colour
+    float cloud = vSun.w;
+    vec3 light = skyTint * mix(1.0, cloud, cloudFill) + sunTint * lit * cloud;
     // the face's own normal, once, for every lamp (a constant when the
     // build carries no derivatives, and free either way where no lamp
     // reaches -- the early-outs above never touch it)
@@ -2226,7 +2586,7 @@ precision highp sampler2D;
     // as lake bed. The waterline is the sheet's height HERE (the same
     // three trains the sheet is displaced by), so it climbs and falls on the
     // bank with the swell, and the foam rides it.
-    if (basinOn > 0.5 && vWorld.y < -0.02) {
+    if ((basinOn > 0.5 || reefOn > 0.5) && vWorld.y < -0.02) {
       // the basin's checker rides the same rule as the sheet's above
       float bcell = (waterDither >= 0.999) ? 2.0 : 1.0;
       vec2 bgc = floor(sc / bcell);
@@ -2247,8 +2607,11 @@ precision highp sampler2D;
         // palette still owns its lake.
         // the texel is already fetched; tileFlat's four more are not worth
         // a whisper of palette on a bed the water tints anyway
-        vec3 sand = mix(waterSand, p.rgb, 0.12) * vShade * light;
-        vec3 absorb = exp(-under * waterAbsorb);
+        vec3 sand = mix(waterSand, p.rgb, mix(0.12, 1.0, reefOn)) * vShade * light
+                  * mix(1.0, 1.3, reefOn);
+        // (a reef is absorbed at a third of the rate: lagoon water. At the
+        // bed's own rate a coral four voxels down was already the bed's blue.)
+        vec3 absorb = exp(-under * waterAbsorb * mix(1.0, 0.35, reefOn));
         vec3 bed = sand * absorb;
         // CAUSTICS: where the long and mid trains peak together the surface
         // is a lens and the bed under it lights up. Hard diamonds, dithered
@@ -2257,16 +2620,16 @@ precision highp sampler2D;
         float lens = sin(cang.x * 3.1 + 0.7) * sin(cang.y * 3.1 - 0.4);
         float caus = step(0.50, lens + (bcheck - 0.5) * 0.30)
                    * clamp(swell, 0.0, 1.0) * (1.0 - freeze);
-        bed += light * caus * 0.22 * absorb.g;
+        bed += light * caus * 0.34 * absorb.g;
         // the bed is all sand; a submerged bank keeps a share of its own
         // art, so the shore reads as the shore continuing under the water
-        rgb = mix(rgb, bed, mix(0.72, 0.92, vUp));
+        rgb = mix(rgb, bed, mix(mix(0.72, 0.92, vUp), 1.0, reefOn));
         // THE WATERLINE on a bank: a lapping foam line where the sheet meets
         // the wall (vUp is 0 on a wall and 1 on the bed), a world pixel tall.
         float lap = 0.25 * sin(foamPhase * 2.0 + vWorld.x * 0.23
                                                 + vWorld.z * 0.17);
         float line = step(under, 0.7 + lap + (bcheck - 0.5) * 0.30)
-                   * (1.0 - vUp) * (1.0 - freeze);
+                   * (1.0 - vUp) * (1.0 - freeze) * (1.0 - reefOn);
         rgb = mix(rgb, waterFoam * light, line * 0.85);
       } else {
         // THE DRY LIP, just above the waterline: damp, so the bank reads as
@@ -2588,6 +2951,21 @@ precision highp sampler2D;
       pane = mix(pane, pane * vec3(0.30, 0.36, 0.55),
                  haunted * (1.0 - glassNight));
       rgb = mix(pane, lamp, glassNight * glass * home);
+    }
+    if (lanternUV.z > 0.0 && tc.x >= lanternUV.x && tc.x <= lanternUV.z
+        && tc.y >= lanternUV.y && tc.y <= lanternUV.w) {
+      // a flame behind glass: the lamps' colour by the texel's own
+      // brightness (the flame's row is the paler texel), breathing on the
+      // gas clock, and blind to the sun, the shadows and the hour's tint
+      float shineL = dot(p.rgb, vec3(0.299, 0.587, 0.114));
+      float flickL = 0.92 + 0.08 * sin(lampFlicker * 0.7
+                     + dot(floor(vWorld.xz / 16.0), vec2(3.1, 5.7)));
+      rgb = mix(rgb, lampColor * (0.55 + 0.75 * shineL) * flickL, glassNight);
+    }
+    if (lanternGlow.x > 0.5) {
+      float bandL = floor(tc.y * lanternGlow.x + 0.001);
+      rgb += p.rgb * lampColor * (bandL / max(lanternGlow.x - 1.0, 1.0))
+           * lanternGlow.y * glassNight;
     }
     // ------- THE SNOW LYING ON THIS SURFACE
     //
@@ -3864,6 +4242,18 @@ function Voxel3D.beginScene(w, h, cx, cy, vw, vh, sky, slot)
                                Voxel3D.skyAmount or 0)
   pcall(sh.send, sh, "skyTint", sky)
   pcall(sh.send, sh, "sunTint", sun)
+  -- the clouds' shadows over both (lib/CloudShade.lua); asked for by pcall
+  -- because this file is required by half the mod and the shade module
+  -- reads the sky, the wind and the weather
+  do
+    local okC, CloudShade = pcall(V.require, "CloudShade")
+    if okC and CloudShade and CloudShade.uniforms then
+      local a, b, fill = CloudShade.uniforms(map ~= nil)
+      pcall(sh.send, sh, "cloudA", a)
+      pcall(sh.send, sh, "cloudB", b)
+      pcall(sh.send, sh, "cloudFill", fill)
+    end
+  end
   -- The cel rung's numbers. Sent unconditionally and through pcall like
   -- everything else on this page: on a shader built without ANIME_CEL the
   -- uniforms do not exist, the send fails, and the pcall is what makes that
@@ -4127,6 +4517,9 @@ function Voxel3D.beginScene(w, h, cx, cy, vw, vh, sky, slot)
   -- about one draw, and left on they would read the next mesh's v as a
   -- material and plaster whatever came after
   pcall(sh.send, sh, "shopOn", 0)
+  pcall(sh.send, sh, "lanternUV", { 0, 0, 0, 0 })
+  pcall(sh.send, sh, "lanternGlow", { 0, 0 })
+  pcall(sh.send, sh, "reefOn", 0)
   -- NOT shopFloorOn. That one is written from the materials block further
   -- up this same setup (it is a fact about the map, not about a draw), and
   -- resetting it here overwrote the 1 it had just been given -- so the
@@ -4153,6 +4546,24 @@ function Voxel3D.beginScene(w, h, cx, cy, vw, vh, sky, slot)
   pcall(sh.send, sh, "windDir", Wind.DIR)
   pcall(sh.send, sh, "windFreq", Wind.FREQ)
   pcall(sh.send, sh, "windPhase", Wind.phase())
+  do
+    -- The glow only burns while the sun is low and the sky is open: the
+    -- dial's golden plateaus in full, dawn and dusk most of the way, and a
+    -- shower (the blades' own wet) puts it out.
+    local t = Voxel3D.GRASS_TUNE
+    local glow = 0
+    local okm, m = pcall(DayNight.mix, DayNight.time())
+    if okm and m then
+      glow = (m.golden or 0) + 0.7 * ((m.dawn or 0) + (m.dusk or 0))
+    end
+    local okl, wet = pcall(Wind.load)
+    glow = glow * math.max(0, 1 - 2 * ((okl and wet) or 0))
+    pcall(sh.send, sh, "grassTune", { t[1], t[2], t[3], t[4] * glow })
+    local fx = Voxel3D.GRASS_FX
+    local okd, dew = pcall(Wind.dew)
+    pcall(sh.send, sh, "grassFx",
+          { fx[1], ((okd and dew) or 0) * fx[2], fx[3], fx[4] })
+  end
   pcall(sh.send, sh, "sway", 0)
   -- the grass load and the tuft height, reset per frame like `sway` is and
   -- for the same reason: the grass pass fills them and nothing else may
@@ -4383,6 +4794,22 @@ end
 -- contract: true for the length of that one draw, false again after. The
 -- caller is VoxelScene's sprite-group loop, which is where the sheet a
 -- group was textured from is known.
+-- The UV rect { u0, v0, u1, v1 } of the glass on the sheet drawn next, or
+-- nil to switch it off. Same contract as shopMats: one draw long.
+-- `glow` = { bands, strength }: the sheet's baked lamplight (see lanternGlow).
+function Voxel3D.lantern(rect, glow)
+  if not (active and activeShader) then return end
+  pcall(activeShader.send, activeShader, "lanternUV", rect or { 0, 0, 0, 0 })
+  pcall(activeShader.send, activeShader, "lanternGlow", rect and glow or { 0, 0 })
+end
+
+-- Whether what is drawn next is the reef's sheet (lib/ReefKit.lua): under
+-- the waterline it is absorbed and lit like the bed. One draw long.
+function Voxel3D.reef(on)
+  if not (active and activeShader) then return end
+  pcall(activeShader.send, activeShader, "reefOn", on and 1 or 0)
+end
+
 function Voxel3D.shopMats(on)
   if not (active and activeShader) then return end
   pcall(activeShader.send, activeShader, "shopOn", on and 1 or 0)
@@ -4457,6 +4884,26 @@ Voxel3D.rainTime = 0
 -- gentler rather than wrong -- but a 3D bake knows its own height and
 -- should hand it over (VoxelScene reads Grass3D.meta().height).
 Voxel3D.GRASS_H = 10
+-- The least `sway` a grass or flower pass is drawn with. `sway > 0` is what
+-- marks a draw as vegetation, both here and in the shader, so a pass sent
+-- with the wind's own zero (the WIND row at OFF) was drawn as TERRAIN: no
+-- foot-crush, no trail, no wear thinning, no snow weight -- the earth decal
+-- of a worn path showing under full-height tufts. Feet and snow are not
+-- wind. At a thousandth of a pixel the wave is still, and the rest runs.
+Voxel3D.SWAY_FLOOR = 0.001
+-- The grass shader's four knobs (see `grassTune` in the vertex stage):
+--   1  set gain, 1/px   how hard drag combs a tuft downwind per px^2 of reach
+--   2  set ceiling, px  the most it combs (reach at hN = 1; the slab's tip,
+--                       hN 0.8, lies ~0.64 of this -- about 30 degrees)
+--   3  sheen            how much lighter a fully bent blade reads
+--   4  glow             the low sun through the tips at its most golden
+-- Tuned against screenshots, not derived; a probe zeroes one to A/B it.
+Voxel3D.GRASS_TUNE = { 0.57, 7.5, 0.7, 0.16 }
+-- 1  per-column flutter, 0..1 (tier 2): 0 = each tuft flutters as one card
+-- 2  dew, 0..1: how much of Wind.dew() reaches the shader (0 = none)
+-- 3  root shade, 0..1: the crowd darkens a blade's base (0 = none)
+-- 4  clumps, 0..1: the meadow's gentle brightness variation (0 = none)
+Voxel3D.GRASS_FX = { 1.0, 1.0, 0.30, 0.12 }
 -- Set by the grass pass right before its draws (nil = the default above),
 -- exactly like `snowTop` and `crush`: one value for a whole pass.
 Voxel3D.grassH = nil

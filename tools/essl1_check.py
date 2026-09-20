@@ -117,7 +117,7 @@ check(re.search(r"#ifdef\s+FRAG_HIGHP\s*\n\s*#define\s+VXFP\s+"
 # grows -- and the shadow half of it is here because leaving it out is
 # precisely what made 1.34.2-beta a wasted release.
 WANT = {
-    "varying VXFP vec3 vSun": "the sun lookup (shadow acne)",
+    "varying VXFP vec4 vSun": "the sun lookup (shadow acne)",
     "float voxelHash(VXFP vec3 p)": "the fog stipple and the ground grain",
     "float mistHash(VXFP vec2 p)": "the mist's sin hash",
     "float mistNoise(VXFP vec2 p)": "the mist's value noise",

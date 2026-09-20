@@ -2778,6 +2778,81 @@ return {
         tiles = { { 90, 91 }, { 25, 24 } } },
     },
 
+    -- The Pokemon Fan Club, inside (lib/VermilionHomeKit.lua, `club`): its own
+    -- plan, nobody else's -- no other map in the game hashes to it. The room
+    -- first, then the two couches: their cells are walkable (the fans and
+    -- their pets sit there), so they carry a standH the room must not.
+    INTERIOR = {
+      { id = "fan_club_room", home = "club", where = { 0, 0, 0, 0 },
+        maps = { POKEMON_FAN_CLUB = true },
+        tiles = {
+          { 52, 52, 19, 20, 52, 52, 52, 52, 52, 52, 52, 52, 19, 20, 52, 52 },
+          { 68, 68, 35, 36, 68, 49, 50, 50, 51, 68, 68, 68, 35, 36, 68, 68 },
+          { 31, 31, 31, 31, 31, 65, 66, 66, 67, 31, 31, 31, 31, 31, 31, 31 },
+          { 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31 },
+          { 31, 31, 31, 31, 31, 72, 74, 74, 74, 74, 73, 31, 31, 31, 31, 31 },
+          { 31, 31, 31, 31, 72, 64, 64, 17, 18, 64, 64, 73, 31, 31, 31, 31 },
+          { 31, 31, 61, 62, 77, 64, 64, 33, 34, 64, 64, 78, 61, 62, 31, 31 },
+          { 31, 31, 59, 60, 77, 64, 64, 91, 92, 64, 64, 78, 59, 60, 31, 31 },
+          { 31, 31, 61, 62, 63, 64, 64, 64, 64, 64, 64, 81, 61, 62, 31, 31 },
+          { 31, 31, 59, 60, 79, 63, 64, 64, 64, 64, 81, 82, 59, 60, 31, 31 },
+          { 31, 31, 31, 31, 31, 79, 75, 76, 76, 75, 82, 31, 31, 31, 31, 31 },
+          { 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31 },
+          { 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31 },
+          { 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31 },
+          { 31, 31, 31, 31, 70, 70, 70, 70, 31, 31, 31, 31, 31, 31, 31, 31 },
+          { 31, 31, 31, 31, 71, 71, 71, 71, 31, 31, 31, 31, 31, 31, 31, 31 },
+        } },
+      { id = "fan_club_couch_w", home = "couchW", where = { 2, 6, 2, 6 },
+        maps = { POKEMON_FAN_CLUB = true },
+        tiles = { { 61, 62 }, { 59, 60 }, { 61, 62 }, { 59, 60 } } },
+      { id = "fan_club_couch_e", home = "couchE", where = { 12, 6, 12, 6 },
+        maps = { POKEMON_FAN_CLUB = true },
+        tiles = { { 61, 62 }, { 59, 60 }, { 61, 62 }, { 59, 60 } } },
+    },
+
+    -- The three Lavender homes, inside (lib/LavenderHomeKit.lua). Every
+    -- town house is this one 16x16 plan, so `maps` is what keeps the kit in
+    -- Lavender; which of the three rooms stands is the map's business, not
+    -- the template's (three of Vermilion's homes ride the same three
+    -- templates: lib/VermilionHomeKit.lua, and Buildings picks the kit by map).
+    -- The seats are their own templates because their cells
+    -- are walkable and carry a standH the rest of the room must not.
+    HOUSE = {
+      { id = "lav_home_room", home = "room", where = { 0, 0, 0, 0 },
+        maps = { MR_FUJIS_HOUSE = true, LAVENDER_CUBONE_HOUSE = true,
+                 NAME_RATERS_HOUSE = true, VERMILION_OLD_ROD_HOUSE = true,
+                 VERMILION_TRADE_HOUSE = true, VERMILION_PIDGEY_HOUSE = true },
+        tiles = {
+          { 38, 41, 38, 41,  0,  0, 45, 46,  0,  0, 36, 36,  0,  0, 38, 41 },
+          { 14, 15, 14, 15,  0,  0, 61, 62,  0,  0, 52, 52,  0,  0, 48, 49 },
+          { 14, 15, 14, 15,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1, 48, 49 },
+          { 30, 31, 30, 31,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1, 30, 31 },
+          {  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1 },
+          {  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1 },
+          {  1,  1,  1,  1,  2,  3, 38, 39, 39, 41,  2,  3,  1,  1,  1,  1 },
+          {  1,  1,  1,  1, 18, 19, 54, 47, 47, 57, 18, 19,  1,  1,  1,  1 },
+          {  1,  1,  1,  1,  2,  3, 54, 47, 47, 57,  2,  3,  1,  1,  1,  1 },
+          {  1,  1,  1,  1, 18, 19, 60, 58, 58, 59, 18, 19,  1,  1,  1,  1 },
+          {  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1 },
+          {  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1 },
+          { 10, 11,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1, 10, 11 },
+          {  8,  9,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  8,  9 },
+          { 26, 27,  1,  1,  4,  4,  4,  4,  1,  1,  1,  1,  1,  1, 26, 27 },
+          { 24, 25,  1,  1, 20, 20, 20, 20,  1,  1,  1,  1,  1,  1, 24, 25 },
+        } },
+      { id = "lav_home_stools_w", home = "stoolsW", where = { 4, 6, 4, 6 },
+        maps = { MR_FUJIS_HOUSE = true, LAVENDER_CUBONE_HOUSE = true,
+                 NAME_RATERS_HOUSE = true, VERMILION_OLD_ROD_HOUSE = true,
+                 VERMILION_TRADE_HOUSE = true, VERMILION_PIDGEY_HOUSE = true },
+        tiles = { { 2, 3 }, { 18, 19 }, { 2, 3 }, { 18, 19 } } },
+      { id = "lav_home_stools_e", home = "stoolsE", where = { 10, 6, 10, 6 },
+        maps = { MR_FUJIS_HOUSE = true, LAVENDER_CUBONE_HOUSE = true,
+                 NAME_RATERS_HOUSE = true, VERMILION_OLD_ROD_HOUSE = true,
+                 VERMILION_TRADE_HOUSE = true, VERMILION_PIDGEY_HOUSE = true },
+        tiles = { { 2, 3 }, { 18, 19 }, { 2, 3 }, { 18, 19 } } },
+    },
+
     -- The Pokemon Tower's seven floors and Agatha's room (lib/CryptKit.lua,
     -- the CRYPT row). One cell per template; which model a cell gets is
     -- decided per placement by the kit's `signature` (which sides of a
@@ -3565,6 +3640,47 @@ return {
       { id = "terrace_pave", precinct = "pave",
         maps = { LAVENDER_TOWN = true }, where = { 22, 0, 39, 33 },
         tiles = { { 17, 17 }, { 17, 17 } } },
+      -- ------- BRIDGES AND PIERS (lib/BridgeKit.lua, `bridge`)
+      --
+      -- A whole cell of the plank tile ($3C): Route 12's pier, Nugget
+      -- Bridge, Vermilion's dock. Timber on piles with the water running
+      -- under it. Before Lavender's ground, whose pier cells these were.
+      { id = "bridge", bridge = true, grid = true,
+        tiles = { { 60, 60 }, { 60, 60 } } },
+      -- ------- THE REEF (lib/ReefKit.lua, `reef`)
+      --
+      -- A whole cell of water ($14). The kit says which grow something:
+      -- only cells with open water three cells all round, in patches. The
+      -- cell stays water (`overWater`), like a bridge's.
+      { id = "reef", reef = true, grid = true,
+        tiles = { { 20, 20 }, { 20, 20 } } },
+      -- ------- LAVENDER'S GROUND, and its roads' (lib/LavenderGroundKit.lua)
+      --
+      -- The town's checker and the grass, road, pier and brick of the three
+      -- routes that meet it, stood as one painted picture: flagged paths, a
+      -- lawn a voxel proud of them, lavender. `wild`: the template matches
+      -- ANY cell and the kit's data says which are ground (a dozen tile
+      -- patterns, every one already in it, each checked against the tiles it
+      -- was painted for). `maps` is the list the data was written for
+      -- (tools/lavender_ground.py MAPS); `grid` keeps a placement on the
+      -- cell grid. Tall grass, flower and sign cells are laid but not
+      -- claimed, so what stands in them still stands.
+      { id = "lavender_ground", lavground = true, wild = true, grid = true,
+        -- ...and VERMILION_CITY's, which is the same kit standing another
+        -- painter's picture (tools/vermilion_ground.py): brick and a quay.
+        maps = { LAVENDER_TOWN = true, ROUTE_8 = true, ROUTE_10 = true,
+                 ROUTE_12 = true, VERMILION_CITY = true, ROUTE_6 = true,
+                 ROUTE_11 = true },
+        tiles = { { 0, 0 }, { 0, 0 } } },
+      -- ------- VERMILION'S FENCES (lib/FenceKit.lua, `fence`)
+      --
+      -- The two-peg fence cell ($0E over $55), stood as a crossbuck timber
+      -- fence. AFTER the ground above on purpose: that kit lays a fence's
+      -- cell without claiming it, and this one then stands in what was laid.
+      -- Only Vermilion's and its two routes' -- the cell is every town's fence.
+      { id = "vermilion_fence", fence = true, grid = true,
+        maps = { VERMILION_CITY = true, ROUTE_6 = true, ROUTE_11 = true },
+        tiles = { { 14, 14 }, { 85, 85 } } },
       -- ------- LEDGES AS BANKS (lib/LedgeKit.lua, `bank`)
       --
       -- Every overworld cell that holds a hop-down ledge tile, as a census

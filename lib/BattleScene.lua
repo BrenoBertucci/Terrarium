@@ -500,7 +500,7 @@ function BattleScene.render(state, arena, textures, token)
     -- the wind blows through a staged fight too: the arena is a patch of
     -- the same meadow, shot from lower down, and grass that froze the
     -- moment a battle started would say so
-    local sway = Wind.amount()
+    local sway = math.max(Wind.amount(), Voxel3D.SWAY_FLOOR)
     local grassTex = atlasFor(host)
     local GrassMod = nil
     do
@@ -522,7 +522,6 @@ function BattleScene.render(state, arena, textures, token)
         lastArenaTok, didLand = tok, false
       end
       pcall(GrassMod.bindMap, host)
-      pcall(GrassMod.setFocus, arena.mid[1], arena.mid[2])
       if not didLand then
         pcall(GrassMod.splat, arena.player[1], arena.player[2], 22, 1.35)
         pcall(GrassMod.splat, arena.enemy[1], arena.enemy[2], 22, 1.35)
@@ -537,12 +536,11 @@ function BattleScene.render(state, arena, textures, token)
         { arena.player[1], arena.player[2], 20, 1.15, 0, 0 },
         { arena.enemy[1], arena.enemy[2], 20, 1.15, 0, 0 },
       }
+      -- The splats ride the uniform slots now, where a dent is RADIAL; on
+      -- the old crumb window a splat had no direction and lay along the
+      -- wind instead of away from the hit.
       local okc, c = pcall(GrassMod.crushFrame, feet, dt)
       if okc then Voxel3D.crush = c end
-      if GrassMod.mapState then
-        local okm, ms = pcall(GrassMod.mapState)
-        if okm then Voxel3D.crushMap = ms end
-      end
     end
     Voxel3D.draw(ChunkMesher.grass(host), grassTex, nil, pull, nil, sway)
     for _, nb in ipairs(neighbors) do

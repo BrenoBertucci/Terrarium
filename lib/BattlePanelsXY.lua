@@ -60,7 +60,7 @@ BattlePanelsXY.FIGHT_W = 6.2
 BattlePanelsXY.SMALL_W = 5.1         -- wider since the ball shares the pill
 BattlePanelsXY.BTN_YAW = math.rad(-12)
 BattlePanelsXY.BTN_CLOSE = 0.74
-BattlePanelsXY.UNSEL_ALPHA = 0.82
+BattlePanelsXY.UNSEL_ALPHA = 1
 BattlePanelsXY.UNSEL_MUL = 0.90
 BattlePanelsXY.UNSEL_SINK = -0.40
 BattlePanelsXY.UNSEL_CLOSE = 0.035
@@ -76,7 +76,7 @@ BattlePanelsXY.DEAL_FROM_SIDE = 3.8
 BattlePanelsXY.MSG_ENTER = 0.32        -- 0.7 -> 1.08 -> 1
 BattlePanelsXY.UNDERLINE = 0.25
 BattlePanelsXY.RIM_SCALE = 1.10
-BattlePanelsXY.RIM_ALPHA = 0.25
+BattlePanelsXY.RIM_ALPHA = 0.06
 
 -- the faces, in their own pixels; world height follows these aspects. The
 -- message canvas has headroom on purpose -- the pane inside it is sized to
@@ -265,76 +265,21 @@ local function drawButtonFace(slot, B, cmd, selected, W, H)
     slot.panePx = { bx, by, bw, bh }
     slot.paneR = r
 
+    if not BattleHudXY.uiSprite(selected and "selected" or "button", bx, by, bw, bh, true) then
+      g.setColor(unpack(BattleHudXY.PANEL))
+      g.rectangle("fill", bx, by, bw, bh)
+    end
+    local left = bx + 30
     if selected then
-      -- the bloom: expanding gold strokes fading out
-      for i = 3, 1, -1 do
-        g.setColor(GOLD[1], GOLD[2], GOLD[3], 0.07 * i)
-        g.setLineWidth(6 + i * 7)
-        g.rectangle("line", bx, by, bw, bh, r, r)
-      end
+      BattleHudXY.uiSprite("cursor", left, by + bh * 0.37, 18, bh * 0.26)
+      left = left + 30
     end
-    -- the capsule (concept 14): the box's own smoked charcoal, the
-    -- command's colour only as a low tint and on the rim -- the colour's
-    -- real carrier is the Poke Ball at the left
-    local P = B.PANEL
-    g.setColor(P[1], P[2], P[3], selected and 0.78 or 0.70)
-    g.rectangle("fill", bx, by, bw, bh, r, r)
-    g.setColor(c[1], c[2], c[3], selected and 0.30 or 0.22)
-    g.rectangle("fill", bx, by, bw, bh, r, r)
-    -- the glass's depth: a cool sheen over the crown, a darker foot
-    g.setColor(0.55, 0.62, 0.80, selected and 0.16 or 0.11)
-    g.rectangle("fill", bx + 3, by + 3, bw - 6, bh * 0.40, r, r)
-    g.setColor(0, 0, 0, 0.18)
-    g.rectangle("fill", bx + 3, by + bh * 0.70, bw - 6, bh * 0.30 - 3, r, r)
-    -- the rim: gold when chosen, the command's own colour when not
-    if selected then
-      g.setColor(GOLD[1], GOLD[2], GOLD[3], 0.95)
-      g.setLineWidth(6)
-    else
-      g.setColor(c[1] * 0.7 + 0.3, c[2] * 0.7 + 0.3, c[3] * 0.7 + 0.3, 0.9)
-      g.setLineWidth(4)
-    end
-    g.rectangle("line", bx, by, bw, bh, r, r)
-    g.setLineWidth(1)
-
-    -- the Poke Ball, tinted in the command's colour, at the left end
-    local d = bh * 0.64
-    local ballX = bx + bh * 0.52
-    local sel = selected and 1 or 0.85
-    pokeBall(g, ballX, by + bh * 0.5, d,
-             { c[1] * sel + (1 - sel) * 0.5, c[2] * sel + (1 - sel) * 0.5,
-               c[3] * sel + (1 - sel) * 0.5 }, selected and 1 or 0.9)
-
-    -- the label, the game's own word, right of the ball, shrunk to fit
-    -- the capsule's flat middle -- in Unova's font when the sheet is
-    -- loaded, with a shadow for depth on the smoked glass
-    local C = capsule()
-    local left = ballX + d * 0.5 + bh * 0.22
-    local maxw = bx + bw - bh * 0.45 - left
-    if C then
-      local kk = (bh * 0.50) / 9
-      local tw = C.textWidth(cmd.label) * kk
-      if tw > maxw and tw > 0 then
-        kk = kk * maxw / tw
-        tw = maxw
-      end
-      local lx = left + (maxw - tw) * 0.5
-      local lyy = by + (bh - 9 * kk) * 0.5
-      g.setColor(0, 0, 0, 0.7)
-      C.text(cmd.label, lx + 3, lyy + 3, kk)
-      g.setColor(1, 1, 1, selected and 1 or 0.9)
-      C.text(cmd.label, lx, lyy, kk)
-      g.setColor(1, 1, 1, 1)
-    else
-      local th = bh * 0.46
-      local tw = BattleHudXY.textWidth(cmd.label) * (th / 84)
-      if tw > maxw and tw > 0 then
-        th = th * maxw / tw
-        tw = maxw
-      end
-      outlineText(cmd.label, left + (maxw - tw) * 0.5, by + (bh - th) * 0.5,
-                  th, { 1, 1, 1, selected and 1 or 0.9 })
-    end
+    local maxw = bx + bw - 25 - left
+    local th = math.min(bh * 0.36,
+      maxw * 84 / math.max(1, BattleHudXY.textWidth(cmd.label)))
+    local tw = BattleHudXY.textWidth(cmd.label) * th / 84
+    BattleHudXY.text(cmd.label, left + (maxw - tw) * 0.5,
+      by + (bh - th) * 0.5, th, BattleHudXY.INK)
   end)
   if prevCanvas then g.setCanvas(prevCanvas) else g.setCanvas() end
   g.setBlendMode(prevBlend or "alpha", prevAlpha)
@@ -355,111 +300,30 @@ local function drawMsgFace(slot, B, msgLines, uFrac, showCaret)
     if not (ok and c) then return false end
     slot.canvas = c
   end
-
-  -- Unova type when the sheet is loaded (see BattleCapsule.text), the
-  -- HUD glyphs when it is not. Both paths measure first: the pane hugs
-  -- whichever font is speaking.
-  local C = capsule()
-  local th = 64
-  local padX, padY = 44, 30
-  local widest = 0
-  local ck = 6
-  if C then
-    for _, line in ipairs(msgLines) do
-      widest = math.max(widest, C.textWidth(line) * ck)
-    end
-  else
-    for _, line in ipairs(msgLines) do
-      widest = math.max(widest, BattleHudXY.textWidth(line) * (th / 84))
-    end
+  local th, pad = 40, 38
+  for _, line in ipairs(msgLines) do
+    th = math.min(th, (W - 2 * pad - 32) * 84 / math.max(1, BattleHudXY.textWidth(line)))
   end
-  local maxTextW = W - 2 * (padX + 16)
-  if widest > maxTextW and widest > 0 then
-    if C then ck = ck * maxTextW / widest end
-    th = th * maxTextW / widest
-    widest = maxTextW
-  end
-  local lineH = C and (9 * ck * 1.5) or (th * 1.42)
-  local n = #msgLines
-  local pw = math.max(280, widest + 2 * padX)
-  local ph = math.max(110, n * lineH + (n > 0 and 26 or 0) + 2 * padY)
-  local px = (W - pw) * 0.5
-  local py = (H - ph) * 0.5
-  -- where the pane landed, for the frost pass
-  slot.panePx = { px, py, pw, ph }
-  slot.paneR = 14
-
+  local lineH = th * 1.45
+  local ph = math.min(H - 24, math.max(116, #msgLines * lineH + pad * 2))
+  local px, py, pw = 12, (H - ph) * 0.5, W - 24
+  slot.panePx, slot.paneR = { px, py, pw, ph }, 0
   local prevCanvas = g.getCanvas()
   local prevBlend, prevAlpha = g.getBlendMode()
   local ok, err = pcall(function()
     g.setCanvas(slot.canvas)
     g.clear(0, 0, 0, 0)
     g.setBlendMode("alpha")
-    local r = 16
-    -- SMOKED glass, the capsules' own charcoal (B2W2 plates are dark):
-    -- the clear pane of the first kit put white type over whatever the
-    -- frost blurred behind it -- a pale floor, a blue mon -- and the
-    -- words dissolved. Dark enough that white reads on any floor, open
-    -- enough that the frost's blurred world still shows through.
-    local P = B.PANEL
-    g.setColor(P[1], P[2], P[3], 0.74)
-    g.rectangle("fill", px, py, pw, ph, r, r)
-    -- the glass's depth: a cool sheen down the top third, a darker foot
-    g.setColor(0.55, 0.62, 0.80, 0.14)
-    g.rectangle("fill", px + 3, py + 3, pw - 6, ph * 0.38, r, r)
-    g.setColor(0, 0, 0, 0.20)
-    g.rectangle("fill", px + 3, py + ph * 0.70, pw - 6, ph * 0.30 - 3, r, r)
-    -- the rim: the Game Boy text box's DOUBLE border, read as two thin
-    -- pale lines in the glass (concept 13) under a soft outer glow
-    g.setColor(0.75, 0.82, 1.00, 0.16)
-    g.setLineWidth(10)
-    g.rectangle("line", px, py, pw, ph, r, r)
-    g.setColor(0.90, 0.93, 1.00, 0.95)
-    g.setLineWidth(2.5)
-    g.rectangle("line", px, py, pw, ph, r, r)
-    g.setColor(0.90, 0.93, 1.00, 0.55)
-    g.setLineWidth(2)
-    g.rectangle("line", px + 9, py + 9, pw - 18, ph - 18, r - 7, r - 7)
-    g.setLineWidth(1)
-    -- the emblem: a Poke Ball sat on the top-left corner, over the rim
-    pokeBall(g, px + 8, py + 8, 38, { 0.90, 0.20, 0.22 }, 1)
-
-    local ly = py + padY
-    for _, line in ipairs(msgLines) do
-      if C then
-        -- a shadow a hair under the type, then the type: on smoked glass
-        -- white needs no outline, only a little depth
-        g.setColor(0, 0, 0, 0.75)
-        C.text(line, px + padX + 3, ly + 3, ck)
-        g.setColor(1, 1, 1, 1)
-        C.text(line, px + padX, ly, ck)
-      else
-        outlineText(line, px + padX, ly, th, B.TEXT)
-      end
-      ly = ly + lineH
+    if not BattleHudXY.uiSprite("dialogue", px, py, pw, ph, true) then
+      g.setColor(unpack(BattleHudXY.PANEL))
+      g.rectangle("fill", px, py, pw, ph)
     end
-    -- the advance arrow, the Game Boy's own: while the typewriter runs
-    -- it rides the end of the line (the caret's old post) and blinks;
-    -- settled, it waits at the bottom-right corner, where every Gen 1
-    -- box put it. `uFrac` (the old underline's clock) times the settle.
-    if n > 0 then
-      local s = math.max(10, lineH * 0.34)
-      if showCaret then
-        local last = msgLines[n]
-        local tw
-        if C then
-          tw = C.textWidth(last) * ck
-        else
-          tw = BattleHudXY.textWidth(last) * (th / 84)
-        end
-        advanceArrow(g, px + padX + tw + 10 + s * 0.6,
-                     ly - lineH + lineH * 0.42, s, { 1, 1, 1, 1 })
-      else
-        local settle = math.max(0, math.min(1, uFrac or 1))
-        advanceArrow(g, px + pw - padX * 0.55 - s * 0.6,
-                     py + ph - padY * 0.9 - s + (1 - settle) * 6, s,
-                     { 1, 1, 1, 0.55 + 0.45 * settle })
-      end
+    for i, line in ipairs(msgLines) do
+      BattleHudXY.text(line, px + pad, py + pad + (i - 1) * lineH,
+        th, BattleHudXY.INK)
+    end
+    if #msgLines > 0 and not showCaret then
+      advanceArrow(g, px + pw - 24, py + ph - 27, 10, BattleHudXY.INK)
     end
   end)
   if prevCanvas then g.setCanvas(prevCanvas) else g.setCanvas() end

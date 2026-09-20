@@ -597,6 +597,16 @@ function StreetLamps.lights(map, wx, wz, limit)
       d2 = dx * dx + dz * dz,
     }
   end
+  -- ...and the lanterns the buildings themselves hang out (a model's
+  -- `lights`, recorded by Buildings.stamp): a porch is a smaller flame than
+  -- a street lamp, so a tighter, softer pool. Read without building.
+  local okS, Structures = pcall(V.require, "Structures")
+  local S = okS and Structures and Structures.peek and Structures.peek(map)
+  for _, l in ipairs(S and S.lights or {}) do
+    local dx, dz = l.x - wx, l.z - wz
+    out[#out + 1] = { x = l.x, z = l.z, radius = StreetLamps.LIGHT_RADIUS * 0.7,
+                      power = lit * 0.8, d2 = dx * dx + dz * dz }
+  end
   table.sort(out, function(a, b) return a.d2 < b.d2 end)
   for i = #out, limit + 1, -1 do out[i] = nil end
   return out

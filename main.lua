@@ -71,6 +71,17 @@ local KEY_CAML  = "q"   -- C-left
 local KEY_CAMR  = "e"   -- C-right
 local KEY_CAMR2 = "r"   -- R: put the camera at my back
 local KEY_CAMZ  = "f"   -- C-down: the zoom ladder
+-- PARRY. `y` and not a Game Boy button, for two reasons that point the same
+-- way: every one of the eight GB buttons already means something on the frame
+-- a parry happens (A and B page the message the foe's swing is printing), and
+-- the concept board draws the prompt as "Y PARRY" -- so the letter on screen
+-- is the letter under the finger. Free of the engine's bindings
+-- (src/core/Input.lua binds z/return/space, x/backspace, kpenter/escape,
+-- tab/shifts and the arrows/wasd), of its 2-5, of upstream DRAMATIC_SHAPE's
+-- 3/5/6/7/8/9 and of every letter above. The pad's `y` is free too -- the
+-- engine's DEFAULT_GAMEPAD_BINDINGS claims only a/b/start/back and the
+-- shoulders -- and is wired through the input.gamepad hook below.
+local KEY_PARRY = "y"
 V.KEYS = {
   voxel = KEY_VOXEL, grid = KEY_GRID, tilt = KEY_TILT,
   curve = KEY_CURVE, battle = KEY_BATTLE, wild = KEY_WILD, map = KEY_MAP,
@@ -145,6 +156,9 @@ local Diag = V.require("Diag")
 local Wind = V.require("Wind")
 local Trees3D = V.require("Trees3D")
 local BattleDynamic = V.require("BattleDynamic")
+local BattleParry = V.require("BattleParry")
+local BattleCharge = V.require("BattleCharge")
+local CreaturePack = V.require("CreaturePack")
 local Water = V.require("Water")
 local WaterBody = V.require("WaterBody")
 local FloorArt = V.require("FloorArt")
@@ -174,6 +188,7 @@ local Sky = V.require("Sky")
 local GroundFX = V.require("GroundFX")
 local WorldMap3D = V.require("WorldMap3D")
 local WakeFX = V.require("WakeFX")
+local CloudShade = V.require("CloudShade")
 local Ecology = V.require("Ecology")
 local AmbientSound = V.require("AmbientSound")
 local Interiors = V.require("Interiors")
@@ -184,6 +199,7 @@ local Shelter = V.require("Shelter")
 local Routines = V.require("Routines")
 local AutoFarm = V.require("AutoFarm")
 local QoL = V.require("QoL")
+local StoryFixes = V.require("StoryFixes")
 local HiddenItems = V.require("HiddenItems")
 local ExpShare = V.require("ExpShare")
 local Comforts = V.require("Comforts")
@@ -417,6 +433,8 @@ mod.content.render_pipelines:register(PIPE_VOXEL, {
     -- and what the swimmers do to the water: the wake the sheet paints,
     -- the foam trail, the splash in and the drip out (lib/WakeFX.lua)
     WakeFX.update(dt, Voxel.active())
+    -- and the clouds' shadows crossing the ground downwind (lib/CloudShade.lua)
+    CloudShade.update(dt, Voxel.active())
     -- and what comes down off the roofs and the trees: slabs letting go of
     -- the eaves on their own, crowns shaken by a bump or a gust. Behind
     -- GroundFX (it reads the cover that tick wrote) and behind Wind for
@@ -484,6 +502,8 @@ mod.content.render_pipelines:register(PIPE_VOXEL, {
     Interiors.update()
     -- and the quality-of-life watchers (auto-repel), same tick, same gates
     QoL.update()
+    -- and the story events the engine can leave stuck (the LIFT KEY)
+    StoryFixes.update()
     -- how much fits in the bag, kept in step with the two rows. Polled for
     -- the same reason voidFill is: the value can move from the OPTIONS row,
     -- the mod manager and applyOptions on a load, and none of them says so.
@@ -855,6 +875,40 @@ local SETTINGS = {
     .. "corners. Safe to flip mid-battle; every piece falls back on its "
     .. "own.",
     full = true, when = function() return OverworldBattle.enabled() end },
+  -- The two rows that are RULES rather than dress, kept apart from DINAMICA
+  -- for that reason: everything on that row can be flipped without changing
+  -- what a turn does, and neither of these can.
+  { BattleParry.setting,
+    "The foe winds up before it swings, and Y (or the pad's Y) at the right "
+    .. "instant takes the sting out of the blow. A ring closes on your own "
+    .. "mon and the chip on the right names the incoming move: catch it "
+    .. "inside the gold band for GOOD (60% damage), catch it on the beat for "
+    .. "PERFECT (25%, and its CHARGE back). Each press costs CHARGE; one press "
+    .. "per swing -- mashing "
+    .. "spends it early. Missing, or never pressing, is exactly the damage "
+    .. "the game was always going to deal; nothing here can hurt you more "
+    .. "than it already did. DESLIGADO takes the wind-up away and the turn "
+    .. "resolves the instant it is chosen, as it always did.",
+    full = true, when = function() return OverworldBattle.enabled() end },
+  { BattleCharge.setting,
+    "CHARGE: the pip meter under your HP, and the fuel of the PARRY -- only "
+    .. "the parry. Moves are paid in PP, as they always were. Each parry "
+    .. "press spends two pips, every turn gives one back, and a PERFECT "
+    .. "refunds its two: read the foe on the beat and you can parry every "
+    .. "swing, land merely close and it is every other one. DESLIGADO hides "
+    .. "the meter and makes the parry free.",
+    full = true, when = function() return OverworldBattle.enabled() end },
+  { CreaturePack.setting,
+    "Which creatures the battle draws. NINTENDO is the Generation 5 sprite "
+    .. "pack in assets/mons -- what this mode has always shown, and what it "
+    .. "shows unless you say otherwise. LIVRE swaps in a shelf of 411 monsters "
+    .. "from Tuxemon, a libre monster-catching game: original designs, CC "
+    .. "BY-SA, credited by artist, and the only art here that could actually "
+    .. "ship inside a package. Each species is paired with one of them by its "
+    .. "OWN element and how far along its line it stands, so a first-form fire "
+    .. "type gets a first-form fire creature and keeps it for good. Either way "
+    .. "the fight is the same fight -- only the drawing changes.",
+    full = true },
   { Water.setting,
     "The water surface as geometry rather than a scrolling picture: it "
     .. "rises and falls on two crossing swells, cel-shaded into flat "
@@ -952,6 +1006,19 @@ local SETTINGS = {
     .. "follows the RES row so a phone never raymarches what it cannot "
     .. "afford; at 1/4 the clouds switch off with the other ornaments.",
     full = true },
+  -- `full = true` like CLOUDS: the shade IS the clouds, seen from below.
+  -- Offered only while the CLOUDS row has a deck to throw one.
+  { CloudShade.setting,
+    "The shadows of the clouds, crossing the ground downwind. A soft patch "
+    .. "of shade takes the sun off a field and leaves the sky's cool light, "
+    .. "the way a cast shadow does, so the lake goes dull and bright again "
+    .. "as the deck passes. Follows the CLOUDS row's coverage -- a few "
+    .. "patches on a fair day, a mostly-shaded ground with bright gaps as "
+    .. "a front builds, and none under a flat overcast, where there are no "
+    .. "patches to throw. Costs nothing you can measure: one smooth field, "
+    .. "evaluated per vertex.",
+    full = true,
+    when = function() return Sky.cloudAmount() > 0 or CloudShade.enabled() end },
   -- `full = true` like WEATHER, and for the same reason: what the ground is
   -- doing after a shower is what the world is doing, not a knob on the
   -- camera. Offered only while the WEATHER row can produce something to
@@ -1567,6 +1634,11 @@ do
   local inner = Game.keypressed
 
   function Game:keypressed(key)
+    -- Ahead of the claim table and ahead of the free-roam deference below: a
+    -- parry is answered only while a window is actually open, and while one
+    -- is open the press belongs to nothing else on the stack. Swallowed on a
+    -- hit so the same press cannot also page the message the foe is printing.
+    if key == KEY_PARRY and BattleParry.press() then return end
     local claim = HOTKEYS[key]
     local top = self.stack and self.stack:top()
     -- A screen with its own key handler gets the key first, exactly as the
@@ -1868,6 +1940,15 @@ mod.events:on("mod.options_changed", function(payload)
   -- battle module's gate (the OPTIONS row applies inside its own step)
   if payload.key == "battledyn" then
     pcall(BattleDynamic.onOptionsChanged, payload.value)
+  end
+  if payload.key == "battleparry" then
+    pcall(BattleParry.onOptionsChanged, payload.value)
+  end
+  if payload.key == "battlecharge" then
+    pcall(BattleCharge.onOptionsChanged, payload.value)
+  end
+  if payload.key == "creatures" then
+    pcall(CreaturePack.onOptionsChanged, payload.value)
   end
   -- 3D-BTL switched on from the manager's page pins BATTLE LAYOUT exactly as
   -- the OPTIONS row does. The manager persists its own value; this is the one
@@ -2202,6 +2283,58 @@ mod.hooks:wrap("input.step", function(next, game, dt)
   return out
 end)
 
+-- The pad's half of the parry key. Taken at EVENT time like the keyboard's,
+-- and before next(): a press the parry answers must not also reach Input,
+-- where the face buttons are GB A/B on some pads and the message under the
+-- foe's wind-up would page away under the same finger.
+--
+-- Select+Y is the engine's display chord (GamepadMap.displayChordDigit), so a
+-- held Select hands the press straight back rather than parrying with it.
+-- ------- a pipeline that fails is gone for the session: write down WHY
+--
+-- The engine's Pipelines.guard catches a throw from a render pipeline, marks
+-- it broken "for this session" and drops the frame to the flat 2D path. The
+-- reason goes to the console and to Runtime.errors -- both die with the
+-- process. A player without --console sees the diorama fall to 2D, finds the
+-- V key can no longer bring it back (the level moves, the broken flag does
+-- not), and by the next launch the cause is gone. That happened on
+-- 2026-09-19 somewhere in the Cubone's-mother event and could not be
+-- reproduced afterwards. So this mod's reported errors are also kept in its
+-- own playthrough storage (mod_storage/<version>/<playthrough>/TERRARIUM/
+-- errors): the last ten, newest last, with the map they happened on.
+do
+  local okR, Runtime = pcall(require, "src.mods.Runtime")
+  if okR and Runtime and Runtime.reportError and mod.storage then
+    local innerReport = Runtime.reportError
+    Runtime.reportError = function(modId, message)
+      if modId == mod.id then
+        pcall(function()
+          local game = require("src.core.Game")
+          local got = mod.storage:read(game, "errors")
+          local list = type(got) == "table" and got or {}
+          local ow = game.overworld
+          list[#list + 1] = {
+            at = os.date("%Y-%m-%d %H:%M:%S"),
+            map = tostring(ow and ow.map and ow.map.id or "?"),
+            what = tostring(message),
+          }
+          while #list > 10 do table.remove(list, 1) end
+          mod.storage:write(game, "errors", list)
+        end)
+      end
+      return innerReport(modId, message)
+    end
+  end
+end
+
+mod.hooks:wrap("input.gamepad", function(next, game, ev)
+  if ev and ev.phase == "pressed" and ev.button == KEY_PARRY
+     and not (game and game.input and game.input:isDown("select")) then
+    if BattleParry.press() then return end
+  end
+  return next(game, ev)
+end)
+
 -- The blind roll, switched off exactly where this feature has replaced it.
 --
 -- encounter.roll is the engine's own seam for it (OverworldState:rollEncounter
@@ -2358,7 +2491,7 @@ end)
 -- first so this cannot drift again: this literal sat five minors behind the
 -- manifest, and in a feature-encoded form the versioning rules in CHANGELOG.md
 -- forbid outright (`.snow.1` -- features live in the changelog, not here).
-mod.exports.version = mod.version or "1.36.0-beta"
+mod.exports.version = mod.version or "1.37.0-beta"
 -- exposed so a companion mod can pin its own tiles' shapes or read the
 -- camera without reaching into this mod's file layout
 mod.exports.lib = V

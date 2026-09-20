@@ -406,40 +406,12 @@ function Grass3D.instanceForTile(tx, ty)
   }
 end
 
--- Crush points for the grass pass this frame: player + roamers that are
--- walking on tall grass. Populated by Grass3D.gatherCrush from VoxelScene
--- and sent into the scene shader as up to 8 packed vec4s.
--- Eight slots, not four: the first few are feet standing in the meadow
--- right now and the rest are the TRAIL behind them (see crushFrame).
+-- Crush points for the grass pass this frame, built by crushFrame from the
+-- feet VoxelScene gathers and sent into the scene shader as up to 8 packed
+-- vec4s: the first few are feet standing in the meadow right now and the
+-- rest are the crumbs just behind them.
 local crush = { n = 0, p = {} }
 for i = 1, 8 do crush.p[i] = { 0, 0, 0, 0, 0, 0 } end
-
-function Grass3D.clearCrush()
-  crush.n = 0
-end
-
--- Add a foot at world (wx, wz). `strength` 0..1, `radius` world px.
--- Optional pushDir {dx,dz} is the walk bearing so the shader can open a
--- wake ahead of the foot, not only a radial dent.
-function Grass3D.addCrush(wx, wz, radius, strength, pushDir)
-  if crush.n >= 8 then return end
-  crush.n = crush.n + 1
-  local p = crush.p[crush.n]
-  p[1] = tonumber(wx) or 0
-  p[2] = tonumber(wz) or 0
-  p[3] = tonumber(radius) or 10
-  p[4] = tonumber(strength) or 1
-  if type(pushDir) == "table" then
-    p[5] = tonumber(pushDir[1]) or 0
-    p[6] = tonumber(pushDir[2]) or 0
-  else
-    p[5], p[6] = 0, 0
-  end
-end
-
-function Grass3D.crushCount()
-  return crush.n
-end
 
 -- ------- and the part a per-frame list cannot do: SPRING-BACK
 --
@@ -503,28 +475,13 @@ Grass3D.TRAIL_STEP = 6        -- world px a foot travels between crumbs
 Grass3D.TRAIL_TTL = 6.0       -- seconds a crumb takes to fade out entirely
 Grass3D.TRAIL_STR = 1.15      -- how hard a crumb lies, against the foot's own
 Grass3D.TRAIL_RAD = 14        -- world px -- path wide enough to read as a wake
-Grass3D.TRAIL_MAX = 4         -- crumbs packed as uniforms when the map is off
-
--- ------- the crush MAP (trail lives here; live feet stay on uniforms)
---
--- Eight vec4 uniforms is a compile-time ceiling. Four of them are live
--- feet and four are crumbs, so the whole trail is 4 * TRAIL_STEP = 24
--- world pixels -- a plank and a half -- and a fifth walker flattens
--- nothing. A small field in world XZ, written on the CPU and sampled
--- once per vertex, is the trail the comment above actually asked for.
--- Live feet stay on uniforms: that is what the underdamped spring is
--- for, and a single decay on a field cannot do the kick.
---
--- ImageData + Image, not a new render target. 128*128 is 16 KB; a
--- canvas switch on the target UHD is the cost this is written to avoid.
--- Vertex-texture fetch is the same contract waterField already pays.
--- grassDetail 0, or a driver that will not make the image, keeps the
--- uniform trail exactly as it was (see tests/grass_crush_offline.lua,
--- PINNED_HASH).
-Grass3D.MAP_RES = 128
-Grass3D.MAP_WORLD = 384       -- 3 world px / texel; ~2 GB screens
-Grass3D.TRACK_MAX = 32        -- CPU tracks when the map is on
-Grass3D.TRAIL_CPU = 96        -- crumbs kept when the map is on
+-- The crumbs are only the first seconds behind a foot: four of them, on
+-- uniforms, fading down onto GrassWear's LAID field, which holds the rest
+-- of the path for minutes at a cell a texel (see GrassWear.lay). That
+-- field replaced a 384 px window of crumbs this file used to rebuild from
+-- scratch every frame, texel by texel, and upload whole even with nobody
+-- walking.
+Grass3D.TRAIL_MAX = 4         -- crumbs packed as uniforms
 Grass3D.GRASS_CUT = 6         -- sprite-cut in tall grass (waterline twin)
 
 -- live slots: { x, z, r, s, v, tgt, seen, lx, lz, pdx, pdz (walk bearing) }
@@ -532,45 +489,11 @@ local tracks = {}
 -- crumbs: { x, z, r, s0, t, pdx, pdz }
 local trail = {}
 
--- Crush map (CPU field, uploaded when a real Image can be made).
-local mapForce = nil          -- nil = Quality.grassDetail, true/false = test
-local mapOx, mapOz = 0, 0
-local mapFocus = false
-local mapS, mapDx, mapDz, mapLive = {}, {}, {}, {}
-local mapIdata, mapImg = nil, nil   -- nil untried, false unavailable
 local mapBound = nil          -- current overworld map, for grassCut
 local seenThisFrame = 0
 
-local function mapWanted()
-  if mapForce == false then return false end
-  if mapForce == true then return true end
-  local ok, Q = pcall(V.require, "Quality")
-  if ok and Q and Q.grassDetail then
-    local d = tonumber(Q.grassDetail())
-    return d ~= nil and d >= 1
-  end
-  return false
-end
-
-function Grass3D.setMapEnabled(v)
-  mapForce = v
-end
-
-function Grass3D.mapWanted()
-  return mapWanted()
-end
-
 function Grass3D.bindMap(map)
   mapBound = map
-end
-
-function Grass3D.setFocus(wx, wz)
-  wx, wz = tonumber(wx) or 0, tonumber(wz) or 0
-  local texel = Grass3D.MAP_WORLD / Grass3D.MAP_RES
-  local half = Grass3D.MAP_WORLD * 0.5
-  mapOx = math.floor((wx - half) / texel) * texel
-  mapOz = math.floor((wz - half) / texel) * texel
-  mapFocus = true
 end
 
 function Grass3D.grassCut(wx, wz, baseCut)
@@ -606,152 +529,6 @@ local function unit2(dx, dz)
   return dx / len, dz / len
 end
 
-local function splatTexel(wx, wz, radius, strength, pdx, pdz)
-  if strength < Grass3D.CRUSH_KEEP then return end
-  local res = Grass3D.MAP_RES
-  local texel = Grass3D.MAP_WORLD / res
-  local cx = (wx - mapOx) / texel
-  local cz = (wz - mapOz) / texel
-  local rt = radius / texel
-  if rt < 0.5 then rt = 0.5 end
-  local x0 = math.max(0, math.floor(cx - rt))
-  local x1 = math.min(res - 1, math.ceil(cx + rt))
-  local z0 = math.max(0, math.floor(cz - rt))
-  local z1 = math.min(res - 1, math.ceil(cz + rt))
-  local r2 = rt * rt
-  local fade = res * 0.08
-  for tz = z0, z1 do
-    for tx = x0, x1 do
-      local dx, dz = (tx + 0.5) - cx, (tz + 0.5) - cz
-      local d2 = dx * dx + dz * dz
-      if d2 < r2 then
-        local dist = math.sqrt(d2)
-        local u = dist / rt
-        local ring = u * (1.0 - u) * 4.0
-        local t = (1.0 - u)
-        t = t * t * (0.55 + 0.45 * ring) * strength
-        local edge = 1
-        if tx < fade then edge = tx / fade end
-        if tx > res - 1 - fade then
-          local e = (res - 1 - tx) / fade
-          if e < edge then edge = e end
-        end
-        if tz < fade then
-          local e = tz / fade
-          if e < edge then edge = e end
-        end
-        if tz > res - 1 - fade then
-          local e = (res - 1 - tz) / fade
-          if e < edge then edge = e end
-        end
-        t = t * edge
-        local idx = tz * res + tx
-        if t > (mapS[idx] or 0) then
-          if (mapS[idx] or 0) == 0 then
-            mapLive[#mapLive + 1] = idx
-          end
-          mapS[idx] = t
-          mapDx[idx] = pdx or 0
-          mapDz[idx] = pdz or 0
-        end
-      end
-    end
-  end
-end
-
-local function uploadMap(prevLive)
-  if not (love and love.image and love.image.newImageData
-          and love.graphics and love.graphics.newImage) then
-    return
-  end
-  if mapIdata == false then return end
-  if mapIdata == nil then
-    local ok, d = pcall(love.image.newImageData, Grass3D.MAP_RES, Grass3D.MAP_RES)
-    if not (ok and d) then
-      mapIdata = false
-      mapImg = false
-      return
-    end
-    mapIdata = d
-  end
-  if mapImg == false then return end
-  local function put(idx, r, g, b)
-    local res = Grass3D.MAP_RES
-    local x, z = idx % res, math.floor(idx / res)
-    pcall(mapIdata.setPixel, mapIdata, x, z, r, g, b, 1)
-  end
-  if prevLive then
-    for i = 1, #prevLive do
-      local idx = prevLive[i]
-      if (mapS[idx] or 0) == 0 then put(idx, 0, 0.5, 0.5) end
-    end
-  end
-  for i = 1, #mapLive do
-    local idx = mapLive[i]
-    local s = mapS[idx] or 0
-    if s > 1 then s = 1 end
-    put(idx, s,
-        ((mapDx[idx] or 0) * 0.5) + 0.5,
-        ((mapDz[idx] or 0) * 0.5) + 0.5)
-  end
-  if mapImg == nil then
-    local ok, img = pcall(love.graphics.newImage, mapIdata)
-    if not (ok and img) then
-      mapImg = false
-      return
-    end
-    pcall(img.setFilter, img, "linear", "linear")
-    pcall(img.setWrap, img, "clamp", "clamp")
-    mapImg = img
-    return
-  end
-  if mapImg.replacePixels then
-    pcall(mapImg.replacePixels, mapImg, mapIdata)
-  else
-    local ok, img = pcall(love.graphics.newImage, mapIdata)
-    if ok and img then
-      if mapImg.release then pcall(mapImg.release, mapImg) end
-      pcall(img.setFilter, img, "linear", "linear")
-      pcall(img.setWrap, img, "clamp", "clamp")
-      mapImg = img
-    end
-  end
-end
-
-local function rebuildMap()
-  local prev = mapLive
-  for i = 1, #mapLive do
-    local idx = mapLive[i]
-    mapS[idx], mapDx[idx], mapDz[idx] = 0, 0, 0
-  end
-  mapLive = {}
-  for i = 1, #trail do
-    local c = trail[i]
-    local k = 1 - c.t / Grass3D.TRAIL_TTL
-    if k > 0 then
-      local s = c.s0 * k * k
-      if s >= Grass3D.CRUSH_KEEP then
-        splatTexel(c.x, c.z, c.r, s, c.pdx or 0, c.pdz or 0)
-      end
-    end
-  end
-  local sent = 0
-  for i = 1, #tracks do
-    local t = tracks[i]
-    if math.abs(t.s) >= Grass3D.CRUSH_KEEP then
-      sent = sent + 1
-      -- extras (past the uniform live budget) still flatten where they
-      -- stand. Positive only: a negative is the spring kick, and that
-      -- kick is a uniform's job -- putting it on the trail field would
-      -- make a crumb overshoot.
-      if sent > Grass3D.CRUSH_LIVE and t.s > 0 then
-        splatTexel(t.x, t.z, t.r, t.s, t.pdx or 0, t.pdz or 0)
-      end
-    end
-  end
-  uploadMap(prev)
-end
-
 -- One frame of foot-crush from the poses already gathered for the draw.
 -- `feet` is a list of { x, z, radius, strength [, pdx, pdz] } in world
 -- pixels -- what VoxelScene builds -- and what comes back is the `{ n, p }`
@@ -761,9 +538,7 @@ function Grass3D.crushFrame(feet, dt)
   dt = tonumber(dt) or 0
   if dt < 0 then dt = 0 elseif dt > 0.1 then dt = 0.1 end
 
-  local mapOn = mapWanted()
-  local trackCap = mapOn and Grass3D.TRACK_MAX or Grass3D.CRUSH_LIVE
-  local trailCap = mapOn and Grass3D.TRAIL_CPU or Grass3D.TRAIL_MAX
+  local trackCap, trailCap = Grass3D.CRUSH_LIVE, Grass3D.TRAIL_MAX
 
   for i = 1, #tracks do tracks[i].tgt, tracks[i].seen = 0, false end
 
@@ -781,20 +556,6 @@ function Grass3D.crushFrame(feet, dt)
       local ddx, ddz = x - (t.lx or x), z - (t.lz or z)
       local step = Grass3D.TRAIL_STEP
       local crumbR, crumbS = Grass3D.TRAIL_RAD, Grass3D.TRAIL_STR
-      -- Speed from the displacement the track already stores. The mod has
-      -- no bicycle and the isRunning flags in this tree are the script
-      -- runner, so this is the only honest speed. Map-off leaves the
-      -- constants alone: that path is pinned (tests/grass_crush_offline).
-      if mapOn and dt > 1e-4 then
-        local spd = math.sqrt(ddx * ddx + ddz * ddz) / dt
-        t.speed = spd
-        local k = spd / 60
-        if k < 0.45 then k = 0.45 elseif k > 2.2 then k = 2.2 end
-        step = Grass3D.TRAIL_STEP / k
-        crumbR = Grass3D.TRAIL_RAD * (0.75 + 0.30 * k)
-        crumbS = Grass3D.TRAIL_STR * (0.70 + 0.35 * k)
-        r = r * (0.80 + 0.25 * k)
-      end
       if ddx * ddx + ddz * ddz >= step * step then
         local pdx, pdz = unit2(ddx, ddz)
         if fdx * fdx + fdz * fdz > 0.01 then pdx, pdz = unit2(fdx, fdz) end
@@ -816,7 +577,7 @@ function Grass3D.crushFrame(feet, dt)
              and mapBound:isGrassCell(ncx, ncz) then
             local oka, Amb = pcall(V.require, "AmbientSound")
             if oka and Amb and Amb.playGrass then
-              pcall(Amb.playGrass, x, z)
+              pcall(Amb.playGrass, x, z, s)   -- s: how hard the foot lands
             end
           end
         end
@@ -881,19 +642,6 @@ function Grass3D.crushFrame(feet, dt)
     end
   end
 
-  if mapOn then
-    if not mapFocus then
-      for i = 1, #tracks do
-        if tracks[i].seen then
-          Grass3D.setFocus(tracks[i].x, tracks[i].z)
-          break
-        end
-      end
-    end
-    rebuildMap()
-  end
-  mapFocus = false
-
   crush.n = 0
   for i = 1, #tracks do
     if crush.n >= Grass3D.CRUSH_LIVE then break end
@@ -907,24 +655,18 @@ function Grass3D.crushFrame(feet, dt)
       p[5], p[6] = t.pdx or 0, t.pdz or 0
     end
   end
-  -- Trail crumbs stay on uniforms only when the map is off (detail 0)
-  -- or the image could not be made. Newest first, same square fade.
-  -- A working map already holds every crumb; packing them again would
-  -- double-flatten the near path and spend the vertex loop we just freed.
-  local packTrail = not (mapOn and mapImg)
-  if packTrail then
-    for i = #trail, 1, -1 do
-      if crush.n >= Grass3D.CRUSH_SLOTS then break end
-      local c = trail[i]
-      local k = 1 - c.t / Grass3D.TRAIL_TTL
-      if k > 0 then
-        local s = c.s0 * k * k
-        if s >= Grass3D.CRUSH_KEEP then
-          crush.n = crush.n + 1
-          local p = crush.p[crush.n]
-          p[1], p[2], p[3], p[4] = c.x, c.z, c.r, s
-          p[5], p[6] = c.pdx or 0, c.pdz or 0
-        end
+  -- Trail crumbs after the live feet, newest first, same square fade.
+  for i = #trail, 1, -1 do
+    if crush.n >= Grass3D.CRUSH_SLOTS then break end
+    local c = trail[i]
+    local k = 1 - c.t / Grass3D.TRAIL_TTL
+    if k > 0 then
+      local s = c.s0 * k * k
+      if s >= Grass3D.CRUSH_KEEP then
+        crush.n = crush.n + 1
+        local p = crush.p[crush.n]
+        p[1], p[2], p[3], p[4] = c.x, c.z, c.r, s
+        p[5], p[6] = c.pdx or 0, c.pdz or 0
       end
     end
   end
@@ -952,16 +694,6 @@ function Grass3D.trailSpan()
   return best
 end
 
-function Grass3D.sampleMap(wx, wz)
-  local res = Grass3D.MAP_RES
-  local texel = Grass3D.MAP_WORLD / res
-  local x = ((tonumber(wx) or 0) - mapOx) / texel
-  local z = ((tonumber(wz) or 0) - mapOz) / texel
-  if x < 0 or z < 0 or x >= res or z >= res then return 0 end
-  local ix, iz = math.floor(x), math.floor(z)
-  return mapS[iz * res + ix] or 0
-end
-
 function Grass3D.splat(wx, wz, radius, strength, pushDir)
   local pdx, pdz = 0, 0
   if type(pushDir) == "table" then
@@ -974,38 +706,7 @@ function Grass3D.splat(wx, wz, radius, strength, pushDir)
     s0 = tonumber(strength) or 1,
     t = 0, pdx = pdx, pdz = pdz,
   }
-  local cap = mapWanted() and Grass3D.TRAIL_CPU or Grass3D.TRAIL_MAX
-  while #trail > cap do table.remove(trail, 1) end
-end
-
-function Grass3D.shaderCost(detail, crushers)
-  detail = tonumber(detail) or 2
-  crushers = tonumber(crushers) or 1
-  local slots = 8
-  if detail <= 0 then slots = 3
-  elseif detail == 1 then slots = 5
-  end
-  local map = mapForce ~= false and detail >= 1
-  if mapForce == false then map = false end
-  if not map then
-    local live = math.min(crushers, Grass3D.CRUSH_LIVE)
-    local packed = math.min(live + Grass3D.TRAIL_MAX, 8)
-    return { distances = math.min(packed, slots), taps = 0, slots = slots }
-  end
-  local live = math.min(crushers, Grass3D.CRUSH_LIVE)
-  return { distances = math.min(live, slots), taps = 1, slots = slots }
-end
-
-function Grass3D.mapState()
-  if not mapWanted() then return nil end
-  if not mapImg then return nil end
-  return {
-    img = mapImg,
-    on = 1,
-    ox = mapOx, oz = mapOz,
-    ix = 1 / Grass3D.MAP_WORLD,
-    iz = 1 / Grass3D.MAP_WORLD,
-  }
+  while #trail > Grass3D.TRAIL_MAX do table.remove(trail, 1) end
 end
 
 function Grass3D.clearTracks()
@@ -1013,61 +714,15 @@ function Grass3D.clearTracks()
   trail = {}
   crush.n = 0
   seenThisFrame = 0
-  for i = 1, #mapLive do
-    local idx = mapLive[i]
-    mapS[idx], mapDx[idx], mapDz[idx] = 0, 0, 0
-  end
-  mapLive = {}
 end
 
 function Grass3D.crushAt(i)
   return crush.p[i]
 end
 
--- Pull crush points off the overworld: the player always, and any roamer
--- that is currently stepping (moving) near grass. Best-effort -- a missing
--- module costs nothing.
-function Grass3D.gatherCrush(state)
-  Grass3D.clearCrush()
-  if not state then return end
-  local function faceDir(facing)
-    if facing == "right" then return 1, 0 end
-    if facing == "left"  then return -1, 0 end
-    if facing == "down"  then return 0, 1 end
-    if facing == "up"    then return 0, -1 end
-    return 0, 0
-  end
-  local player = state.player
-  if player and player.x and player.y then
-    -- feet at sprite centre; wider + directed while moving so the meadow
-    -- parts into a corridor instead of only dimming under the boot
-    local moving = player.moving or player.walkTimer or false
-    local str = moving and 1.25 or 0.7
-    local rad = moving and 17 or 12
-    local pdx, pdz = faceDir(player.facing or player.dir)
-    Grass3D.addCrush(player.x + 8, player.y + 8, rad, str, { pdx, pdz })
-  end
-  local ok, Roamer = pcall(V.require, "Roamer")
-  if ok and Roamer and Roamer.forEach then
-    pcall(Roamer.forEach, function(r)
-      if not r or not r.x then return end
-      if crush.n >= 8 then return end
-      local moving = r.moving or r.step
-      local str = moving and 1.1 or 0.5
-      local rad = moving and 15 or 11
-      local pdx, pdz = faceDir(r.facing or r.dir)
-      Grass3D.addCrush((r.x or 0) + 8, (r.y or 0) + 8, rad, str, { pdx, pdz })
-    end)
-  end
-end
-
 function Grass3D.dropGPU()
   if tex and tex ~= false and tex.release then pcall(tex.release, tex) end
   tex = nil
-  if mapImg and mapImg ~= false and mapImg.release then
-    pcall(mapImg.release, mapImg)
-  end
-  mapImg, mapIdata = nil, nil
   -- template is CPU data; keep it. Only GPU image drops.
 end
 

@@ -162,6 +162,12 @@ end
 --   Q4 crumb min=0.0000
 --   Q5 hash=283233725 (map-off path unchanged)
 --   Q6 detail2x8: distances=4 taps=1  weighted=4.60
+-- And after the map was RETIRED (2026-09-18): the 384 px crumb window is
+-- gone and the long path is GrassWear's laid field, a texel a cell (see
+-- tests/grass_wear_offline.lua, LAID). What is left here is the uniform
+-- path at every tier -- the one Q5 pins -- so Q1 is back to the plank and
+-- Q2 to CRUSH_LIVE live feet; the rest of a walk and of a crowd is the
+-- laid field's.
 
 print("=== grass_crush_offline ===")
 print(("    CRUSH_SLOTS=%s CRUSH_LIVE=%s TRAIL_MAX=%s TRAIL_STEP=%s TRAIL_TTL=%s")
@@ -194,8 +200,8 @@ print("    BEFORE=24.00 px (4*TRAIL_STEP). AFTER: crumb-list span of the walk.")
 check("walk laid at least one crumb", crumbs >= 1,
       ("crumbs=%d"):format(crumbs))
 if Grass3D.trailSpan then
-  check("trail is longer than the old 24 px plank",
-        (spanApi or 0) >= 100,
+  check("the crumbs cover the first stretch behind the foot",
+        (spanApi or 0) >= 18,
         ("span=%.2f"):format(spanApi or 0))
 end
 
@@ -231,7 +237,8 @@ print(("    packet slots with effect=%d  crushersSeen=%s  trailCount=%d")
       :format(liveN, tostring(Grass3D.crushersSeen and Grass3D.crushersSeen()),
               Grass3D.trailCount()))
 if Grass3D.crushersSeen then
-  check("all 8 walkers register an effect", registered >= 8,
+  check("the live feet take the first CRUSH_LIVE walkers",
+        registered == Grass3D.CRUSH_LIVE,
         ("crushersSeen=%d"):format(registered))
 end
 -- BEFORE: CRUSH_LIVE=4 so at most 4 tracks, plus 4 crumbs, 8 slots packed

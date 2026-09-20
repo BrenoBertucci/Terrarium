@@ -206,6 +206,49 @@ return {
       fov = 33, frames = 12, flat = true },
   },
 
+  -- The three Lavender homes (lib/LavenderHomeKit.lua) are 128x128 rooms
+  -- cut dollhouse-style for the Mart's eye -- but a FIXED shot still turns to
+  -- follow the player, and from the Mart's distance a player at the door
+  -- tips the north wall (the window, the picture: the room's whole face)
+  -- out of frame. Further back and higher the swing is 8 degrees, not 13,
+  -- and the wall's cornice stays in from the door to the bookcases.
+  MR_FUJIS_HOUSE = {
+    { x = 64, z = 64, bx = 64, bz = 64, mode = "fixed",
+      camX = 64, camY = 140, camZ = 330, focY = 30,
+      fov = 28, frames = 12, flat = true },
+  },
+  LAVENDER_CUBONE_HOUSE = {
+    { x = 64, z = 64, bx = 64, bz = 64, mode = "fixed",
+      camX = 64, camY = 140, camZ = 330, focY = 30,
+      fov = 28, frames = 12, flat = true },
+  },
+  NAME_RATERS_HOUSE = {
+    { x = 64, z = 64, bx = 64, bz = 64, mode = "fixed",
+      camX = 64, camY = 140, camZ = 330, focY = 30,
+      fov = 28, frames = 12, flat = true },
+  },
+  -- Vermilion's three (lib/VermilionHomeKit.lua): the same room, the same eye.
+  VERMILION_OLD_ROD_HOUSE = {
+    { x = 64, z = 64, bx = 64, bz = 64, mode = "fixed",
+      camX = 64, camY = 140, camZ = 330, focY = 30,
+      fov = 28, frames = 12, flat = true },
+  },
+  VERMILION_TRADE_HOUSE = {
+    { x = 64, z = 64, bx = 64, bz = 64, mode = "fixed",
+      camX = 64, camY = 140, camZ = 330, focY = 30,
+      fov = 28, frames = 12, flat = true },
+  },
+  VERMILION_PIDGEY_HOUSE = {
+    { x = 64, z = 64, bx = 64, bz = 64, mode = "fixed",
+      camX = 64, camY = 140, camZ = 330, focY = 30,
+      fov = 28, frames = 12, flat = true },
+  },
+  POKEMON_FAN_CLUB = {
+    { x = 64, z = 64, bx = 64, bz = 64, mode = "fixed",
+      camX = 64, camY = 140, camZ = 330, focY = 30,
+      fov = 28, frames = 12, flat = true },
+  },
+
   POKEMON_TOWER_1F = {
     { x = 160, z = 144, bx = 160, bz = 144, mode = "fixed",
       camX = 160, camY = 150, camZ = 420, focY = 8,

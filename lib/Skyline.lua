@@ -379,8 +379,17 @@ function Skyline.draw(state, cx, cy, vh)
   if p.mesh then
     local pr, pg, pb = inkColor(haze, Skyline.FADE_END)
     love.graphics.setColor(pr, pg, pb, 1)
-    Voxel3D.draw(p.mesh, nil,
-                 Mat4.translate(p.ox, -Skyline.SINK - 2, p.oz))
+    -- BELOW THE DEEPEST WATER BED, not merely below the ground. At -4 the
+    -- plate was an opaque lid over every basin in Kanto: the bed (Water.BED,
+    -- -5 down to -13) and everything standing on it failed the depth test
+    -- against it, and what showed through the water sheet was this plate's
+    -- haze. Nobody had ever seen the bed from above.
+    local plateY = -Skyline.SINK - 2
+    local okW, Water = pcall(V.require, "Water")
+    for _, b in ipairs(okW and Water and Water.BED or {}) do
+      if b - 3 < plateY then plateY = b - 3 end
+    end
+    Voxel3D.draw(p.mesh, nil, Mat4.translate(p.ox, plateY, p.oz))
   end
 
   for _, e in ipairs(WorldAtlas.beyond(state)) do

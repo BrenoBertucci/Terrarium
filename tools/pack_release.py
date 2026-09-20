@@ -13,12 +13,17 @@
 #   * files added since the last zip are picked up from an explicit list, so
 #     a new module cannot be left out silently.
 #
-#   python tools/pack_release.py 1.36.0-beta
-import io, os, sys, zipfile
+#   * (1.37.0-beta) NOTHING SHIPS THAT GIT DOES NOT TRACK. The 1.36.0-beta zip
+#     still carried interface art that had been taken out of the repository,
+#     and assets/mons + assets/roamers sit on the authoring disk as ignored
+#     PNGs. `git ls-files` is the last word: stage first, then pack.
+#
+#   git add -A && python tools/pack_release.py 1.37.0-beta
+import io, os, subprocess, sys, zipfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-VERSION = sys.argv[1] if len(sys.argv) > 1 else "1.36.0-beta"
-PREV = os.path.join(ROOT, "publish-zip", "TERRARIUM-1.35.0-beta.zip")
+VERSION = sys.argv[1] if len(sys.argv) > 1 else "1.37.0-beta"
+PREV = os.path.join(ROOT, "publish-zip", "TERRARIUM-1.36.0-beta.zip")
 OUT = os.path.join(ROOT, "publish-zip", "TERRARIUM-%s.zip" % VERSION)
 
 DROP_PREFIXES = ("probe_out_", "publish-zip/")
@@ -39,12 +44,26 @@ ADDED = [
     "lib/WakeFX.lua",
 ]
 
+TRACKED = set(subprocess.run(["git", "-c", "core.quotepath=off", "ls-files"], cwd=ROOT, check=True,
+                             capture_output=True, text=True, encoding="utf-8").stdout.splitlines())
+# everything the mod loads at run time and the last zip did not have
+RUNTIME = ("lib/", "data/", "assets/", "compat/")
+
 prev = zipfile.ZipFile(PREV)
 names = [n[len("TERRARIUM/"):] for n in prev.namelist() if not n.endswith("/")]
 keep = [n for n in names if not n.startswith(DROP_PREFIXES)]
 for n in ADDED:
     if n not in keep:
         keep.append(n)
+fresh = sorted(n for n in TRACKED if n.startswith(RUNTIME) and n not in keep)
+keep.extend(fresh)
+print("new runtime files since the last zip: %d" % len(fresh))
+untracked = sorted(n for n in keep if n not in TRACKED and os.path.isfile(os.path.join(ROOT, n)))
+if untracked:
+    print("left out, git does not track them: %d" % len(untracked))
+    for n in untracked[:12]:
+        print("   ", n)
+keep = [n for n in keep if n in TRACKED]
 
 # Every lib/*.lua has to ship. The first 1.34 zip left out Diag.lua and
 # the mod would not have loaded on the device it was built for.

@@ -577,6 +577,12 @@ local function driveBed(key, want, dt, pitch)
   end
 end
 
+-- Where a bed's level sits right now, 0..1 (probe seam).
+function AmbientSound.bedLevel(key)
+  local bed = beds[key]
+  return (bed and bed.level) or 0
+end
+
 -- Tag a bed's world anchor for this frame. Cleared when level falls away.
 local function anchorBed(key, wx, wy, wz, opts)
   local bed = beds[key]
@@ -629,32 +635,69 @@ local function playThunder(volume, pitch)
   end
 end
 
--- Tall-grass rustle. A couple of clones so two walkers (or a step that
--- lands before the last one finished) do not cut each other off.
-local grassVoices = nil
+-- The gust's grains (see tick): per second at a full gale on the crest of a
+-- patch in a meadow, and how loud each is against a step. Counted for probes.
+AmbientSound.GUST_GRAINS = 4.0
+AmbientSound.GUST_GRAIN_GAIN = 0.30
+AmbientSound.gustGrains = 0
+local gustGrainDue = 0
 
-function AmbientSound.playGrass(wx, wz)
+-- Tall-grass rustle. Three clones per POOL so two walkers (or a step that
+-- lands before the last one finished) do not cut each other off -- and the
+-- gust's grains (below, in tick) get a pool of their own, so a gale over
+-- the meadow can never steal the voice of the step you just took.
+local grassVoices = {}
+
+local function grassPool(pool)
+  local list = grassVoices[pool]
+  if list ~= nil then return list or nil end
+  local base = sourceFor("grass", AmbientSound.GRASS)
+  if not base then
+    grassVoices[pool] = false
+    return nil
+  end
+  list = {}
+  for _ = 1, 3 do
+    local ok, clone = pcall(base.clone, base)
+    if ok and clone then list[#list + 1] = clone end
+  end
+  grassVoices[pool] = list
+  return list
+end
+
+-- How wet the blades are, 0..1: dew, rain on them, or a meadow still soaked
+-- after the rain. Wet grass does not hiss, it swishes -- softer and duller.
+local function bladesWet()
+  local w = tonumber(Wind.grassWet) or 0
+  local okd, dew = pcall(Wind.dew)
+  if okd and tonumber(dew) and dew > w then w = dew end
+  local okg, G = pcall(V.require, "GroundFX")
+  if okg and G and G.wetness then
+    local okw, gw = pcall(G.wetness)
+    if okw and tonumber(gw) and gw > w then w = gw end
+  end
+  return math.min(1, w)
+end
+
+-- `strength` is the foot's crush strength (1.25 a step, more on a bike --
+-- VoxelScene's foot()): a bicycle tearing through lands harder and
+-- brighter than a boot. `gain` scales the whole thing and `pool` picks the
+-- voices; both are for the gust's grains.
+function AmbientSound.playGrass(wx, wz, strength, gain, pool)
   if not love.audio then return end
   if not AmbientSound.enabled() then return end
-  if grassVoices == nil then
-    local base = sourceFor("grass", AmbientSound.GRASS)
-    if not base then
-      grassVoices = false
-      return
-    end
-    grassVoices = { base }
-    for _ = 2, 3 do
-      local ok, clone = pcall(base.clone, base)
-      if ok and clone then grassVoices[#grassVoices + 1] = clone end
-    end
-  end
-  if not grassVoices then return end
-  for _, src in ipairs(grassVoices) do
+  local voices = grassPool(pool or "step")
+  if not voices then return end
+  local k = math.max(0.6, math.min(1.4, (tonumber(strength) or 1.25) / 1.25))
+  local wet = bladesWet()
+  for _, src in ipairs(voices) do
     local ok, playing = pcall(src.isPlaying, src)
     if not (ok and playing) then
       pcall(src.setVolume, src,
-            AmbientSound.GAIN * sfxScale() * AmbientSound.GRASS.gain)
-      pcall(src.setPitch, src, 0.92 + (math.random() * 0.16))
+            AmbientSound.GAIN * sfxScale() * AmbientSound.GRASS.gain
+            * k * (1 - 0.3 * wet) * (tonumber(gain) or 1))
+      pcall(src.setPitch, src, (0.92 + (math.random() * 0.16))
+                               * (1 + 0.25 * (k - 1)) * (1 - 0.12 * wet))
       if wx and wz and SpatialAudio and SpatialAudio.place then
         pcall(SpatialAudio.place, src, wx, 0, wz)
       else
@@ -715,8 +758,10 @@ function AmbientSound.silence()
   if type(thunderVoices) == "table" then
     for _, src in ipairs(thunderVoices) do pcall(src.stop, src) end
   end
-  if type(grassVoices) == "table" then
-    for _, src in ipairs(grassVoices) do pcall(src.stop, src) end
+  for _, list in pairs(grassVoices) do
+    if list then
+      for _, src in ipairs(list) do pcall(src.stop, src) end
+    end
   end
   if type(splashVoices) == "table" then
     for _, src in ipairs(splashVoices) do pcall(src.stop, src) end
@@ -1035,11 +1080,12 @@ local function tick(dt)
   -- continuous level the rest of the mod reads (0..~4 in auto), scaled so a
   -- moderate breeze is a full bed and OFF is silence. Outdoor only -- a room
   -- has no air moving past the microphone.
-  local windWant = 0
+  local windWant, windPitch = 0, 1
   local wdx, wdz = 1, 0
+  local amt, front, meadow = 0, 0.72, 0
   if outdoor then
-    local okA, amt = pcall(Wind.amount)
-    amt = (okA and tonumber(amt)) or 0
+    local okA, a = pcall(Wind.amount)
+    amt = (okA and tonumber(a)) or 0
     -- 3.2 is a "steady outdoor breeze" on the amount scale used by the grass
     windWant = math.max(0, math.min(1, amt / 3.2))
     if snowing then
@@ -1048,10 +1094,66 @@ local function tick(dt)
     end
     wdx = (Wind.DIR and Wind.DIR[1]) or 1
     wdz = (Wind.DIR and Wind.DIR[2]) or 0
+    -- How much of the ground around the listener is tall grass: wind over
+    -- a meadow is the meadow's own sound, over a street it is only air.
+    if ow.map.isGrassCell then
+      local cx0, cy0 = ow.player.cellX or 0, ow.player.cellY or 0
+      local n, g = 0, 0
+      for dy = -3, 2 do
+        for dx = -3, 3 do
+          n = n + 1
+          local okc, isG = pcall(ow.map.isGrassCell, ow.map, cx0 + dx, cy0 + dy)
+          if okc and isG then g = g + 1 end
+        end
+      end
+      meadow = g / n
+    end
+    -- And the GUST PATCH over the listener: the same field the grass bends
+    -- to (Wind.patchAt), so the air swells as the patch you watch crossing
+    -- the meadow crosses you, and falls back in the lull behind it. Only
+    -- ever DOWN from the level above -- full on the crest, ~60% in the
+    -- deepest lull -- because a gale already sits at the ceiling, and a
+    -- swell multiplied in above it would be clipped flat exactly when it
+    -- matters most.
+    local okP, patch = pcall(Wind.patchAt, px, pz, Wind.phase())
+    front = 0.72 + 0.28 * ((okP and tonumber(patch)) or 0)
+    local crestK = (front - 0.44) / 0.56
+    windWant = windWant * (0.6 + 0.4 * crestK) * (0.85 + 0.15 * meadow)
+    windPitch = 0.95 + 0.08 * crestK
   end
   -- upwind of the player: the air arrives from where the dust is blown
   anchorBed("wind", px - wdx * 56, 14, pz - wdz * 56, { ref = 48, max = 200 })
-  driveBed("wind", windWant, dt)
+  driveBed("wind", windWant, dt, windPitch)
+
+  -- ------- the meadow itself, in a gust
+  --
+  -- The bed is AIR. What a gust does to a meadow is make the blades hiss
+  -- against each other in a hundred places at once, and that is grass. So
+  -- on the crest of a patch, grains of the step's own rustle -- quiet, spread
+  -- in pitch, in their own voices -- land on tall-grass cells around the
+  -- listener at a rate that follows the patch and the gale: the gust you
+  -- see run across the field is heard running across it. No new recording.
+  if outdoor and meadow > 0 and amt > 0 then
+    local crest = math.max(0, (front - 0.6) / 0.4)
+    gustGrainDue = gustGrainDue + dt * AmbientSound.GUST_GRAINS
+                   * crest * meadow * math.min(1, amt / 4)
+    while gustGrainDue >= 1 do
+      gustGrainDue = gustGrainDue - 1
+      for _ = 1, 4 do
+        local cx = (ow.player.cellX or 0) + math.random(-4, 4)
+        local cy = (ow.player.cellY or 0) + math.random(-3, 2)
+        local okc, isG = pcall(ow.map.isGrassCell, ow.map, cx, cy)
+        if okc and isG then
+          AmbientSound.playGrass(cx * 16 + 8, cy * 16 + 8, 1.0,
+                                 AmbientSound.GUST_GRAIN_GAIN, "gust")
+          AmbientSound.gustGrains = AmbientSound.gustGrains + 1
+          break
+        end
+      end
+    end
+  else
+    gustGrainDue = 0
+  end
 
   -- ------- water and waves
   --
@@ -1204,7 +1306,7 @@ function AmbientSound.invalidate()
   end
   sources = {}
   thunderVoices = nil
-  grassVoices = nil
+  grassVoices = {}
 end
 
 pcall(function()

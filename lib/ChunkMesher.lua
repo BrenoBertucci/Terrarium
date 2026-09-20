@@ -94,6 +94,11 @@ local INSET = 0.02
 -- the same energy.
 local VOLUME_TOP_SHADE = 0.85
 
+-- Tall grass is a roof over its own floor, so the gaps between its cards
+-- must not expose a brighter green than the blades above. This is baked
+-- with the ground quad because the floor never needs to change per frame.
+ChunkMesher.GRASS_BASE_SHADE = 0.72
+
 local cache = {}     -- map id -> { full = mesh|false, body = ..., grass = ... }
 local gen = {}       -- map id -> generation, bumped by invalidate/evict
 
@@ -504,10 +509,42 @@ local function runGeometry(map, bodyOnly, masks, sink, waterSink)
   local BED_TILES = Water.BED_TILES or 2
   local DEEP = #BED * BED_TILES
   local shore = {}
+  -- `clearWater` (lib/ReefKit.lua through Buildings.stamp): over a reef the
+  -- SHEET reads as this many tiles from a bank however far out it lies --
+  -- lagoon water, thin enough to see the garden through. The bed keeps its
+  -- real depth (bedAt reads `shore` itself), so there is room for it.
+  -- ...and it thins TOWARD a garden rather than at its edge: the value
+  -- spreads CLEAR_REACH tiles out, a tile further from the bank each step,
+  -- so lagoon water fades into the deep instead of stopping in a square.
+  local clear = {}
+  do
+    local CLEAR_MAX, CLEAR_STEP = 5.6, 1.2
+    local queue, head = {}, 1
+    for k, c in pairs(S.clearWater or {}) do
+      clear[k] = c
+      queue[#queue + 1] = k
+    end
+    while queue[head] do
+      local k = queue[head]
+      head = head + 1
+      local c = clear[k] + CLEAR_STEP
+      if c <= CLEAR_MAX then
+        for _, m in ipairs({ k - 1, k + 1, k - 4096, k + 4096 }) do
+          if c < (clear[m] or 1e9) then
+            clear[m] = c
+            queue[#queue + 1] = m
+          end
+        end
+      end
+    end
+  end
   local function shoreOf(tx, ty, own)
-    local d = shore[keyOf(tx, ty)]
+    local k = keyOf(tx, ty)
+    local d = shore[k]
     if d == nil then return own end
-    if d < 0 then return DEEP end
+    if d < 0 then d = DEEP end
+    local c = clear[k]
+    if c and d > c then d = c end
     return d
   end
   -- the least distance of the four tiles meeting at a corner (dx, dy =
@@ -531,8 +568,16 @@ local function runGeometry(map, bodyOnly, masks, sink, waterSink)
     return BED[step]
   end
 
+  -- A BRIDGE's cell (lib/BridgeKit.lua, `overWater` through Buildings.stamp)
+  -- is claimed and is water all the same: it takes a bed and a surface like
+  -- the water either side, so the water runs under the deck instead of
+  -- stopping at a bank. The value is the water tile it wears.
+  local spans = S.overWater or {}
+  local SPAN = { class = "water", h = Water.BASE or -2 }
+
   local function heightAt(tx, ty)
     local k = keyOf(tx, ty)
+    if spans[k] then return bedAt(tx, ty) end
     if S.skip[k] then return 0 end
     local run = S.runs[k]
     if run then return run.h end
@@ -753,7 +798,7 @@ local function runGeometry(map, bodyOnly, masks, sink, waterSink)
         local inBody = tx >= 0 and ty >= 0 and tx < tw and ty < th
         if not inBody and masked(tx * 8, ty * 8, tx * 8 + 8, ty * 8 + 8) then
           s = nil
-        elseif s and s.class == "water" and not S.skip[k] then
+        elseif spans[k] or (s and s.class == "water" and not S.skip[k]) then
           shore[k] = -1
         elseif s or S.skip[k] then
           shore[k] = 0
@@ -800,12 +845,18 @@ local function runGeometry(map, bodyOnly, masks, sink, waterSink)
         s = nil
       end
 
-      if s and S.skip[k] then
+      if spans[k] and s then s, tile = SPAN, spans[k] end
+
+      if s and S.skip[k] and s ~= SPAN then
         -- an object stands here; paint its synthesized ground and let the
         -- prebuilt prism quads (appended below) carry the art
         local g = S.ground[k]
         if g then
-          topQuad(tx * 8, ty * 8, 0, g, 1)
+          -- ...unless the model is a floor that hides all of it (`covers`,
+          -- Buildings.stamp): the shoreline bands below still stand
+          if not (S.covered and S.covered[k]) then
+            topQuad(tx * 8, ty * 8, 0, g, 1)
+          end
           -- the claimed tile is still ground at height 0, and water next
           -- door still recesses below it: without the same below-ground
           -- side bands ordinary ground emits, the two-pixel shoreline
@@ -931,7 +982,11 @@ local function runGeometry(map, bodyOnly, masks, sink, waterSink)
             topTile = S.tileAt[keyOf(tx, row)]
           end
           topQuad(x0, z0, h, topTile,
-                  s.art == "upright" and VOLUME_TOP_SHADE or 1)
+                  s.art == "upright" and VOLUME_TOP_SHADE
+                  or (s.art == "grass" and inBody
+                      and map:isGrassCell(math.floor(tx / 2),
+                                          math.floor(ty / 2)))
+                     and ChunkMesher.GRASS_BASE_SHADE or 1)
         end
 
         -- sides: 8px bands wherever the neighbour is lower. Band k spans
@@ -1010,7 +1065,7 @@ local function runGeometry(map, bodyOnly, masks, sink, waterSink)
         -- vShore. Same keep rules as the bed: this branch already dropped
         -- the tile if the ring rules said so.
         if isWater then
-          local own = shoreOf(tx, ty, DEEP)
+          local own = shoreOf(tx, ty, DEEP)   -- (a reef's own tile: its clear water)
           local u0, u1, v0, v1 = uvRect(tile, 0, 8)
           local base = Water.BASE or -2
           local ws = waterSink or sink
@@ -1275,20 +1330,55 @@ end
 -- surfaced the moment the Mart became the second (both stand in every one
 -- of eight towns). Grouping is by sheet path, so the common case is still
 -- one group and one draw.
+ChunkMesher.SPRITE_CHUNK = 128          -- world pixels a side (8 cells)
+ChunkMesher.SPRITE_CHUNK_OVER = 20000   -- quads on a sheet before it is cut
+
+-- Is any of a cut sprite group's box inside the view box `b`
+-- ({ x0, z0, x1, z1 }, the one Voxel3D.drawGroup culls terrain chunks by)?
+-- The same test, with the same northward reach for what stands tall.
+function ChunkMesher.spriteInBox(g, b)
+  local s = g and g.box
+  if not (s and b) then return true end
+  return s[3] >= b[1] and s[1] <= b[3]
+     and s[4] + math.max(s[5], 0) >= b[2] and s[2] <= b[4]
+end
+
 local function buildSpriteMesh(map)
   local qs = Structures.forMap(map).spriteQuads
   if not qs or #qs == 0 then return nil end
+  -- ...and a sheet that covers a whole ROUTE -- a pier's timber, a lake's
+  -- garden, a town's ground: hundreds of thousands of quads -- is cut into
+  -- SPRITE_CHUNK-pixel squares, each its own mesh with its own box, so the
+  -- scene can leave out what is not in frame (VoxelScene's sprite loop). As
+  -- one mesh the water garden alone cost Route 12 three milliseconds a
+  -- frame, all of it for plants a hundred cells off screen.
+  local counts = {}
+  for _, q in ipairs(qs) do counts[q.tex] = (counts[q.tex] or 0) + 1 end
+  local CH = ChunkMesher.SPRITE_CHUNK
   local order, byTex = {}, {}
   for _, q in ipairs(qs) do
     Budget.tick()
     local path = q.tex
-    local g = byTex[path]
+    local key = path
+    if (counts[path] or 0) > ChunkMesher.SPRITE_CHUNK_OVER then
+      key = path .. ":" .. math.floor(q[1][1] / CH) .. ":" .. math.floor(q[1][3] / CH)
+    end
+    local g = byTex[key]
     if not g then
-      g = { path = path, quads = {} }
-      byTex[path] = g
+      g = { path = path, quads = {}, boxed = key ~= path,
+            x0 = 1e9, z0 = 1e9, x1 = -1e9, z1 = -1e9, ymax = 0 }
+      byTex[key] = g
       order[#order + 1] = g
     end
     g.quads[#g.quads + 1] = q
+    for i = 1, 4 do
+      local c = q[i]
+      if c[1] < g.x0 then g.x0 = c[1] end
+      if c[1] > g.x1 then g.x1 = c[1] end
+      if c[3] < g.z0 then g.z0 = c[3] end
+      if c[3] > g.z1 then g.z1 = c[3] end
+      if c[2] > g.ymax then g.ymax = c[2] end
+    end
   end
   local okB, Buildings = pcall(V.require, "Buildings")
   local groups = {}
@@ -1302,7 +1392,10 @@ local function buildSpriteMesh(map)
     if g.path and okB and Buildings and Buildings.spriteImage then
       tex = Buildings.spriteImage(g.path)
     end
-    groups[#groups + 1] = { mesh = sink.finish(), tex = tex, path = g.path }
+    local out = { mesh = sink.finish(), tex = tex, path = g.path }
+    -- `box`: only a cut sheet carries one; a whole-map mesh is always drawn
+    if g.boxed then out.box = { g.x0, g.z0, g.x1, g.z1, g.ymax } end
+    groups[#groups + 1] = out
   end
   return groups
 end
