@@ -275,10 +275,14 @@ local function drawButtonFace(slot, B, cmd, selected, W, H)
       left = left + 30
     end
     local maxw = bx + bw - 25 - left
+    -- `cmd.label` is a FUNCTION (see BattleBoxXY's `label()`): the word is
+    -- picked when the chip is drawn, so the LANGUAGE row reaches it without
+    -- anything having to rebuild COMMANDS.
+    local word = cmd.label()
     local th = math.min(bh * 0.36,
-      maxw * 84 / math.max(1, BattleHudXY.textWidth(cmd.label)))
-    local tw = BattleHudXY.textWidth(cmd.label) * th / 84
-    BattleHudXY.text(cmd.label, left + (maxw - tw) * 0.5,
+      maxw * 84 / math.max(1, BattleHudXY.textWidth(word)))
+    local tw = BattleHudXY.textWidth(word) * th / 84
+    BattleHudXY.text(word, left + (maxw - tw) * 0.5,
       by + (bh - th) * 0.5, th, BattleHudXY.INK)
   end)
   if prevCanvas then g.setCanvas(prevCanvas) else g.setCanvas() end

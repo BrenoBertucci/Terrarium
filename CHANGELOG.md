@@ -26,6 +26,34 @@ Tags and packages:
 
 ## Unreleased
 
+### A LANGUAGE row for the three places this mod writes its own words
+
+- **`lib/Lang.lua` (new):** a `ModSetting`-backed `LANGUAGE` row and
+  `Lang.pick(en, pt)`. **English is the default**, because it is what those
+  words already said: the 5X pack's buttons carried their own English text
+  and left the repository with the rest of the Nintendo-derived art in
+  1.37.0-beta, what replaced them is the concept board's wording, and the
+  engine's own start menu prints ITEM in English right beside the row this
+  mod adds. PORTUGUES is for a save running under a Portuguese translation
+  mod, where those three would otherwise be the only English on the screen.
+  Nothing the engine prints -- dialogue, item names, the flat menus this
+  mod silences -- goes through here.
+- **`lib/BattleBoxXY.lua`:** the four command buttons. `label` is now a
+  FUNCTION, called at draw time, so the row reaches it without rebuilding
+  `COMMANDS` -- and every reader calls it: the UI-kit path, the no-art
+  fallback, and `BattlePanelsXY`'s floating chip. The Portuguese words keep
+  the pairing the English ones were chosen for: TROCAR on the slot that
+  swaps the mon, FUGIR on the one that runs.
+- **`lib/BattleScreenXY.lua`:** the bag's pocket tabs, through a new
+  `pocketLabel(key)` in place of the fixed `POCKET_LABEL` table.
+- **`lib/StartMenuMap.lua`:** the MAP row, through a new `label()`. The
+  never-twice check that kept the row from being inserted into one menu
+  twice used to compare LABELS, which a language switch breaks; the row
+  carries a mark now and the check reads that.
+- `tests/bagxy_headless.lua` loads the real `Lang` (not a stub) and reads
+  all three call sites in both languages -- the pocket tabs, the four
+  command labels, and the MAP row.
+
 ### COMBAT grows to four levels -- DINAMICA, CLASSICA, MINIMA, DESLIGADA -- to make room for other battle UIs
 
 Added mainly so a different battle-UI mod (Kanto Gear, for one) has a

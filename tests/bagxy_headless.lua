@@ -13,7 +13,16 @@ local V = {
   path = HERE .. "/..",
   mod = { log = { warn = function() end } },
 }
+local loaded = {}
 function V.require(n)
+  -- the real thing for these two: the pocket tabs pick their word through
+  -- Lang, and a stub that always answers English would test the stub
+  if n == "Lang" or n == "ModSetting" then
+    if not loaded[n] then
+      loaded[n] = assert(loadfile(HERE .. "/../lib/" .. n .. ".lua"))(V)
+    end
+    return loaded[n]
+  end
   if n == "BattleHudXY" then
     return {
       available = function() return true end,
@@ -49,10 +58,39 @@ expect(BattleScreenXY.POCKET_ORDER[2], "cura", "pocket 2 cura")
 expect(BattleScreenXY.POCKET_ORDER[3], "balls", "pocket 3 balls")
 expect(BattleScreenXY.POCKET_ORDER[4], "tm", "pocket 4 tm")
 expect(#BattleScreenXY.POCKET_ORDER, 4, "four pockets")
-expect(BattleScreenXY.POCKET_LABEL.items, "ITENS", "label ITENS")
-expect(BattleScreenXY.POCKET_LABEL.cura, "CURA", "label CURA")
-expect(BattleScreenXY.POCKET_LABEL.balls, "BOLAS", "label BOLAS")
-expect(BattleScreenXY.POCKET_LABEL.tm, "TM/HM", "label TM/HM")
+-- the pocket tabs, in both languages: English is the default (values[1] of
+-- Lang.setting, and what an unread stored value falls back to), Portuguese
+-- is one sync away. The four keys are internal and never change.
+local Lang = V.require("Lang")
+expect(Lang.get(), "en", "language defaults to en")
+expect(BattleScreenXY.pocketLabel("items"), "ITEMS", "EN label ITEMS")
+expect(BattleScreenXY.pocketLabel("cura"), "MEDICINE", "EN label MEDICINE")
+expect(BattleScreenXY.pocketLabel("balls"), "BALLS", "EN label BALLS")
+expect(BattleScreenXY.pocketLabel("tm"), "TM/HM", "EN label TM/HM")
+Lang.setting:sync("pt")
+expect(BattleScreenXY.pocketLabel("items"), "ITENS", "PT label ITENS")
+expect(BattleScreenXY.pocketLabel("cura"), "CURA", "PT label CURA")
+expect(BattleScreenXY.pocketLabel("balls"), "BOLAS", "PT label BOLAS")
+expect(BattleScreenXY.pocketLabel("tm"), "TM/HM", "PT label TM/HM")
+
+-- the battle command buttons read their word the same way, and every
+-- reader of COMMANDS[i].label must CALL it -- a string there is what broke
+-- three draw sites the first time this row was wired
+local BattleBoxXY = assert(loadfile(HERE .. "/../lib/BattleBoxXY.lua"))(V)
+expect(type(BattleBoxXY.COMMANDS[1].label), "function", "label is a function")
+expect(BattleBoxXY.COMMANDS[2].label(), "TROCAR", "PT switch says TROCAR")
+expect(BattleBoxXY.COMMANDS[4].label(), "FUGIR", "PT run says FUGIR")
+Lang.setting:sync("en")
+expect(BattleBoxXY.COMMANDS[1].label(), "ATTACK", "EN fight says ATTACK")
+expect(BattleBoxXY.COMMANDS[2].label(), "SWITCH", "EN pkmn says SWITCH")
+expect(BattleBoxXY.COMMANDS[3].label(), "ITEMS", "EN bag says ITEMS")
+expect(BattleBoxXY.COMMANDS[4].label(), "FLEE", "EN run says FLEE")
+
+local StartMenuMap = assert(loadfile(HERE .. "/../lib/StartMenuMap.lua"))(V)
+expect(StartMenuMap.label(), "MAP", "EN map row says MAP")
+Lang.setting:sync("pt")
+expect(StartMenuMap.label(), "MAPA", "PT map row says MAPA")
+Lang.setting:sync("en")
 expect(type(BattleScreenXY.BAG_GOLD), "table", "BAG_GOLD")
 
 local BattleNav = assert(loadfile(HERE .. "/../lib/BattleNav.lua"))(V)

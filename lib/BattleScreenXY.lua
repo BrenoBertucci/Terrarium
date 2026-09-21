@@ -60,6 +60,8 @@
 -- the mod namespace (see main.lua): V.require loads a sibling module
 local V = ...
 
+local Lang = V.require("Lang")
+
 local BattleScreenXY = {}
 
 BattleScreenXY.ENABLED = true
@@ -429,9 +431,19 @@ end
 local POCKET_ORDER = { "items", "cura", "balls", "tm" }
 BattleScreenXY.POCKET_ORDER = POCKET_ORDER
 
-BattleScreenXY.POCKET_LABEL = {
+local POCKET_LABEL_PT = {
   items = "ITENS", cura = "CURA", balls = "BOLAS", tm = "TM/HM",
 }
+local POCKET_LABEL_EN = {
+  items = "ITEMS", cura = "MEDICINE", balls = "BALLS", tm = "TM/HM",
+}
+
+-- The pocket tab's own word, in whichever language Lang.setting is on.
+-- `key` is the internal pocket key from POCKET_ORDER, not display text.
+function BattleScreenXY.pocketLabel(key)
+  local labels = Lang.isPT() and POCKET_LABEL_PT or POCKET_LABEL_EN
+  return labels[key]
+end
 
 local STATUS_PP_HEAL = {
   ANTIDOTE = true, BURN_HEAL = true, ICE_HEAL = true, AWAKENING = true,
@@ -858,7 +870,7 @@ local function drawBag(game, scr, shot)
                          ty + (thh - ih * s) * 0.5, 0, s, s)
     else
       local lth = thh * 0.42
-      local label = BattleScreenXY.POCKET_LABEL[key]
+      local label = BattleScreenXY.pocketLabel(key)
       text(label, tx + (tww - textW(label, lth)) * 0.5,
            ty + (thh - lth) * 0.5, lth,
            active and BattleScreenXY.TEXT or BattleScreenXY.TEXT_DIM, a)
@@ -879,7 +891,7 @@ local function drawBag(game, scr, shot)
 
   local headTh = lh * 0.03
   local headY = tabY + tabH + tgap + lineH + pad * 0.55
-  text(BattleScreenXY.POCKET_LABEL[cur], px + pad, headY, headTh,
+  text(BattleScreenXY.pocketLabel(cur), px + pad, headY, headTh,
        BattleScreenXY.TEXT)
   local countS = tostring(#groups[cur])
   text(countS, px + pw - pad - textW(countS, headTh), headY, headTh,
@@ -1003,7 +1015,7 @@ local function drawBag(game, scr, shot)
       love.graphics.draw(icon, cx, cy, 0, s, s, iw * 0.5, ih * 0.5)
     end
     local name = selItem and tostring(selItem.label or selItem.value or "") or ""
-    if name == "" then name = BattleScreenXY.POCKET_LABEL[cur] or "" end
+    if name == "" then name = BattleScreenXY.pocketLabel(cur) or "" end
     text(name, prevX + ppad, py + ph * 0.62, lh * 0.036, BattleScreenXY.TEXT)
   end
 
@@ -1072,7 +1084,7 @@ local function drawBag(game, scr, shot)
 
     local nameTh = lh * 0.036
     local name = selItem and tostring(selItem.label or selItem.value or "") or ""
-    if name == "" then name = BattleScreenXY.POCKET_LABEL[cur] or "" end
+    if name == "" then name = BattleScreenXY.pocketLabel(cur) or "" end
     local nameY = py + ph * 0.62
     local vc = pixel(BattleBoxXY._art("fx/gui_vcursor"))
     local nameX = prevX + ppad

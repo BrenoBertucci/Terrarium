@@ -28,14 +28,16 @@
 -- them. That is also what lets the player's HUD capsule sit still -- it
 -- used to step upward to dodge the grown panel.
 --
--- THE LABELS ARE THE GAME'S. The 5X pack draws its command buttons with the
--- words baked in, in English -- POKéMON, BAG, RUN. This build runs in
--- Portuguese (LUTAR, PKMN, ITENS, FUGIR), so the art's own labels would put
--- two languages in one frame. The buttons here are drawn rather than blitted
--- and the words come from the same place the Game Boy's did.
+-- THE LABELS ARE DRAWN, NOT BLITTED. The 5X pack baked its own words into
+-- its command buttons; that art left the repository with the rest of the
+-- Nintendo-derived assets, so `label` is no longer a fallback -- it is the
+-- button. It is a FUNCTION rather than a string (see `label()` below), so
+-- the LANGUAGE row picks the word at draw time; every reader calls it.
 
 -- the mod namespace (see main.lua): V.require loads a sibling module
 local V = ...
+
+local Lang = V.require("Lang")
 
 local BattleBoxXY = {}
 
@@ -60,15 +62,12 @@ BattleBoxXY.ASSET_DIR = "assets/battlexy/"
 -- to 2, which is a 2x2 read row-first.
 --
 -- The art is the pack's own button for each, so the words on them are the
--- pack's too: FIGHT, POKéMON, BAG, RUN. That does put English on a menu the
--- rest of this build shows in Portuguese, and it is deliberate -- these are
--- the X/Y buttons, and redrawing them to translate the label would make them
--- something else. `label` is kept beside each for the tooltip-less case where
--- the art fails to load and the fallback has to say something.
--- ...and with the pack's buttons gone, `label` is no longer the fallback --
--- it is the button. So it carries the concept board's own words, which are
--- English for the reason above and were already an open want (ROADMAP: "EN
--- labels").
+-- pack's too: FIGHT, POKéMON, BAG, RUN. That art is gone, so `label` carries
+-- the concept board's own words instead, which are English and were already
+-- an open want (ROADMAP: "EN labels"). Portuguese is the same four commands
+-- in the other language, for a save running under a translation mod -- the
+-- LANGUAGE row picks between them (lib/Lang.lua), and `label` is a function
+-- so that pick happens at draw time rather than at load time.
 --
 -- THREE of the board's four map onto a real command and the fourth does not.
 -- The board reads ATTACK / SKILLS / ITEMS / SWITCH; Generation 1 has no
@@ -76,12 +75,20 @@ BattleBoxXY.ASSET_DIR = "assets/battlexy/"
 -- is RUN, which runs away. Labelling a button SWITCH when pressing it flees
 -- the battle is the one mistake a relabel can make that costs the player a
 -- fight, so SWITCH sits on the slot that actually swaps the mon (index 2, the
--- engine's PKMN) and index 4 says what it does.
+-- engine's PKMN) and index 4 says what it does. TROCAR and FUGIR keep that
+-- same pairing -- the word says what the press does, in either language.
+local function label(en, pt)
+  return function() return Lang.pick(en, pt) end
+end
 BattleBoxXY.COMMANDS = {
-  { art = "cmd_fight",   label = "ATTACK", color = { 0.86, 0.24, 0.21 } },
-  { art = "cmd_pokemon", label = "SWITCH", color = { 0.24, 0.70, 0.36 } },
-  { art = "cmd_bag",     label = "ITEMS",  color = { 0.93, 0.66, 0.16 } },
-  { art = "cmd_run",     label = "FLEE",   color = { 0.20, 0.52, 0.86 } },
+  { art = "cmd_fight",   label = label("ATTACK", "ATACAR"),
+    color = { 0.86, 0.24, 0.21 } },
+  { art = "cmd_pokemon", label = label("SWITCH", "TROCAR"),
+    color = { 0.24, 0.70, 0.36 } },
+  { art = "cmd_bag",     label = label("ITEMS",  "ITENS"),
+    color = { 0.93, 0.66, 0.16 } },
+  { art = "cmd_run",     label = label("FLEE",   "FUGIR"),
+    color = { 0.20, 0.52, 0.86 } },
 }
 
 -- X/Y stands FIGHT on its own, big, with the other three along the bottom
@@ -331,9 +338,10 @@ BattleBoxXY.shadowText = shadowText
 -- `mul` is the selection's animated scale (popScale); 1 when still.
 local function button(x, y, w, h, cmd, selected, align, mul)
   if BattleHudXY.uiSprite(selected and "selected" or "button", x, y, w, h, true) then
-    local th = math.min(h * 0.38, (w - 24) * 84 / math.max(1, BattleHudXY.textWidth(cmd.label)))
-    local tw = BattleHudXY.textWidth(cmd.label) * th / 84
-    BattleHudXY.text(cmd.label, x + (w - tw) * 0.5, y + (h - th) * 0.5, th, BattleHudXY.INK)
+    local word = cmd.label()
+    local th = math.min(h * 0.38, (w - 24) * 84 / math.max(1, BattleHudXY.textWidth(word)))
+    local tw = BattleHudXY.textWidth(word) * th / 84
+    BattleHudXY.text(word, x + (w - tw) * 0.5, y + (h - th) * 0.5, th, BattleHudXY.INK)
     return
   end
   local img = art(cmd.art)
@@ -345,8 +353,9 @@ local function button(x, y, w, h, cmd, selected, align, mul)
     love.graphics.setColor(c[1], c[2], c[3], selected and 1 or BattleBoxXY.DIM)
     love.graphics.rectangle("fill", x, y, w, h, r, r)
     local th = h * 0.46
-    local tw = BattleHudXY.textWidth(cmd.label) * (th / 84)
-    BattleHudXY.text(cmd.label, x + (w - tw) * 0.5, y + (h - th) * 0.5, th,
+    local text = cmd.label()
+    local tw = BattleHudXY.textWidth(text) * (th / 84)
+    BattleHudXY.text(text, x + (w - tw) * 0.5, y + (h - th) * 0.5, th,
                      BattleBoxXY.TEXT)
     love.graphics.setColor(1, 1, 1, 1)
     return

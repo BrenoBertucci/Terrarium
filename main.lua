@@ -153,6 +153,7 @@ local DayTint = V.require("DayTint")
 local Quality = V.require("Quality")
 local Device = V.require("Device")
 local Diag = V.require("Diag")
+local Lang = V.require("Lang")
 local Wind = V.require("Wind")
 local Trees3D = V.require("Trees3D")
 local BattleDynamic = V.require("BattleDynamic")
@@ -810,6 +811,19 @@ local SETTINGS = {
     .. "took, what the rows resolve to and how many models the map built -- "
     .. "over the top left of the screen. It is there so a bug report from a "
     .. "phone can be a screenshot instead of a guess.",
+    full = true },
+  -- Cosmetic to this mod's OWN glass-panel overlays only (the start menu,
+  -- the bag, the battle command buttons) -- see lib/Lang.lua. `full = true`
+  -- because a display preset owning the diorama's LOOK has nothing to do
+  -- with which language this mod's menus print in.
+  { Lang.setting,
+    "The language this mod's own drawn words print in -- the battle "
+    .. "command buttons, the bag's pocket tabs and the start menu's MAP "
+    .. "row. ENGLISH is what they already said and what the engine's own "
+    .. "menus say beside them; PORTUGUES is for a save running under a "
+    .. "Portuguese translation mod, where those three would be the only "
+    .. "English left. Nothing the engine prints -- dialogue, item names, "
+    .. "the flat menus this mod silences -- is affected either way.",
     full = true },
   { Quality.setting,
     "How much of the panel's resolution the 3D pass renders at, before it "

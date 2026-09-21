@@ -19,14 +19,21 @@
 -- the mod namespace (see main.lua): V.require loads a sibling module
 local V = ...
 
+local Lang = V.require("Lang")
+
 local StartMenuMap = {}
 
 StartMenuMap.ENABLED = true
 
--- What the row says. The engine's own item is called MAPA in this build's
--- strings (data item TOWN_MAP, name = "MAPA"), so the row borrows that rather
--- than inventing a second word for the same object.
-StartMenuMap.LABEL = "MAPA"
+-- What the row says: the word for the same object the key item is, in the
+-- language the LANGUAGE row is on (lib/Lang.lua). English by default,
+-- because the menu it lands in prints its own rows in English here (AFTER
+-- below: this build's start menu says ITEM, singular); MAPA is what a save
+-- under a Portuguese translation calls the TOWN_MAP item, and picking
+-- PORTUGUES makes the row agree with its neighbours there instead.
+function StartMenuMap.label()
+  return Lang.pick("MAP", "MAPA")
+end
 
 -- The row this one goes under, matched case-insensitively against the menu's
 -- own labels. A build whose ITENS row is spelled differently gets the row
@@ -90,7 +97,10 @@ end
 
 function StartMenuMap.row(game)
   return {
-    label = StartMenuMap.LABEL,
+    -- marked, not matched by label: the word changes with the LANGUAGE row
+    -- and the never-twice check below has to hold across a switch
+    terrariumMap = true,
+    label = StartMenuMap.label(),
     onSelect = function() StartMenuMap.open(game) end,
   }
 end
@@ -124,7 +134,7 @@ function StartMenuMap.install()
     end
     -- never twice on the same menu, whatever else wraps this
     for i = 1, #menu.items do
-      if menu.items[i] and menu.items[i].label == StartMenuMap.LABEL then
+      if menu.items[i] and menu.items[i].terrariumMap then
         return menu
       end
     end
