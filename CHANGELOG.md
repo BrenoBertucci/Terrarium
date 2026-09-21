@@ -20,11 +20,40 @@ The old `-mobile` channel is retired. Historical tags keep it (`v1.28.0-mobile` 
 
 Tags and packages:
 
-- Git tag: `v1.37.0-beta`
-- Zip asset: `TERRARIUM-1.37.0-beta.zip`
-- `manifest.json` / catalog `version` field: `1.37.0-beta`
+- Git tag: `v1.38.0-beta`
+- Zip asset: `TERRARIUM-1.38.0-beta.zip`
+- `manifest.json` / catalog `version` field: `1.38.0-beta`
 
 ## Unreleased
+
+Nothing yet.
+
+## 1.38.0-beta
+
+> **⚠️ BETA -- still full of bugs. / BETA -- ainda cheia de bugs.**
+>
+> The same test build as 1.37.0-beta with four merged pull requests on top,
+> so every rough edge listed under 1.37.0-beta below still stands and none of
+> this ran on a phone either. What is worth updating for: SCREEN FX no longer
+> takes the 3D mode down on a real device.
+>
+> Um erro em tempo de desenho derruba o modo 3D para o 2D até fechar o jogo
+> (`mod_storage/.../TERRARIUM/errors.lua` diz qual). Guarde uma cópia do save.
+
+### Fixed: SCREEN FX took the whole 3D mode down on a real device
+
+`lib/RayFX.lua` pumps the event queue before a long shader compile, so that
+Windows' Application Hang watchdog does not kill the app mid-build. The guard
+around that pump read `if love and love.event and love.event.pump`, which
+looks safe and is not: the mod sandbox does not OMIT `love.event` for mods,
+it installs a `love` facade whose `__index` **raises** on the access itself.
+The bare `love.event` threw before the guard could decide, outside any
+`pcall`, and the first compile with SCREEN FX on dropped the render pipeline
+to 2D for the rest of the session. The whole guard is one `pcall` now,
+reading through `rawget(love, "event")` -- nil (and a skipped pump) under the
+sandbox, the real module everywhere else. Found on an AYN Thor; the same
+lesson `lib/StreetLamps.lua` and `lib/Trees3D.lua` already carry for
+`love.filesystem`.
 
 ### A LANGUAGE row for the three places this mod writes its own words
 

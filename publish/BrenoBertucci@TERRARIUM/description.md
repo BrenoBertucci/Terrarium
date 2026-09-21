@@ -38,10 +38,10 @@ Upstream Dramatic Shape still uses `3` / `5` / `6` / `7` / `8` / `9`.
 - Wild Pokemon visible in the grass; ecology / shelter / city life systems
 - Tuned defaults for lower-end / mobile hardware
 
-## Not released yet (in the repository, after 1.37.0-beta)
+## New in 1.38.0-beta
 
-Merged from pull requests and not in any zip yet -- here so the catalog page
-and the repository do not say different things.
+Four merged pull requests on top of 1.37.0-beta -- the same test build, same rough
+edges. Worth updating for the SCREEN FX crash fix.
 
 - **COMBAT grows to four levels** (DINAMICA / CLASSICA / MINIMA / DESLIGADA).
   MINIMA keeps the name/HP/EXP reading and the message text but draws no

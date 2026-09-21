@@ -3,7 +3,7 @@
   "title": "Terrarium",
   "author": "BrenoBertucci",
   "summary": "BETA, still full of bugs -- a test build. 3D voxel diorama for Gen 1 (Red/Blue/Yellow). Gold is an early first pass — not recommended yet. Own id, folder, pipelines and letter hotkeys; installs beside DRAMATIC_SHAPE.",
-  "version": "1.37.0-beta",
+  "version": "1.38.0-beta",
   "categories": [
     "ART",
     "GAMEPLAY"

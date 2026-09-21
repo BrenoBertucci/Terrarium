@@ -2,9 +2,9 @@
 
 > ### ⚠️ BETA -- still full of bugs / ainda cheia de bugs
 >
-> **Current version: `1.37.0-beta`.** BETA -- expect bugs. This is a test build, not a finished release: things break, whole features are half done, and a bad frame can drop the 3D mode back to 2D for the session. Keep a copy of your save, and report what you find.
+> **Current version: `1.38.0-beta`.** BETA -- expect bugs. This is a test build, not a finished release: things break, whole features are half done, and a bad frame can drop the 3D mode back to 2D for the session. Keep a copy of your save, and report what you find.
 >
-> **Versão atual: `1.37.0-beta`.** BETA -- cheia de bugs. Esta é uma versão de teste, não um lançamento pronto: coisas quebram, há recursos pela metade, e um erro pode derrubar o modo 3D para o 2D até o fim da sessão. Guarde uma cópia do seu save e avise o que encontrar.
+> **Versão atual: `1.38.0-beta`.** BETA -- cheia de bugs. Esta é uma versão de teste, não um lançamento pronto: coisas quebram, há recursos pela metade, e um erro pode derrubar o modo 3D para o 2D até o fim da sessão. Guarde uma cópia do seu save e avise o que encontrar.
 >
 > Known rough edges are listed at the top of [`CHANGELOG.md`](CHANGELOG.md). Bugs go to
 > [the issue tracker](https://github.com/BrenoBertucci/Terrarium/issues).

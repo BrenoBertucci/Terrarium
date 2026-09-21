@@ -22,8 +22,8 @@
 import io, os, subprocess, sys, zipfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-VERSION = sys.argv[1] if len(sys.argv) > 1 else "1.37.0-beta"
-PREV = os.path.join(ROOT, "publish-zip", "TERRARIUM-1.36.0-beta.zip")
+VERSION = sys.argv[1] if len(sys.argv) > 1 else "1.38.0-beta"
+PREV = os.path.join(ROOT, "publish-zip", "TERRARIUM-1.37.0-beta.zip")
 OUT = os.path.join(ROOT, "publish-zip", "TERRARIUM-%s.zip" % VERSION)
 
 DROP_PREFIXES = ("probe_out_", "publish-zip/")
