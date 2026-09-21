@@ -490,13 +490,8 @@ function BattlePanelsXY.menu(battle, shot, msgLines)
   local R = Fan.rig(shot)
   if not R then return false end
 
-  local mx, my = msgPanel(shot, R, B, msgLines or {}, battle)
-  if not mx then return false end
-
   local sel = tonumber(battle.menuIndex) or 1
   local pop = B.popScale("menu", sel)
-  local dbg = { phase = "menu", sel = sel, msg = { mx, my },
-                cx = {}, cy = {}, wx = {}, wy = {}, wz = {} }
 
   -- where each command sits: FIGHT alone on top, the pack's own bottom
   -- order underneath (see BattleBoxXY.BOTTOM_ORDER for why it is not the
@@ -512,6 +507,31 @@ function BattlePanelsXY.menu(battle, shot, msgLines)
                  BattlePanelsXY.ROW_UP, BattlePanelsXY.SMALL_W,
                  BattlePanelsXY.BTN_FACE_W, BattlePanelsXY.BTN_FACE_H }
   end
+
+  -- All or nothing, like the fan -- half a menu is worse than the flat
+  -- one. That only holds if NOTHING has hit the screen yet when a chip's
+  -- art fails, so every face is built (or found wanting) here, before
+  -- msgPanel below commits its own draw -- a canvas build has no visible
+  -- side effect, but msgPanel's hangPanel call does.
+  for i = 1, 4 do
+    local cmd = B.COMMANDS[i]
+    local p = place[i]
+    if not (cmd and p) then return false end
+    local slot = S.btns[i]
+    if not slot then slot = {}; S.btns[i] = slot end
+    local key = cmd.art .. (i == sel and ":S" or ":-")
+    if slot.key ~= key then
+      local okF = pcall(drawButtonFace, slot, B, cmd, i == sel, p[4], p[5])
+      if not (okF and slot.canvas) then return false end
+      slot.key = key
+    end
+  end
+
+  local mx, my = msgPanel(shot, R, B, msgLines or {}, battle)
+  if not mx then return false end
+
+  local dbg = { phase = "menu", sel = sel, msg = { mx, my },
+                cx = {}, cy = {}, wx = {}, wy = {}, wz = {} }
 
   -- menu-open deal: first time this phase, or a reentry gap like the fan
   local now = (love.timer and love.timer.getTime and love.timer.getTime()) or 0
@@ -537,15 +557,7 @@ function BattlePanelsXY.menu(battle, shot, msgLines)
   for _, i in ipairs(order) do
     local cmd = B.COMMANDS[i]
     local p = place[i]
-    if not (cmd and p) then return false end
     local slot = S.btns[i]
-    if not slot then slot = {}; S.btns[i] = slot end
-    local key = cmd.art .. (i == sel and ":S" or ":-")
-    if slot.key ~= key then
-      local okF = pcall(drawButtonFace, slot, B, cmd, i == sel, p[4], p[5])
-      if not (okF and slot.canvas) then return false end
-      slot.key = key
-    end
 
     local raw = (now - S.dealAt - (dealOf[i] or 0) * BattlePanelsXY.DEAL_STAGGER)
                 / BattlePanelsXY.DEAL_TIME

@@ -68,6 +68,12 @@ local BattleHudXY = {}
 -- that cannot load the art and the A/B a probe measures against.
 BattleHudXY.ENABLED = true
 
+-- OFF (see BattleDynamic): suppressed outright. Unlike a plain
+-- `available()==false` (missing assets, say), which falls back to the
+-- engine's own HUD, SUPPRESS means nothing this mod touches shows at
+-- all -- OFF is a level below "fall back to classic," not classic itself.
+BattleHudXY.SUPPRESS = false
+
 BattleHudXY.ASSET_DIR = "assets/hudxy/"
 
 -- ------- the art, and the holes measured in it
