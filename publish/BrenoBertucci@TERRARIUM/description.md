@@ -38,6 +38,26 @@ Upstream Dramatic Shape still uses `3` / `5` / `6` / `7` / `8` / `9`.
 - Wild Pokemon visible in the grass; ecology / shelter / city life systems
 - Tuned defaults for lower-end / mobile hardware
 
+## Not released yet (in the repository, after 1.37.0-beta)
+
+Merged from pull requests and not in any zip yet -- here so the catalog page
+and the repository do not say different things.
+
+- **COMBAT grows to four levels** (DINAMICA / CLASSICA / MINIMA / DESLIGADA).
+  MINIMA keeps the name/HP/EXP reading and the message text but draws no
+  command menu; DESLIGADA draws nothing at all. Both exist to hand the battle
+  screen to a different battle-UI mod.
+- **A LANGUAGE row** (ENGLISH / PORTUGUES) for the three places this mod
+  writes its own words: the battle command buttons, the bag's pocket tabs and
+  the start menu's MAP row. English is the default; nothing the engine prints
+  is affected.
+- **The 3D map's own text reads 1.3x bigger**, spacing and panel heights
+  along with it, on a phone panel and a 4K monitor alike.
+- **Fixed: SCREEN FX crashed the render pipeline on a real device.** The
+  guard before a long shader compile read `love.event` directly, and the mod
+  sandbox's `love` facade RAISES on that access instead of returning nil, so
+  the first compile with SCREEN FX on took the 3D mode down.
+
 ## New in 1.37.0-beta
 
 **⚠️ BETA -- still full of bugs. / BETA -- ainda cheia de bugs.**
