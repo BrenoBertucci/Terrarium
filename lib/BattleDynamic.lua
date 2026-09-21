@@ -67,15 +67,18 @@ end
 -- this row only writes what a probe (or a hand on the module) could.
 -- Tied to DINAMICA specifically: these are the moving parts CLASSICA and
 -- MINIMA hold still, not the costume itself (see COSTUME_GATES below).
--- BattleHitFX is deliberately NOT here -- hit FX are an independent
--- polish layer, not part of this row's own presentation, and stay on
--- (their own default) at every level including DESLIGADA.
+-- BattleHitFX stays here: the PR that added MINIMA and DESLIGADA argued
+-- hit FX are an independent polish layer and took it out, but CLASSICA
+-- closing that gate is the contract tests/battlehitfx_probe.lua's claim 4
+-- measures, and a level nobody asked to change should not start throwing
+-- light around. It follows DINAMICA like the rest of this table.
 local GATES = {
   { "BattleShot", "enabled" },
   { "BattleFanXY", "ENABLED" },
   { "BattlePanelsXY", "ENABLED" },
   { "BattleGlassFX", "ENABLED" },
   { "BattleRibbon", "ENABLED" },
+  { "BattleHitFX", "ENABLED" },
   -- Where the two HP plates hang. The concept boards put both along the top,
   -- player left and foe right, with the whole lower half left to the cards
   -- and the command row; the pack's own frames were cut for the opposite

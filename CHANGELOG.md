@@ -42,9 +42,10 @@ command menu for whoever wants to draw their own.
   apareceu!" and the like), but draws neither the command menu nor the
   move-selection screen -- not its own, and not the engine's either --
   leaving the phase free for another mod to draw. DESLIGADA (new) draws
-  nothing at all: no box, no HUD, no menu -- just the 3D scene, the
-  models, and hit FX, which stay on their own independent switch (they
-  never depended on this row to begin with).
+  nothing at all: no box, no HUD, no menu -- just the 3D scene and the
+  models. Hit FX keep following DINAMICA, as they always have (the PR
+  proposed freeing them from this row; that is the contract
+  `tests/battlehitfx_probe.lua` measures, so it stayed).
 - **One DINAMICA bug fixed along the way, found while building the
   above:** `lib/BattlePanelsXY.lua`'s command menu could draw two boxes
   in the same scene -- the floating one and the flat one underneath it
