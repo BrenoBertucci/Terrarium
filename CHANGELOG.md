@@ -26,6 +26,54 @@ Tags and packages:
 
 ## Unreleased
 
+### The wind you can see, rebuilt -- strokes, twelve leaves, three depths
+
+- **fix: the visible wind read as gas.** Pimen's swoosh, crescent and puff
+  bloomed out of a ring and trailed off as a green cloud; the player called
+  it a cartoon fart. The shape was a cloud, so no amount of fading fixed it.
+  All five strips and the 16 px leaf are removed (`assets/vfx/LICENSE.md`).
+- **feat: the air as strokes (`lib/WindLines.lua`).** Geometry in the scene
+  pass (a crown in front hides a stroke; the hour lights it; haze takes it),
+  a ribbon turned to the eye in three layers -- glow, halo, core -- tapered
+  from the tail to a round head. The path is integrated through the same
+  field the grass bends in (`Wind.flowAt` + eddies), written by the head and
+  erased by the tail. Shapes by strength: loops in a breeze; long flows,
+  helical twins and short flicks in a gale, some low across the path; a rank
+  of six on every gust front (the bar for a front drops as the wind rises);
+  and now and then a pair spiralling a turn and a half up round a nearby
+  tree crown before peeling off downwind. Loops, twins, swirls and half of
+  every front carry a leaf, and let it go when the stroke ends.
+- **feat: twelve leaves and a gale's debris (`tools/make_wind_leaves.py`).**
+  Maple in three colours, oval, willow, birch, oak, a twig; two stones and a
+  bark chip. Each is six frames of a real 3D tumble (roll about the midrib,
+  paler underside, slow spin) cut to four tones. Leaves fly at three depths:
+  the middle, small ones high over the crowns, and a few big ones passing
+  close to the lens, seen through. Up to 64 in a gale (the RES rung's budget
+  x1.6), fewer in rain, none in snow. Debris skims the path only, never over
+  tall grass, only in dry air past WIND 1.25.
+- Guarded: a throw inside the strokes' draw costs the strokes, not the 3D
+  mode (one did, once, and took the pass down for the session).
+- Checks: `tests/wind_lines_offline.lua` (10: smooth path, dies clean, more
+  in a gale, the two bands, front, past-the-end, twin, follows the field,
+  leaf carry, swirl round a crown); `tests/wind_lines_probe.lua` in the game
+  (no gas kinds, drawn, fronts, density, no throw, leaves carried; shots and
+  a film strip). Measured on the i3 + UHD in a gale: 0.1 ms update, 0.5-0.7 ms
+  draw per frame. `tests/windfx_sheet_probe.lua` retired with the strips.
+
+Nothing yet.
+
+## 1.38.0-beta
+
+> **⚠️ BETA -- still full of bugs. / BETA -- ainda cheia de bugs.**
+>
+> The same test build as 1.37.0-beta with four merged pull requests on top,
+> so every rough edge listed under 1.37.0-beta below still stands and none of
+> this ran on a phone either. What is worth updating for: SCREEN FX no longer
+> takes the 3D mode down on a real device.
+>
+> Um erro em tempo de desenho derruba o modo 3D para o 2D até fechar o jogo
+> (`mod_storage/.../TERRARIUM/errors.lua` diz qual). Guarde uma cópia do save.
+
 ### The water remembers -- rings, the ANIME sheet, AUTO and the fishing float
 
 - **feat: a real wave equation on the water (`lib/Ripples.lua`).** A 96x96

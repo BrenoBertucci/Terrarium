@@ -1,10 +1,11 @@
 # Third-party effect sheets
 
 Every PNG in this directory is **CC0 1.0 (public domain dedication)**, with
-one recorded exception: the six `wind_*` strips cut from Pimen's and
-EdgeLoopRepeat's packs (see the last section — free for commercial use, no
-redistribution of the sprites on their own). None of it was made for this project, and none of it is
-covered by whatever licence this mod eventually ships under.
+recorded exceptions: `snow_burst.png` and the `pimen_*.png` battle sheets, cut
+from Pimen's packs (see their sections -- free for commercial use, no
+redistribution of the sprites on their own). `wind_leaves.png` is the one file
+here made for this project (tools/make_wind_leaves.py). Nothing else was, and
+none of it is covered by whatever licence this mod eventually ships under.
 
 CC0 imposes no attribution requirement. The record below is kept anyway,
 because a file whose provenance nobody wrote down becomes a file nobody can
@@ -199,72 +200,34 @@ IMPACT demo. Battle no longer maps types onto them.
 
 ---
 
-## Downloaded wind VFX (Pimen, installed 2026-09-01)
+## The wind (2026-09-29) -- `wind_leaves.png`, and what it replaced
 
-**Licence exception, decided 2026-09-01.** These are the first files in this
-directory that are not CC0. Pimen's terms, quoted from each asset page:
+`wind_leaves.png` is **made in this repository** (`tools/make_wind_leaves.py`,
+no inputs, deterministic) and released CC0 with the rest of the mod: twelve
+leaves -- maple in three colours, oval, willow, birch, oak, a twig -- and
+three pieces of a gale's debris (two stones, a chip of bark), one per row,
+each six frames of a 3D tumble cut to pixels. `WindFX.SHEETS.leaf` and
+`.debris` read it. The air itself is not a sprite at all any more: it is
+geometry, drawn by `lib/WindLines.lua`.
+
+**Removed that day, and why.** The six wind strips downloaded on 2026-09-01
+under a licence exception -- Pimen's *Wind Spell Effect 01/02* and *Smoke n
+Dust 03* (`wind_breath`, `wind_curl`, `wind_whirl`, `wind_kick`,
+`wind_wetpuff`) and EdgeLoopRepeat's *Windy Leaves* (`wind_leaf`) -- are gone
+from the repository together with `tools/install_pimen_wind.py`. The player
+judged the swoosh, the crescent and the puff to read as gas ("a cartoon fart
+crossing the diorama"), which is a verdict on their SHAPE; the 16 px leaf was
+too few leaves. One Pimen strip remains, `snow_burst.png` (Smoke n Dust 03,
+`VFX 4.png`, cut by `tools/cut_snow_burst.py`), under the terms quoted below:
 
 > You can use and modify this asset for personal and commercial purpose.
 > Credit is not required but would be appreciated. You cannot resell or
 > redistribute those sprites.
 
-The mod ships them as modified strips inside a game mod, which is the use the
-terms permit; the public repository carries those strips, not the packs. Do
-not lift the strips out of this mod into another asset pack — that is the
-redistribution the terms forbid. Credit is given here and in the mod's README.
+Do not lift it out of this mod into another asset pack -- that is the
+redistribution the terms forbid.
 
-| pack | source | file | frames used |
-| --- | --- | --- | --- |
-| Wind Spell Effect 01 | https://pimen.itch.io/wind (`Wind Effect 01.rar`, 3.9 kB) | `Wind Breath.png` → `wind_breath.png` | 11 of 48×32 |
-| | | `Wind Projectile.png` → `wind_curl.png` | 6 of 32×32 |
-| Wind Spell Effect 02 | https://pimen.itch.io/wind-spell-effect (`Wind Effect 02.rar`, 9.1 kB) | `Pull in.png` → `wind_whirl.png` | 7 of 48×48 |
-| Smoke n Dust 03 | https://pimen.itch.io/smoke-n-dust-03 (`Smoke N Dust 03.rar`, 8.8 kB) | `VFX 1.png` → `wind_kick.png` | 9 of 80×64 |
-| | | `VFX 5.png` → `wind_wetpuff.png` | 6 of 32×32 |
-| | | `VFX 4.png` → `snow_burst.png` | 7 of 64×64 |
-| Windy Leaves particle fx (EdgeLoopRepeat) | https://rs-pixel-store.itch.io/falling-leaf-fx (`ELR-WindyLeafs.zip`, 1.3 kB) | `ELR_FallLeaf.png` + `ELR_SpringlLeaf.png` + `ELR_WinterlLeaf.png` → `wind_leaf.png` | 3 × 5 of 16×16, one strip |
-
-EdgeLoopRepeat's terms are the same class as Pimen's ("permission to use it in
-your projects"; credit optional; no resale or redistribution) and are covered
-by the same exception.
-
-Rebuilt from the packs in `tools/_vfx_dl/pimen` and `tools/_vfx_dl/elr_leaves`
-by `tools/install_pimen_wind.py`: one row per strip, blank frames dropped,
-pixels untouched (no resampling, no recolour — the green is Pimen's).
-
-`snow_burst.png` was cut later, by `tools/cut_snow_burst.py`, out of the same
-already-downloaded Smoke n Dust 03 — the one strip in that pack nobody had
-used. It is the powder a boot throws in a drift (lib/StepFX.lua). Same trim,
-same untouched pixels; it is tinted at draw time, never in the file. Packs
-`Smoke n Dust 02` and `04` were looked at for this and are paid; nothing was
-bought.
-
-Inspected and left out, same day: NYKNCK *Wind - Pixel Art* (credit required;
-16 frames of two grey dashes crossing a 512² canvas — the very specks this
-pass removed), and an earlier CC0 set (PVFX Foundry leaf gust and landing
-dust, devnewton tornado, ncase juice puff, UrieW clouds-and-gust) that was
-wired first and rejected on sight.
-
-### How they are wired
-
-The rules are written above `WindFX.SHEETS` in `lib/WindFX.lua`; in short:
-
-| strip | plays as | when | how |
-| --- | --- | --- | --- |
-| `wind_leaf.png` | `leaf` | the standing field in any dry air and in rain (most of a breeze), and every leaf VegFX tears off a tree | tumbles by its own 5-frame clip at 10 fps, looping 2.2–5 s; fall / spring / winter colourway picked at birth (45 / 40 / 15 %) |
-| `wind_breath.png` | `ribbon` | the standing field in dry air (more of it the harder it blows), plus 4 across the view at every gust front | **background**: 30–48 px above the ground, 30 % alpha; aligned to travel, flips (never turns over) when the wind runs left, 11 frames at 16 fps once |
-| `wind_curl.png` | `curl` | the standing field in a breeze | **background**: 28–44 px up, 30 % alpha; drifts and wanders like a seed, loops 1.4–2.6 s |
-| `wind_wetpuff.png` | `wetpuff` | the standing field in rain and snow, plus 4 at every gust front | **background**: 26–44 px up, 35 % alpha; tinted like the spray / blown snow, 6 frames at 14 fps once |
-| `wind_kick.png` | `kick` | **off** (`WindFX.KICK = false`): a dust burst on the path read as a fart from nowhere. Wired and measured; one flag turns it back on for dry fronts | 1 per front, stands on the ground, does not move, 9 frames at 16 fps once |
-| `wind_whirl.png` | `whirl` | **off** (`WindFX.HERO_CHANCE = 0`): a vortex at the player's feet was one more thing at the player's feet. Wired and measured; one number turns it back on for gales | never more than one alive, stands on the ground at 35 % alpha, crawls at 30 % of the wind, loops 3–4.5 s |
-
-A sheet's lifetime is its clip's length (or its written dwell, for the ones
-that loop); it has one size, no spin, no size jitter. The grey authored stamps
-(`wind_dust.png` / `wind_mote.png` / `wind_streak.png` / `wind_puff.png` /
-`wind_swirl.png`) and the authored `leaves.png` silhouettes are no longer
-drawn by the wind — a screen of grey specks over the path read as dirt, and
-the 16 px silhouettes read as no leaf at all — but stay loaded for
-`WindFX.emit`'s other callers (StepFX, SprayFX) and for AmbientLife.
-Measured by `tests/windfx_sheet_probe.lua`.
+---
 
 ## Downloaded elemental VFX (Pimen, 2026-09-02) -- `pimen_*.png`
 

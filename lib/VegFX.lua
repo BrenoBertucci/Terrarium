@@ -148,6 +148,13 @@ local function scan(map)
   end
 end
 
+-- One of the crowns near the player, { x, z, h } in world px, or nil. The
+-- wind's swirls (lib/WindLines.lua) wind round it.
+function VegFX.crownNear()
+  if nearN == 0 then return nil end
+  return near[rand(1, nearN)]
+end
+
 -- The site lists for `map`, scanning it first when it is not the one held.
 -- LeafFallFX seeds a map's ground from the same trees that shed on it.
 function VegFX.sitesFor(map)
