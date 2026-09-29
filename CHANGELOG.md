@@ -60,20 +60,6 @@ Tags and packages:
   a film strip). Measured on the i3 + UHD in a gale: 0.1 ms update, 0.5-0.7 ms
   draw per frame. `tests/windfx_sheet_probe.lua` retired with the strips.
 
-Nothing yet.
-
-## 1.38.0-beta
-
-> **⚠️ BETA -- still full of bugs. / BETA -- ainda cheia de bugs.**
->
-> The same test build as 1.37.0-beta with four merged pull requests on top,
-> so every rough edge listed under 1.37.0-beta below still stands and none of
-> this ran on a phone either. What is worth updating for: SCREEN FX no longer
-> takes the 3D mode down on a real device.
->
-> Um erro em tempo de desenho derruba o modo 3D para o 2D até fechar o jogo
-> (`mod_storage/.../TERRARIUM/errors.lua` diz qual). Guarde uma cópia do save.
-
 ### The water remembers -- rings, the ANIME sheet, AUTO and the fishing float
 
 - **feat: a real wave equation on the water (`lib/Ripples.lua`).** A 96x96
@@ -119,8 +105,6 @@ Nothing yet.
   (+-3 ms s.e.), so no whole-frame claim is made.
 - Known: `tests/water_spectrum_offline.lua` "open water is unchanged" was
   already failing before this change.
-
-Nothing yet.
 
 ## 1.38.0-beta
 
