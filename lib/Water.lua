@@ -42,9 +42,45 @@ local WaterMap = V.require("WaterMap")
 
 local Water = {}
 
+-- The row is the PHYSICS -- how much the surface moves -- and nothing about
+-- how it is drawn (that is Water.style, below):
+--   AUTO   the climate picks the rung: a still night sits under CALM, a sunny
+--          breeze at CALM, a front pushes it past SWELL. The same drive the
+--          WIND row's AUTO reads, so the two cannot disagree about the
+--          weather, and nobody has to walk to the menu when the sky turns.
+--   CALM / SWELL / FLAT  fixed, as they always were.
+-- Stored values are unchanged for the three old rungs, so a save from before
+-- AUTO existed reads back as what it was; only a save that never touched the
+-- row lands on the new default.
 Water.setting = ModSetting.new("swell", "WATER",
-                               { 0.8, 1.4, 0 },
-                               { "CALM", "SWELL", "FLAT" })
+                               { "auto", 0.8, 1.4, 0 },
+                               { "AUTO", "CALM", "SWELL", "FLAT" })
+
+-- AUTO's span: the amplitude at dead calm and at a full front, before the
+-- chop terms Water.swell() adds on top of every rung.
+Water.AUTO_LO = 0.55
+Water.AUTO_HI = 1.60
+
+-- The ART, not the physics. CLASSIC is the four-colour sheet this file has
+-- always painted (hard steps, checker dither, ringed glint). ANIME repaints
+-- the same surface -- same swell, same ripples, same wake -- the way a cel
+-- background paints water: flat light and shadow patches that drift and
+-- morph, star glints where the sun catches, clean bands where a ring passes,
+-- whitecap scribbles when the wind is up. A compile-time variant in the
+-- shader (ANIME_WATER), so CLASSIC pays nothing for it.
+Water.style = ModSetting.new("waterstyle", "WATER STYLE",
+                             { "anime", "classic" },
+                             { "ANIME", "CLASSIC" })
+
+function Water.anime()
+  local ok, v = pcall(Water.style.get, Water.style)
+  return ok and v == "anime"
+end
+
+-- How far the ripple field (lib/Ripples.lua) lifts a body floating on it,
+-- per unit of field height. The sheet is SHADED by the rings, not displaced
+-- (see Ripples), so this is the whole of what a ring does to a surfer.
+Water.RIPPLE_BOB = 0.9
 
 -- World pixels one full cycle of water.png covers. 64 = four map cells.
 Water.ART_SCALE = 64
@@ -526,10 +562,24 @@ function Water.refreshLive()
   Water.THERM = Water.thermNow()
 end
 
+-- The row's base amplitude, world px. AUTO rides the climate on one S-curve
+-- between AUTO_LO and AUTO_HI, biased low like WIND's so an idle afternoon is
+-- not already half way to a storm.
+function Water.rowAmount()
+  local ok, v = pcall(Water.setting.get, Water.setting)
+  if not ok then return 0 end
+  if v == "auto" then
+    local d = math.max(Water.windNorm(), wetness(), clamp01(Water.energy))
+    local s = d * d * (3 - 2 * d)
+    s = s * 0.55 + d * d * 0.45
+    return Water.AUTO_LO + (Water.AUTO_HI - Water.AUTO_LO) * s
+  end
+  return tonumber(v) or 0
+end
+
 function Water.swell()
   Water.refreshLive()
-  local ok, v = pcall(Water.setting.get, Water.setting)
-  local n = (ok and tonumber(v)) or 0
+  local n = Water.rowAmount()
   if n < 0 then n = 0 end
   if n > 4 then n = 4 end
   local f = clamp01(Water.freeze)
@@ -862,15 +912,22 @@ function Water.heightAt(wx, wz)
   return swell * Water.bodyAmp(wx, wz) * h
 end
 
+-- The rings a body rides, world px. Asked lazily: Ripples knows nothing
+-- about this file and must not start to.
+local function rippleAt(wx, wz)
+  local ok, R = pcall(V.require, "Ripples")
+  if not (ok and R and R.heightAt) then return 0 end
+  return R.heightAt(wx, wz) * Water.RIPPLE_BOB * (1 - clamp01(Water.freeze))
+end
+
 function Water.surfaceAt(wx, wz)
   return Water.BASE + Water.heightAt(wx, wz) + Water.iceLift()
+       + rippleAt(wx, wz)
 end
 
 function Water.paints()
   if clamp01(Water.freeze) > 0.02 then return true end
-  local ok, v = pcall(Water.setting.get, Water.setting)
-  local n = (ok and tonumber(v)) or 0
-  return n > 0
+  return Water.rowAmount() > 0
 end
 
 -- ------- optional surface art (assets/water/water.png)

@@ -47,6 +47,9 @@ local StepFX = V.require("StepFX")
 local RainOnFX = V.require("RainOnFX")
 local Quality = V.require("Quality")
 local Water = V.require("Water")
+-- the water's memory (lib/Ripples.lua): what a body does to the surface
+-- stays there as rings after the body has gone
+local Ripples = V.require("Ripples")
 
 local Map = require("src.world.Map")
 
@@ -64,6 +67,18 @@ WakeFX.STIR_STRIDE = 10        -- px of travel between wake points
 WakeFX.STIR_LIFE = 4.0         -- s a point rings for (kelp's spring is the slowest)
 WakeFX.STIR_KEEP = 6           -- points the player's wake keeps; others keep 2
 WakeFX.STIR_HULLS = 2          -- hulls sent at most
+-- ------- and what a swimmer leaves in the ripple field (lib/Ripples.lua)
+--
+-- Going in is a drop the size of a body, with froth. Moving is a push at
+-- the bow every frame, in field units per SECOND at full speed -- a body
+-- outrunning its own rings piles them into a V without anybody drawing one.
+-- Sitting still is a bob: a slow train of rings, the picture of anything
+-- floating on a pond.
+WakeFX.RING_IN = -3.2          -- field units, the splash going in
+WakeFX.RING_OUT = -1.4         -- and climbing out
+WakeFX.RING_PUSH = -7.0        -- per second at full speed, at the bow
+WakeFX.RING_BOB = 0.9          -- the bob's amplitude
+WakeFX.RING_BOB_HZ = 0.7
 
 -- for the probe
 WakeFX.swimmers = 0
@@ -175,9 +190,11 @@ local function updateBody(dt, voxelOn)
       -- in, and out
       if on and not t.on then
         pcall(StepFX.splashAt, x, z, 1.0)
+        pcall(Ripples.poke, x, z, WakeFX.RING_IN, 8, 1.0)
         WakeFX.splashes = WakeFX.splashes + 1
       elseif t.on and not on then
         pcall(RainOnFX.soak, e, 0.9)
+        pcall(Ripples.poke, t.x, t.z, WakeFX.RING_OUT, 6, 0.5)
         WakeFX.exits = WakeFX.exits + 1
       end
       t.on = on
@@ -195,6 +212,13 @@ local function updateBody(dt, voxelOn)
       t.x, t.z = x, z
       if on then
         count = count + 1
+        -- the rings: a push at the bow while it moves, a bob while it sits
+        if speed > 8 then
+          pcall(Ripples.poke, x + t.dx * 4, z + t.dz * 4,
+                WakeFX.RING_PUSH * t.speed * dt, 5, 0.25 * t.speed * dt * 8)
+        else
+          pcall(Ripples.emit, x, z, WakeFX.RING_BOB, WakeFX.RING_BOB_HZ, 0.6, e)
+        end
         -- the wake the garden feels: a point where the bow is now, every
         -- STIR_STRIDE px (the oldest goes when a swimmer keeps too many)
         t.keep = (e == ow.player) and WakeFX.STIR_KEEP or 2

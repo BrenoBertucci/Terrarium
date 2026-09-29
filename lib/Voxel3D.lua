@@ -43,6 +43,7 @@ local Anime = V.require("Anime")
 local Wind = V.require("Wind")
 local Water = V.require("Water")
 local WaterBody = V.require("WaterBody")
+local Ripples = V.require("Ripples")
 local FloorArt = V.require("FloorArt")
 local Light = V.require("Light")
 -- Last, and it has to be: RayFX pulls in Sky and DayNight, and DayNight
@@ -1769,6 +1770,57 @@ precision highp sampler2D;
   uniform float wakeN;
   uniform vec4 wakeP[8];
   uniform vec2 wakeS[8];
+  // ------- THE RINGS (lib/Ripples.lua): a wave-equation field on a grid that
+  // follows the player. R = height (0.5 at rest, Ripples.H_ENC = 4 field
+  // units full range), G/B = its slope per world pixel, A = froth. Always
+  // bound (a flat 1x1 while the field sleeps); `rippleOn` is the switch, so
+  // a pond nobody touched skips the fetch. PIXEL-only: the rings SHADE the
+  // sheet, they never move a vertex, so no vertex texture fetch and no link
+  // precision question.
+  uniform Image rippleMap;
+  uniform float rippleOn;
+  uniform VXFP vec2 rippleOrigin;  // world XZ of the grid's corner
+  uniform float rippleInv;         // 1 / its extent in world pixels
+
+  // x = height (field units), yz = slope, w = froth. Zero past the grid: the
+  // edge texels are flat anyway, and this keeps a clamp from smearing the
+  // last ring across the rest of the lake.
+  vec4 rippleAt(VXFP vec2 xz) {
+    VXFP vec2 uv = (xz - rippleOrigin) * rippleInv;
+    vec4 t = Texel(rippleMap, uv);
+    float inside = step(0.0, uv.x) * step(uv.x, 1.0)
+                 * step(0.0, uv.y) * step(uv.y, 1.0);
+    return vec4((t.r - 0.5) * 4.0, t.g - 0.5, t.b - 0.5, t.a) * inside;
+  }
+#ifdef ANIME_WATER
+  // A hash with no sin() in it: a sine of a large argument is noise on
+  // desktop and garbage on an fp16 phone, while this stays a (poorer, but
+  // DETERMINISTIC) hash at any precision -- which is all a lattice needs.
+  float hash12(vec2 q) {
+    vec3 q3 = fract(vec3(q.xyx) * 0.1031);
+    q3 += dot(q3, q3.yzx + 33.33);
+    return fract((q3.x + q3.y) * q3.z);
+  }
+  // Value noise on the unit lattice, smoothstepped between its four corners.
+  float vnoise(VXFP vec2 x) {
+    VXFP vec2 i = floor(x);
+    vec2 f = x - i;
+    vec2 u = f * f * (3.0 - 2.0 * f);
+    float a = hash12(i);
+    float b = hash12(i + vec2(1.0, 0.0));
+    float c = hash12(i + vec2(0.0, 1.0));
+    float d = hash12(i + vec2(1.0, 1.0));
+    return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+  }
+  // Where the patches are sampled, for a point on the water: stretched east-
+  // west the way a lake foreshortens at this camera's tilt, drifting down the
+  // current, and warped by a slow sine so no lattice ever shows. The star
+  // glints ask the same question at their own centres, so it lives here once.
+  VXFP vec2 patchSpace(VXFP vec2 xz, float t) {
+    VXFP vec2 q = xz * vec2(0.045, 0.085) + waterCurrent * (t * 0.06);
+    return q + 0.45 * vec2(sin(q.y * 1.7 + t * 0.35), sin(q.x * 1.3 - t * 0.28));
+  }
+#endif
   // Optional world-XZ surface art (assets/water/water.png). Sampler always
   // bound (blank when the file is missing); waterArtOn gates the replace.
   uniform Image waterArt;
@@ -2591,6 +2643,11 @@ precision highp sampler2D;
       float bcell = (waterDither >= 0.999) ? 2.0 : 1.0;
       vec2 bgc = floor(sc / bcell);
       float bcheck = 0.5 + (mod(bgc.x + bgc.y, 2.0) - 0.5) * waterDither;
+#ifdef ANIME_WATER
+      // the ANIME sheet has no checker, and the bed seen through it must not
+      // bring one back: caustics and the waterline get clean edges too
+      bcheck = 0.5;
+#endif
       // one evaluation of the swell serves the waterline and the caustics
       // both: a bed fragment used to pay for two, plus a second fetch of
       // the body field, on every water pixel in the frame
@@ -2621,6 +2678,17 @@ precision highp sampler2D;
         float caus = step(0.50, lens + (bcheck - 0.5) * 0.30)
                    * clamp(swell, 0.0, 1.0) * (1.0 - freeze);
         bed += light * caus * 0.34 * absorb.g;
+        // THE RINGS ON THE BED: a ring's crest is a lens too, and the light
+        // it gathers lands displaced along the sun's ray by the depth it fell
+        // through -- the bright rings every shallow pond throws on its floor,
+        // sliding off the ring that cast them as the water deepens.
+        if (rippleOn > 0.5) {
+          VXFP vec2 lensAt = vWorld.xz;
+          if (sunRay.y < -0.05) lensAt -= sunRay.xz * (under / -sunRay.y);
+          float rb = rippleAt(lensAt).x + (bcheck - 0.5) * 0.10;
+          float ringCaus = step(0.16, rb) - 0.5 * step(rb, -0.16);
+          bed += light * ringCaus * 0.26 * absorb.g * (1.0 - freeze);
+        }
         // the bed is all sand; a submerged bank keeps a share of its own
         // art, so the shore reads as the shore continuing under the water
         rgb = mix(rgb, bed, mix(mix(0.72, 0.92, vUp), 1.0, reefOn));
@@ -2661,11 +2729,146 @@ precision highp sampler2D;
       // purpose: stepped and dithered, it blotched the open sea, because
       // the swell's normal sweeps every threshold every second.
       vec3 V = normalize(eye - vWorld);
-      float cosT = clamp(dot(vWave, V), 0.0, 1.0);
+      // the rings (lib/Ripples.lua): their slope tilts the normal the
+      // Fresnel reads, their height and froth are painted below. Guarded, so
+      // with the field asleep this is the sheet exactly as it was.
+      vec4 rip = vec4(0.0);
+      vec3 N = vWave;
+      if (rippleOn > 0.5) {
+        rip = rippleAt(vWorld.xz) * (1.0 - freeze);
+        N = normalize(vWave + vec3(-rip.y, 0.0, -rip.z) * 3.0);
+      }
+      float cosT = clamp(dot(N, V), 0.0, 1.0);
       float f1 = 1.0 - cosT;
       float f2 = f1 * f1;
       float fres = 0.04 + 0.96 * f2 * f2;
       float reflW = clamp(fres * waterReflect, 0.0, 1.0);
+#ifdef ANIME_WATER
+      // ------- ANIME (Water.style): the same surface painted the way a cel
+      // background paints water. Three tones of water and white, and every
+      // boundary a clean edge: there is no checker anywhere on this sheet,
+      // so the wake and the shore below lose theirs too.
+      check = 0.5;
+      // how fast the drawing drifts: a still pond still breathes, a swell
+      // hurries it
+      float at = foamPhase * (0.35 + 0.5 * clamp(swell, 0.0, 1.4));
+      // the tones, from the TILE's own colour so a palette mode still owns
+      // its lake -- pulled toward a cel sea's navy, teal and cyan, part way
+      vec3 tileC = tileFlat(tex, tc);
+      vec3 shoalC = mix(vec3(0.36, 0.78, 0.78), tileC, 0.25);
+      vec3 midC = mix(vec3(0.19, 0.46, 0.63), tileC, 0.30);
+      vec3 deepC = mix(vec3(0.13, 0.31, 0.52), tileC * 0.75, 0.25);
+      vec3 lightC = mix(vec3(0.45, 0.77, 0.85), tileC, 0.20);
+      // depth in three hard bands off the bank distance, not a ramp
+      float b1 = step(1.0, vShore);
+      float b2 = step(3.0, vShore);
+      vec3 bodyC = mix(mix(shoalC, midC, b1), deepC, b2);
+      vec3 shadeC = mix(mix(midC, deepC, b1), deepC * 0.80, b2);
+      // THE PATCHES: two octaves of value noise in patch space, lifted on
+      // the swell's crests and by the rings, and leaning toward the sky on
+      // the far water where the view grazes it. Light where a facet catches
+      // the sky, shadow where it turns away -- and nothing in between.
+      VXFP vec2 pq = patchSpace(vWorld.xz, at);
+      float nA = vnoise(pq);
+      float nB = vnoise(pq * 2.03 + vec2(5.2, 1.3) - waterCurrent * (at * 0.04));
+      float n = nA * 0.64 + nB * 0.36
+              + vSwellH * min(swell, 1.2) * 0.12
+              + rip.x * 0.30
+              + (1.0 - cosT) * 0.18;
+      float lightP = step(0.61, n);
+      float darkP = step(n, 0.37) * b1;          // the shoal keeps no shadow
+      vec3 col = mix(bodyC, lightC, lightP * mix(0.6, 1.0, b1));
+      col = mix(col, shadeC, darkP);
+      // the sky, posterised: one hard rung of it on the far water
+      vec3 skyCol = mix(waterSky, cloudReflCol, clamp(cloudRefl, 0.0, 1.0));
+      col = mix(col, skyCol, step(0.45, reflW) * 0.28);
+      rgb = col * light;
+      // the shoal is mostly bed, the open water half body -- a lake with a
+      // garden in it (lib/ReefKit.lua) has to keep showing the garden -- and
+      // a light patch mostly light
+      float alpha = mix(mix(0.30, 0.52, b1), 0.66, b2);
+      alpha = max(alpha, lightP * 0.72);
+      // THE RINGS, drawn the way a cel ring is drawn: the raised band light,
+      // a white crescent on the flank of each crest that turns toward the
+      // sun (the slope is in the texture, so this is the real facet, not a
+      // guess), the trough a tone down, and the froth a splash left behind,
+      // white with a torn edge
+      if (rippleOn > 0.5) {
+        vec2 toSun = -sunRay.xz / max(length(sunRay.xz), 1e-3);
+        float face = -dot(rip.yz, toSun);
+        float up = step(0.12, rip.x);
+        float lip = step(0.08, rip.x) * step(0.045, face);
+        float dn = step(rip.x, -0.14);
+        rgb = mix(rgb, lightC * light, up);
+        // the trough only leans a third of the way to shadow: a ring is a
+        // light band on the water, and a solid dark one reads as a hole
+        rgb = mix(rgb, shadeC * light, dn * 0.35);
+        rgb = mix(rgb, waterFoam * light, lip * 0.9);
+        float fr = step(0.42, rip.w + (nB - 0.5) * 0.5);
+        rgb = mix(rgb, waterFoam * light, fr);
+        alpha = max(alpha, max(up * 0.8, max(lip, fr)));
+      }
+      // WHITECAPS: with the wind up, scribbles of white along the crests --
+      // the contour of a third octave drawn as a line, and only where the
+      // swell stands high enough to break. More of them the harder it blows,
+      // because the bar for "high enough" drops, not because they fade in.
+      // (a breeze is not enough: the scribbles start where a steady wind or
+      // a shower has built the chop past a third)
+      float chop = clamp((crest + waterEnergy * 0.8 - 0.3) / 0.7, 0.0, 1.0);
+      if (chop > 0.0) {
+        float nW = vnoise(vWorld.xz * vec2(0.10, 0.15)
+                          + waterCurrent * (foamPhase * 0.35));
+        float scrib = 1.0 - step(0.03 + 0.05 * chop, abs(nW - 0.5));
+        float high = step(mix(0.6, -0.2, chop), vSwellH + (nA - 0.5) * 0.8);
+        float capW = scrib * high * b1 * (1.0 - freeze);
+        rgb = mix(rgb, waterFoam * light, capW);
+        alpha = max(alpha, capW);
+      }
+      // snow landing on open water
+      float veil = snowVeil * 0.55 * (1.0 - freeze * 0.50);
+      rgb = mix(rgb, vec3(0.95, 0.97, 1.0) * light, veil);
+      alpha = max(alpha, veil);
+      // ICE: two flat tones of plate and the leads between them
+      if (freeze > 0.02) {
+        float plate = step(0.45, freeze);
+        vec3 iceC = mix(vec3(0.72, 0.86, 0.96), vec3(0.90, 0.96, 1.0), step(0.58, nA));
+        rgb = mix(rgb, iceC * light, plate);
+        float lead = (1.0 - step(0.035, abs(fract((vWorld.x + vWorld.z * 0.7) * 0.03) - 0.5)))
+                   * step(0.10, freeze) * step(freeze, 0.90);
+        rgb = mix(rgb, rgb * 0.7, lead);
+      }
+      // STAR GLINTS: the sun caught on a facet, drawn the way a cel painter
+      // draws it -- a hot core and a four-point cross. One candidate per cell
+      // of the water, placed and clocked by the cell's hash, lit only while it
+      // sits on a light patch, the sun is up and it is not raining (sparkle
+      // is Water.sparkleNow: the rain is already taken out of it).
+      float sunA = sparkle * 1.8 * clamp(dot(sunTint, vec3(0.6)), 0.0, 1.0)
+                 * (1.0 - freeze);
+      if (sunA > 0.01) {
+        VXFP vec2 cellSz = vec2(26.0, 20.0);
+        VXFP vec2 sid = floor(vWorld.xz / cellSz);
+        float hx = hash12(sid);
+        float hz = hash12(sid + 17.0);
+        float hc = hash12(sid + 41.0);
+        VXFP vec2 sp = (sid + 0.3 + vec2(hx, hz) * 0.4) * cellSz;
+        vec2 sd = vWorld.xz - sp;
+        float onLight = step(0.55, vnoise(patchSpace(sp, at)) + (1.0 - cosT) * 0.2);
+        float tw = clamp(sin(foamPhase * (1.1 + hc * 1.3) + hc * 37.0) * 1.8 - 0.8,
+                         0.0, 1.0);
+        tw *= onLight * step(0.35, hc);            // not every cell has one
+        float ax = abs(sd.x);
+        float az = abs(sd.y) * 1.4;                // z is foreshortened
+        float core = 1.0 - smoothstep(0.5, 1.6, length(vec2(ax * 0.5, az)));
+        float armH = (1.0 - smoothstep(0.25, 0.7, az))
+                   * (1.0 - smoothstep(1.0, 1.0 + 7.0 * tw, ax));
+        float armV = (1.0 - smoothstep(0.2, 0.55, ax))
+                   * (1.0 - smoothstep(0.8, 0.8 + 5.0 * tw, az));
+        float star = clamp(max(core, max(armH, armV)) * tw * sunA, 0.0, 1.0);
+        star = step(0.3, star) * 0.65 + step(0.7, star) * 0.35;   // two hard rungs
+        rgb = mix(rgb, vec3(1.0), star);
+        alpha = max(alpha, star);
+      }
+#else
       // the sky it mirrors: the dome's colour, greyed by the cloud deck
       vec3 skyCol = mix(waterSky, cloudReflCol, clamp(cloudRefl, 0.0, 1.0));
       // the body: the tile's own blue with its wave marks (and the surface
@@ -2778,6 +2981,18 @@ precision highp sampler2D;
         rgb = mix(rgb, vec3(0.95, 0.97, 1.0) * light, veil);
         alpha = max(alpha, veil);
       }
+      // THE RINGS in the four-colour dialect: a crest a rung lighter, a
+      // trough a rung deeper, the froth white -- dithered like everything
+      // else on this sheet.
+      if (rippleOn > 0.5) {
+        float rr = rip.x + (check - 0.5) * 0.08;
+        rgb *= 1.0 + (step(0.12, rr) * 0.14 + step(0.30, rr) * 0.08
+                      - step(rr, -0.12) * 0.10);
+        float rf = step(0.42, rip.w + (check - 0.5) * 0.2);
+        rgb = mix(rgb, waterFoam * light, rf * 0.7);
+        alpha = max(alpha, rf * 0.7);
+      }
+#endif
       // ------- THE WAKE: what a swimmer drags behind it
       //
       // A Kelvin wake: two arms at nineteen and a half degrees off the
@@ -2834,6 +3049,18 @@ precision highp sampler2D;
                  * (1.0 - freeze);
       rgb = mix(rgb, waterFoam * light, ring * 0.70);
       alpha = max(alpha, ring * 0.75);
+#ifdef ANIME_WATER
+      // and the line of the next wave coming in: a thin white contour that
+      // walks toward the bank and melts into the foam there, one every few
+      // seconds, staggered along the shore so a long beach does not pulse
+      // in step
+      float surge = fract(foamPhase * 0.09 + (vWorld.x + vWorld.z) * 0.0021);
+      float lineD = waterShoreFoam + 1.5 - surge * 1.3;
+      float shoreLine = (1.0 - step(0.07, abs(vShore - lineD))) * surge
+                      * (1.0 - freeze);
+      rgb = mix(rgb, waterFoam * light, shoreLine * 0.85);
+      alpha = max(alpha, shoreLine * 0.85);
+#endif
       // ice is a lid
       alpha = mix(alpha, 1.0, freeze);
       outA = clamp(alpha, 0.0, 1.0);
@@ -3639,9 +3866,14 @@ function Voxel3D.shader(grid)
   -- not a uniform: an `if` around the quantisation would be paid by every
   -- fragment on the OFF rung too, which is the rung most people are on.
   local cel = Anime.cel()
+  -- The WATER STYLE row (Water.style): the ANIME sheet is a compile-time
+  -- branch for the same reason. A driver that refuses it keeps CLASSIC for
+  -- the session, silently, rather than losing the mode (see below).
+  local animeW = Water.anime() and not Voxel3D.animeWaterRefused
   local key = (grid and "g" or "-")
               .. (oneTap and "1" or (soft and "p" or "4"))
               .. (cel and "c" or "-")
+              .. (animeW and "w" or "-")
   if shaders[key] == nil then
     if grid and not derivativesOK() then
       shaders[key] = false
@@ -3656,6 +3888,7 @@ function Voxel3D.shader(grid)
                    .. ((soft and not oneTap) and "#define SUN_SOFT 1\n" or "")
                    .. (cel and "#define ANIME_CEL 1\n" or "")
                    .. (normals and "#define LAMP_NORMALS 1\n" or "")
+                   .. (animeW and "#define ANIME_WATER 1\n" or "")
       local built, err = nil, nil
       -- Precision is the OUTER walk: it is a link rule rather than a feature,
       -- so a driver that refuses highp uniforms refuses them on every rung,
@@ -3702,6 +3935,13 @@ function Voxel3D.shader(grid)
       shaders[key] = built or false
       -- Kept for the probes that read it, and for report() below.
       if not built then Voxel3D.shaderError = err end
+      -- Nothing built WITH the anime sheet: give it up for the session and
+      -- walk the ladder again without it. The water goes back to CLASSIC;
+      -- the mode stays up.
+      if not built and animeW then
+        Voxel3D.animeWaterRefused = true
+        return Voxel3D.shader(grid)
+      end
     end
   end
   return shaders[key] or nil
@@ -3742,6 +3982,7 @@ Voxel3D.precCount = #PRECISIONS
 -- would be waiting on somebody else's phone.
 function Voxel3D.resetShaders()
   for k in pairs(shaders) do shaders[k] = nil end
+  Voxel3D.animeWaterRefused = nil
   activeShader = nil
   Voxel3D.rung = 1
   Voxel3D.prec = 1
@@ -3773,6 +4014,7 @@ function Voxel3D.buildRung(i, grid, prec)
               .. (Quality.softShadows() and "" or "#define SUN_ONE_TAP 1\n")
               .. (Anime.cel() and "#define ANIME_CEL 1\n" or "")
               .. (normals and "#define LAMP_NORMALS 1\n" or "")
+              .. (Water.anime() and "#define ANIME_WATER 1\n" or "")
               .. (rung.vtf and "#define VERTEX_TEX 1\n" or "")
               .. (rung.crypt and "#define CRYPT_MATS 1\n" or "")
               .. SHADER
@@ -4414,6 +4656,18 @@ function Voxel3D.beginScene(w, h, cx, cy, vw, vh, sky, slot)
     pcall(sh.send, sh, "waterFieldInv", { ix or 0, iz or 0 })
     pcall(sh.send, sh, "sizeAmpMin", tonumber(Water.SIZE_AMP_MIN) or 0.16)
     pcall(sh.send, sh, "sizeAmpGamma", tonumber(Water.SIZE_AMP_GAMMA) or 1.35)
+  end
+  -- the rings (lib/Ripples.lua): the live field or the flat blank. The
+  -- sampler is bound either way -- unbound is a crash -- and `rippleOn` is
+  -- the switch, so a field asleep costs the sheet nothing.
+  do
+    local live = Ripples.live()
+    local img = live and Ripples.image() or Ripples.blank()
+    if img then pcall(sh.send, sh, "rippleMap", img) end
+    pcall(sh.send, sh, "rippleOn", (live and img) and 1 or 0)
+    local rx, rz, inv = Ripples.uvParams()
+    pcall(sh.send, sh, "rippleOrigin", { rx, rz })
+    pcall(sh.send, sh, "rippleInv", inv)
   end
   pcall(sh.send, sh, "waterSteep", tonumber(Water.STEEP_NOW) or 0)
   pcall(sh.send, sh, "waterCurrent", Water.CURRENT or { 0.94, 0.34 })

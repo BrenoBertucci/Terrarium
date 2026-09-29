@@ -189,6 +189,8 @@ local Sky = V.require("Sky")
 local GroundFX = V.require("GroundFX")
 local WorldMap3D = V.require("WorldMap3D")
 local WakeFX = V.require("WakeFX")
+local Ripples = V.require("Ripples")
+local FishFX = V.require("FishFX")
 local CloudShade = V.require("CloudShade")
 local Ecology = V.require("Ecology")
 local AmbientSound = V.require("AmbientSound")
@@ -434,6 +436,21 @@ mod.content.render_pipelines:register(PIPE_VOXEL, {
     -- and what the swimmers do to the water: the wake the sheet paints,
     -- the foam trail, the splash in and the drip out (lib/WakeFX.lua)
     WakeFX.update(dt, Voxel.active())
+    -- the float on the end of a fishing line (lib/FishFX.lua): read off the
+    -- engine's own fishing state, a source of rings like the swimmers
+    FishFX.update(dt, Voxel.active())
+    -- and what the water remembers of all of them: the rings (lib/Ripples.lua),
+    -- stepped AFTER every source above has had its say this frame, on a grid
+    -- that follows the player. Not gated on the overworld being on top of the
+    -- stack: a fishing line and a sign both hold a text box over the lake,
+    -- and the lake does not stop while you read.
+    do
+      local Game = require("src.core.Game")
+      local ow = Game and Game.overworld
+      local p = ow and ow.player
+      local live = Voxel.active() and p ~= nil and not ow.transitioning
+      pcall(Ripples.update, dt, live, p and (p.px or 0) + 8, p and (p.py or 0) + 8)
+    end
     -- and the clouds' shadows crossing the ground downwind (lib/CloudShade.lua)
     CloudShade.update(dt, Voxel.active())
     -- and what comes down off the roofs and the trees: slabs letting go of
@@ -590,6 +607,9 @@ mod.content.render_pipelines:register(PIPE_VOXEL, {
       -- before the weather, so rain falls in FRONT of it the way it falls in
       -- front of everything else standing in the world
       HiddenItems.draw(Voxel3D.project, ctx.scale)
+      -- the float and the line, through the projection the engine's own rod
+      -- sprite just went through, so the three stay attached
+      FishFX.draw(Voxel3D.project, ctx.scale)
       -- and the weather LAST of the three, because rain is in front of
       -- everything by definition: its splashes are world-space and land
       -- among the rest of this, but its streaks fall between the camera and
@@ -924,12 +944,40 @@ local SETTINGS = {
     .. "the fight is the same fight -- only the drawing changes.",
     full = true },
   { Water.setting,
-    "The water surface as geometry rather than a scrolling picture: it "
-    .. "rises and falls on two crossing swells, cel-shaded into flat "
-    .. "dithered bands -- crests a shade lighter, troughs deeper -- with "
-    .. "a hard-ringed toon glint where a crest turns into the sun, and "
-    .. "white FOAM lapping the shoreline on the tide's own clock. FLAT "
-    .. "is the old still plane.",
+    "How much the water MOVES. The surface is geometry rather than a "
+    .. "scrolling picture: it rises and falls on crossing swells, and it "
+    .. "remembers what touches it -- a surfer, a water Pokemon, a raindrop, "
+    .. "a fishing float -- as rings that spread, bounce off the bank and "
+    .. "cross each other. AUTO hands the swell to the weather: near still "
+    .. "on a calm night, a lazy swell by day, heaving under a storm front. "
+    .. "CALM and SWELL fix it; FLAT is the old still plane (the rings still "
+    .. "spread on it). How it is DRAWN is the next row.",
+    pt = "Quanto a agua SE MEXE. A superficie e geometria, nao uma figura "
+    .. "rolando: sobe e desce em ondas cruzadas e lembra do que toca nela "
+    .. "-- surfista, Pokemon aquatico, gota de chuva, boia de pesca -- como "
+    .. "aneis que se espalham, batem na margem e se cruzam. AUTO entrega a "
+    .. "onda ao clima: quase parada numa noite calma, preguicosa de dia, "
+    .. "agitada sob uma frente de tempestade. CALM e SWELL fixam; FLAT e o "
+    .. "plano parado antigo (os aneis continuam nele). Como ela e DESENHADA "
+    .. "e a proxima linha.",
+    full = true },
+  -- `full = true`: a row about the look, like ANIME
+  { Water.style,
+    "How the water is DRAWN -- the art, not the physics. ANIME paints it "
+    .. "the way a cel background does: flat light and shadow patches that "
+    .. "drift and morph, star-shaped glints where the sun catches a facet, "
+    .. "rings in clean bands with a white lip, bright rings thrown on the "
+    .. "bed of the shallows, scribbled whitecaps when the wind is up, and "
+    .. "the next wave's line walking in to the shore. CLASSIC is the "
+    .. "four-colour sheet with dithered bands and a ringed glint. Same "
+    .. "swell and same rings under both.",
+    pt = "Como a agua e DESENHADA -- a arte, nao a fisica. ANIME pinta "
+    .. "como um cenario de anime: manchas chapadas de luz e sombra que "
+    .. "derivam e se deformam, brilhos em estrela onde o sol pega, aneis "
+    .. "em faixas limpas com borda branca, aneis de luz no fundo do raso, "
+    .. "espuma rabiscada nas cristas quando venta e a linha da proxima "
+    .. "onda chegando na margem. CLASSIC e a folha de quatro cores com "
+    .. "faixas pontilhadas. A mesma onda e os mesmos aneis nos dois.",
     full = true },
   { Light.setting,
     "SKY lights the world with two lights instead of one -- the sun, warm "

@@ -26,6 +26,52 @@ Tags and packages:
 
 ## Unreleased
 
+### The water remembers -- rings, the ANIME sheet, AUTO and the fishing float
+
+- **feat: a real wave equation on the water (`lib/Ripples.lua`).** A 96x96
+  height field (4 world px a cell, 384 px round the player) stepped at a fixed
+  30 Hz with the isotropic nine-point laplacian; banks from the size field's
+  own classification are pinned at zero, so a ring REFLECTS off the shore, and
+  two rings cross and interfere. The grid's own edge is a sponge. Sources: a
+  swimmer going in (splash + froth), moving (a push at the bow -- faster than
+  the rings travel, so they pile into a V), sitting still (a slow bob that
+  throws a ring train), climbing out, every raindrop that lands on open water,
+  and the fishing float. The sheet is SHADED by it (one fetch: height, slope,
+  froth), never displaced, so nothing here touches vertex texture fetch; a
+  body floating on the water rides it (Water.surfaceAt). It sleeps when the
+  water is still: no step, no upload, the shader skips the fetch. Offline
+  check `tests/ripples_offline.lua` (speed, stability, bank echo, sponge,
+  sleep, recentre, encoding, and ROUND -- the five-point stencil made
+  octagons, and the check fails on it).
+- **feat: WATER STYLE row -- ANIME / CLASSIC.** ANIME is a compile-time
+  variant of the sheet (`ANIME_WATER`), painted like a cel background: three
+  depth bands, drifting light/shadow patches in patch space, star glints on the
+  light patches while the sun is up and it is dry, rings as a light band with a
+  white crescent on the flank that faces the sun, ring caustics on the bed
+  displaced along the sun ray by the depth, whitecap scribbles once the chop is
+  past a third, and a shore line walking in. No checker anywhere on that sheet
+  or on the bed under it. CLASSIC is the old sheet plus the rings in its own
+  dithered dialect. A driver that refuses the ANIME build keeps CLASSIC for the
+  session and the mode stays up.
+- **feat: WATER row gains AUTO (the new default).** The climate picks the
+  swell on one S-curve between `Water.AUTO_LO` and `Water.AUTO_HI`, from the
+  same wind/rain/chop drive the WIND row's AUTO reads. Stored values of CALM,
+  SWELL and FLAT are unchanged.
+- **feat: the fishing float (`lib/FishFX.lua`).** Read off the engine's own
+  fishing state (`ow.fishing`, `player.fishShakeDy`, the "!" emote): the float
+  arcs off the rod tip into the first water ahead, plops, bobs a ring train,
+  jerks under on every bite, and is dragged down in a burst of white on the
+  strike -- or is reeled back when nothing bit. The roll, text and battle stay
+  the engine's.
+- Probes: `tests/ripple_look_probe.lua` (surfing mid-channel on Route 21,
+  drops, storm, and the Old Rod shot on events), `tests/anime_water_probe.lua`,
+  `tests/ripple_cost_probe.lua` (vsync off, paired cycles). Measured: the field
+  costs ~0.35 ms a frame of CPU while awake, spikes of ~3 ms on a grid
+  recentre; the whole-frame A/B on this i3 + UHD was inside its own noise
+  (+-3 ms s.e.), so no whole-frame claim is made.
+- Known: `tests/water_spectrum_offline.lua` "open water is unchanged" was
+  already failing before this change.
+
 Nothing yet.
 
 ## 1.38.0-beta

@@ -365,7 +365,7 @@ local function bake(list)
   pcall(img.setWrap, img, "clamp", "clamp")
 
   return {
-    image = img, data = data,
+    image = img, data = data, kind = kind,
     ox = x0 * WaterBody.CELL, oz = z0 * WaterBody.CELL,
     w = w, h = h, step = step,
     -- world pixels one texel covers, which is what the shader needs to turn
@@ -461,6 +461,23 @@ end
 
 function WaterBody.on()
   return field ~= nil
+end
+
+-- What the bake classified the cell under a world XZ as: true water, false
+-- land, nil for a cell no drawn map covers (or no bake at all). Nearest, not
+-- bilinear: a shore is a wall, and a wall is either there or it is not.
+-- lib/Ripples.lua builds its walls from this, so the rings stop at the same
+-- banks the size field measured.
+function WaterBody.isWaterAt(wx, wz)
+  local f = field
+  if not (f and f.kind) then return nil end
+  local i = math.floor(((tonumber(wx) or 0) - f.ox) / f.span)
+  local j = math.floor(((tonumber(wz) or 0) - f.oz) / f.span)
+  if i < 0 or j < 0 or i >= f.w or j >= f.h then return nil end
+  local k = f.kind[j * f.w + i + 1]
+  if k == WATER then return true end
+  if k == LAND then return false end
+  return nil
 end
 
 -- Always-bound stand-in for the scene shader's waterField sampler. An

@@ -77,6 +77,9 @@ local RenderTarget = V.require("RenderTarget")
 local ModSetting = V.require("ModSetting")
 local DayNight = V.require("DayNight")
 local Water = V.require("Water")
+-- a drop on open water also leaves rings in the water's own memory
+-- (lib/Ripples.lua), so a shower on a pond is a field of crossing waves
+local Ripples = V.require("Ripples")
 local Wind = V.require("Wind")
 local Quality = V.require("Quality")
 
@@ -1381,9 +1384,17 @@ local function census()
   end
 end
 
+-- What one drop does to the ripple field: field units at the centre (down),
+-- world px of reach, and a whisper of froth.
+Weather.RING_DROP = -1.5
+Weather.RING_DROP_R = 3.5
+
 local function spawnSplash(ow)
   local x, z, surf, gh = splashCell(ow)
   if not x then return end
+  if surf == "water" then
+    pcall(Ripples.poke, x, z, Weather.RING_DROP, Weather.RING_DROP_R, 0.12)
+  end
   local lift = (surf == "water" and Weather.SPLASH_POND_LIFT)
                or (surf == "pool" and Weather.SPLASH_POOL_LIFT)
                or Weather.SPLASH_LIFT
