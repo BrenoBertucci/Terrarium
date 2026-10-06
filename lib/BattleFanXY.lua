@@ -59,7 +59,7 @@ BattleFanXY.ENABLED = true
 -- far and small, and reads fine through the glass.
 BattleFanXY.CARD_W = 4.6          -- card width
 BattleFanXY.CARD_H = 6.4          -- card height
-BattleFanXY.STEP = 5.7            -- spacing between card centres
+BattleFanXY.STEP = 6.0            -- spacing between card centres
 BattleFanXY.RIGHT_OFF = 20.0      -- fan centre, along camera right
 BattleFanXY.UP_OFF = 5.5          -- fan centre, above the arena floor
 BattleFanXY.ROLL_STEP = math.rad(3)   -- in-plane lean per slot: the hand
@@ -70,9 +70,9 @@ BattleFanXY.ARC_DROP = 0.42       -- outer cards sit lower, like held cards
 -- -- a point slid along its own ray projects to the same pixel. Sizing by
 -- CARD_W instead would also change the fan's world footprint and re-tune
 -- every offset above; this one number does not.
-BattleFanXY.CLOSE = 0.74
+BattleFanXY.CLOSE = 0.66
 BattleFanXY.RAISE_UP = 1.4        -- the selected card lifts...
-BattleFanXY.RAISE_FWD = 1.4       -- ...and steps toward the camera
+BattleFanXY.RAISE_FWD = 2.6       -- ...and steps toward the camera
 BattleFanXY.RAISE_K = 18          -- per-second exponential approach
 -- An unselected card RECEDES; it does not turn to glass. At 0.62 the arena
 -- came through the whole face and the three cards the player is not on read as
@@ -85,6 +85,9 @@ BattleFanXY.UNSEL_RECEDE = 0.90   -- unselected cards sit back from the lens
 BattleFanXY.CLICK_OVER = 0.18     -- cursor-change snap: raise briefly past 1
 BattleFanXY.CLICK_K = 14          -- per-second decay of the click
 BattleFanXY.WOBBLE = math.rad(0.8)  -- idle selected yaw/roll
+-- the snap when the cursor lands on a card: a yaw kick that rings out like
+-- a struck plate (damped), so the voxel slab shows its edge turning
+BattleFanXY.KICK = math.rad(26)
 BattleFanXY.RIM_SCALE = 1.09      -- additive type bloom, slightly larger
 BattleFanXY.RIM_ALPHA = 0.08
 
@@ -146,6 +149,17 @@ local function glassFX()
     GlassFX = (ok and F) or false
   end
   return GlassFX or nil
+end
+
+-- the voxel dressing: frame, crown, the type's matter, the throw
+-- (lib/BattleCardVoxel.lua)
+local Voxel = nil
+local function voxel()
+  if Voxel == nil then
+    local ok, X = pcall(V.require, "BattleCardVoxel")
+    Voxel = (ok and X) or false
+  end
+  return (Voxel and Voxel.ENABLED) and Voxel or nil
 end
 
 -- the B2W2 kit, for its name font (see BattleCapsule.text): the cards
@@ -221,10 +235,12 @@ end
 --
 -- Rendered into the slot's canvas only when this key changes: the move, its
 -- PP, and how the card is dressed (selected, swap-marked, disabled).
-local function faceKey(mv, def, sel, swap, disabled)
+local function faceKey(mv, def, sel, swap, disabled, tname)
+  local okL, Lang = pcall(V.require, "Lang")
   return table.concat({ tostring(mv and mv.id), tostring(mv and mv.pp),
                         sel and "S" or "-", swap and "W" or "-",
-                        disabled and "D" or "-" }, ":")
+                        disabled and "D" or "-", tostring(tname),
+                        okL and Lang and Lang.get and Lang.get() or "en" }, ":")
 end
 
 -- ------- what a card says about a move, beyond its name
@@ -251,9 +267,16 @@ local function moveLine(B, def)
   return (cat and cat ~= "" and tostring(cat):upper()) or nil
 end
 
--- The same atlas as the HUD, with fixed reading bands instead of overlapping rows.
+-- The face, drawn to the battle concepts: a cream card inside a dark pixel
+-- rim with stepped corners and a keyline, the type on a coloured tab with
+-- its pixel icon, the move's name set large and heavy, its category over a
+-- rule, POWER and ACCURACY as big figures, and the PP meter in the TYPE's
+-- colours. An empty or disabled move is the same card drained of colour.
+-- Colours, icon and words come from lib/BattleCardVoxel.lua (palette,
+-- icon, the LANGUAGE row's pick).
 local function drawFace(slot, mv, def, sel, swap, disabled)
   local B = box(); if not B then return false end
+  local VX = voxel()
   local g = love.graphics
   local W, H = BattleFanXY.FACE_W, BattleFanXY.FACE_H
   if not slot.canvas then
@@ -263,9 +286,24 @@ local function drawFace(slot, mv, def, sel, swap, disabled)
     c:setFilter("nearest", "nearest")
   end
   local tname = def and B.typeName(def.type)
-  local tc = (tname and B.TYPE_COLOR[tname]) or B.TYPE_FALLBACK
+  local pal = VX and VX.palette(tname) or {
+    tab = { 0.90, 0.88, 0.80 }, ink = BattleHudXY.INK,
+    bar = { { 0.30, 0.70, 0.35 }, { 0.45, 0.88, 0.45 } } }
+  local pick = VX and VX.pick or function(en) return en end
   local pp, maxPP = B.ppOf(mv, def)
-  local ink, muted = BattleHudXY.INK, BattleHudXY.GOLD
+  local empty = disabled or (pp ~= nil and pp <= 0)
+  -- the drained card: every colour taken to its own grey
+  local function tone(c, a)
+    if not empty then return { c[1], c[2], c[3], a or c[4] or 1 } end
+    local l = c[1] * 0.30 + c[2] * 0.59 + c[3] * 0.11
+    l = 0.18 + l * 0.72
+    return { l, l, l, a or c[4] or 1 }
+  end
+  local INK = tone({ 0.11, 0.10, 0.10 })
+  local MUTED = tone({ 0.42, 0.39, 0.35 })
+  local CREAM = tone({ 0.98, 0.96, 0.90 })
+  local EDGE = { 0.09, 0.08, 0.08, 1 }
+  local LINE = tone({ 0.78, 0.74, 0.66 })
   local danger = { 0.65, 0.18, 0.17, 1 }
   local prevCanvas = g.getCanvas()
   local prevBlend, prevAlpha = g.getBlendMode()
@@ -273,59 +311,133 @@ local function drawFace(slot, mv, def, sel, swap, disabled)
     g.setCanvas(slot.canvas)
     g.clear(0, 0, 0, 0)
     g.setBlendMode("alpha")
-    if not BattleHudXY.plateArt(g, 10, 10, W - 20, H - 20) then
-      g.setColor(unpack(BattleHudXY.PANEL))
-      g.rectangle("fill", 10, 10, W - 20, H - 20)
+    -- a rectangle with its corners cut in two pixel steps
+    local function notched(x, y, w, h, st, c)
+      g.setColor(c[1], c[2], c[3], c[4] or 1)
+      g.rectangle("fill", x + 2 * st, y, w - 4 * st, h)
+      g.rectangle("fill", x + st, y + st, w - 2 * st, h - 2 * st)
+      g.rectangle("fill", x, y + 2 * st, w, h - 4 * st)
     end
-    local function text(value, x, y, size, width, color)
+    local function text(value, x, y, size, width, color, heavy)
       value = tostring(value)
       size = math.min(size, width * 84 / math.max(1, BattleHudXY.textWidth(value)))
-      BattleHudXY.text(value, x, y, size, color or ink)
+      if heavy then
+        -- a heavier stroke out of the one face there is: set twice, a
+        -- hair apart
+        BattleHudXY.text(value, x + size * 0.05, y, size, color)
+        BattleHudXY.text(value, x + size * 0.025, y + size * 0.02, size, color)
+      end
+      BattleHudXY.text(value, x, y, size, color)
+      return size
     end
-    -- A quiet type tab and a distinct selection marker, independent of type hue.
-    g.setColor(tc[1], tc[2], tc[3], 0.22)
-    g.rectangle("fill", 30, 32, W - 60, 42)
-    text(tname or "MOVE", 43, 40, 24, W - 100, ink)
-    if sel or swap then
-      g.setColor(unpack(muted))
-      g.rectangle("fill", 10, 28, 6, H - 56)
-      BattleHudXY.uiSprite("cursor", W - 57, 44, 15, 20)
+    -- the plate: dark rim, keyline, face
+    notched(2, 2, W - 4, H - 4, 6, EDGE)
+    notched(9, 9, W - 18, H - 18, 5, CREAM)
+    notched(15, 15, W - 30, H - 30, 4, LINE)
+    notched(17, 17, W - 34, H - 34, 4, CREAM)
+    -- the tab: the type's colour, its word, its icon
+    notched(28, 28, W - 56, 54, 4, tone(pal.tab))
+    g.setColor(0, 0, 0, 0.10)
+    g.rectangle("fill", 36, 78, W - 72, 4)
+    local iconW = 0
+    if VX then iconW = VX.icon(tname, W - 38, 33, 44) end
+    text(VX and VX.typeLabel(tname) or (tname or "MOVE"), 42, 38, 32,
+         W - 100 - iconW, tone(pal.ink))
+    if swap then
+      g.setColor(unpack(SWAP_RING))
+      g.rectangle("fill", 17, 100, 6, H - 150)
     end
+    -- the name, large and heavy; long names wrap at a space
     local name = (def and def.name) or tostring(mv and mv.id or "?")
-    -- Wrap at spaces before shrinking long move names. Two reserved title lines.
     local title, tail = name, nil
-    if BattleHudXY.textWidth(name) * 32 / 84 > W - 64 then
+    if BattleHudXY.textWidth(name) * 40 / 84 > W - 64 then
       local left, right = name:match("^(.*)%s+(%S+)$")
       if left then title, tail = left, right end
     end
-    text(title, 32, 95, 32, W - 64)
-    if tail then text(tail, 32, 131, 32, W - 64) end
-    text(moveLine(B, def) or "", 32, 181, 19, W - 64, muted)
-    g.setColor(0.50, 0.58, 0.48, 0.45)
-    g.rectangle("fill", 32, 214, W - 64, 2)
-    text("POWER", 32, 233, 18, 100, muted)
+    local nameY = tail and 94 or 110
+    text(title, 32, nameY, 40, W - 64, INK, true)
+    if tail then text(tail, 32, nameY + 42, 40, W - 64, INK, true) end
+    -- WATER's face carries a wave behind its words (the Jato Corrente
+    -- concept): pixel steps in pale blue, a crest line over them
+    if tname == "WATER" and not empty then
+      for x = 40, W - 34, 4 do
+        local y = 176 + math.floor(math.sin(x * 0.045) * 9 + 0.5)
+        g.setColor(0.80, 0.92, 0.99, 0.85)
+        g.rectangle("fill", x, y, 4, 14)
+        g.setColor(0.55, 0.80, 0.96, 0.9)
+        g.rectangle("fill", x, y, 4, 3)
+      end
+    end
+    -- the category, over a rule
+    local line = moveLine(B, def) or ""
+    if line == "PHYSICAL" then line = pick("PHYSICAL", "FÍSICO")
+    elseif line == "SPECIAL" then line = pick("SPECIAL", "ESPECIAL") end
+    text(line, 32, 186, 23, W - 64, MUTED)
+    g.setColor(LINE[1], LINE[2], LINE[3], 1)
+    g.rectangle("fill", 30, 220, W - 60, 3)
+    -- the two figures
+    text(pick("POWER", "PODER"), 32, 236, 20, 120, MUTED)
     text(def and def.power and def.power > 1 and def.power
-      or (def and def.power == 1 and "VAR") or "--", 32, 260, 42, 102)
+      or (def and def.power == 1 and "VAR") or "--", 32, 258, 54, 120, INK, true)
     local acc = def and tonumber(def.accuracy)
-    text("ACCURACY", 159, 233, 18, 124, muted)
-    text(acc and ("%d%%"):format(acc) or "--", 159, 260, 42, 112)
+    text(pick("ACCURACY", "ACURÁCIA"), 172, 236, 20, 120, MUTED)
+    text(acc and ("%d%%"):format(acc) or "--", 172, 258, 54, 124, INK, true)
+    -- the PP meter, in the type's own colours
     local ratio = pp and maxPP and maxPP > 0 and math.max(0, math.min(1, pp / maxPP)) or 0
     local state = disabled and "disabled" or (not pp and "none")
       or (pp <= 0 and "empty") or (ratio < 0.30 and "low")
       or (ratio < 0.60 and "mid") or "full"
     slot.ppState = state
-    text("PP", 32, 322, 20, 60, muted)
+    text("PP", 32, 330, 23, 60, MUTED)
     local count = pp and ("%d / %d"):format(pp, maxPP or pp) or "--"
-    local cw = BattleHudXY.textWidth(count) * 23 / 84
-    text(count, W - 32 - cw, 319, 23, W - 96)
-    g.setColor(unpack(ink))
-    g.rectangle("fill", 32, 352, W - 64, 14)
-    g.setColor(unpack(BattleFanXY.PP_COLOR[state] or BattleFanXY.PP_COLOR.disabled))
-    g.rectangle("fill", 35, 355, (W - 70) * ratio, 8)
-    local status = disabled and "DISABLED" or (pp and pp <= 0 and "NO PP")
-      or (swap and "SWAP") or (sel and "SELECTED") or ""
-    text(status, 32, 387, 18, W - 64,
-      (disabled or (pp and pp <= 0)) and danger or muted)
+    local cw = BattleHudXY.textWidth(count) * 27 / 84
+    text(count, W - 32 - cw, 326, 27, W - 96, INK)
+    local bx, by, bw, bh = 30, 360, W - 60, 26
+    g.setColor(EDGE[1], EDGE[2], EDGE[3], 1)
+    g.rectangle("fill", bx, by, bw, bh)
+    local trough = tone({ 0.26, 0.24, 0.23 })
+    g.setColor(trough[1], trough[2], trough[3], 1)
+    g.rectangle("fill", bx + 4, by + 4, bw - 8, bh - 8)
+    local fillW = math.floor((bw - 8) * ratio + 0.5)
+    local stops = pal.bar
+    local slices = 24
+    for k = 0, slices - 1 do
+      local x0 = math.floor((bw - 8) * k / slices)
+      local x1 = math.floor((bw - 8) * (k + 1) / slices)
+      if x0 < fillW then
+        x1 = math.min(x1, fillW)
+        -- the gradient runs along the WHOLE bar, so a draining meter keeps
+        -- its cold end and loses its hot one, like the concept's fire bar
+        local f = (k + 0.5) / slices * (#stops - 1)
+        local i = math.min(#stops - 1, math.floor(f))
+        local t = f - i
+        local a, b = stops[i + 1], stops[math.min(#stops, i + 2)]
+        local c = tone({ a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t,
+                         a[3] + (b[3] - a[3]) * t })
+        g.setColor(c[1], c[2], c[3], 1)
+        g.rectangle("fill", bx + 4 + x0, by + 4, x1 - x0, bh - 8)
+        g.setColor(1, 1, 1, 0.28)
+        g.rectangle("fill", bx + 4 + x0, by + 4, x1 - x0, 4)
+      end
+    end
+    -- the status line
+    local status = disabled and pick("DISABLED", "BLOQUEADO")
+      or (pp and pp <= 0 and pick("NO PP", "SEM PP"))
+      or (swap and pick("SWAP", "TROCAR")) or (sel and pick("SELECTED", "SELECIONADO")) or ""
+    text(status, 32, 398, 20, W - 64,
+      (disabled or (pp and pp <= 0)) and danger or MUTED)
+    -- pixel flecks of the type in two corners, as the concept's fire card
+    if not empty and VX then
+      local fl = pal.glow or pal.ink
+      g.setColor(fl[1], fl[2], fl[3], 0.9)
+      g.rectangle("fill", W - 44, H - 40, 6, 6)
+      g.rectangle("fill", W - 34, H - 50, 4, 4)
+      g.rectangle("fill", W - 54, H - 32, 4, 4)
+      g.rectangle("fill", 24, 92, 4, 4)
+      g.rectangle("fill", 30, 100, 3, 3)
+    end
+    -- and the drained card is veiled, icon and all
+    if empty then notched(9, 9, W - 18, H - 18, 5, { 0.62, 0.62, 0.62, 0.30 }) end
   end)
   if prevCanvas then g.setCanvas(prevCanvas) else g.setCanvas() end
   g.setBlendMode(prevBlend or "alpha", prevAlpha)
@@ -600,6 +712,7 @@ function BattleFanXY.draw(battle, shot)
     local ns = S.slots[sel]
     if not ns then ns = { raise = 0, click = 0 }; S.slots[sel] = ns end
     ns.click = 1
+    ns.kickAt = now
     S.lastSel = sel
   end
 
@@ -607,6 +720,8 @@ function BattleFanXY.draw(battle, shot)
   local R = BattleFanXY.rig(shot)
   if not R then return false end
   local dir, right, up = R.dir, R.right, R.up
+  local VX = voxel()
+  if VX then pcall(VX.fanBegin, shot, now) end
   local anchor = vadd(vadd(R.base, up, BattleFanXY.UP_OFF),
                       right, BattleFanXY.RIGHT_OFF)
   -- the deal flies FROM the player's mon: anchor minus STEP, minus UP
@@ -641,7 +756,8 @@ function BattleFanXY.draw(battle, shot)
     local swap = battle.moveSwapIndex and battle.moveSwapIndex == i
                  and battle.moveSwapIndex ~= sel
     local disabled = battle.player.disabledSlot == i
-    local key = faceKey(mv, def, i == sel, swap or false, disabled)
+    local key = faceKey(mv, def, i == sel, swap or false, disabled,
+                        def and B and B.typeName(def.type))
     if slot.key ~= key then
       local okF = pcall(drawFace, slot, mv, def, i == sel, swap, disabled)
       if not (okF and slot.canvas) then return false end
@@ -711,6 +827,12 @@ function BattleFanXY.draw(battle, shot)
       cr = vrot(cr, dir, roll)
       cu = vrot(cu, dir, roll)
     end
+    if i == sel and slot.kickAt then
+      local kt = now - slot.kickAt
+      if kt < 0.9 then
+        cr = vrot(cr, up, BattleFanXY.KICK * math.exp(-kt * 7) * math.sin(kt * 26))
+      end
+    end
 
     local alpha = (i == sel) and 1 or BattleFanXY.UNSEL_ALPHA
     local aDeal = (p <= 0) and 0 or 1
@@ -724,7 +846,17 @@ function BattleFanXY.draw(battle, shot)
       if not mesh then return false end
       local tname = def and B and B.typeName(def.type)
       local strength = 0.30 + 0.55 * math.max(0, math.min(1, slot.raise or 0))
-      mesh:setTexture(animateFace(slot, "card" .. i, tname, strength, disabled))
+      -- with the voxel dressing the element lives AROUND the card and the
+      -- face stays clean to read, as the concepts have it
+      local tex = VX and slot.canvas
+                  or animateFace(slot, "card" .. i, tname, strength, disabled)
+      if VX then
+        -- the slab goes down first: the face is laid on top of it
+        local pp = B and B.ppOf and B.ppOf(mv, def)
+        pcall(VX.card, i, i == sel, tname, center, cr, cu, p, visRaise,
+              disabled or (pp ~= nil and pp <= 0), tex, now)
+      end
+      mesh:setTexture(tex)
       g.setColor(1, 1, 1, alpha * aDeal)
       g.draw(mesh)
 
@@ -739,6 +871,7 @@ function BattleFanXY.draw(battle, shot)
       drew = drew + 1
     end
   end
+  if VX then pcall(VX.fanEnd, shot, now) end
   g.setColor(1, 1, 1, 1)
   dbg.n = drew
   S.last = dbg

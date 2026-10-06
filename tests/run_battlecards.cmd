@@ -1,0 +1,11 @@
+@echo off
+setlocal
+set POKEPORT_VERSION=yellow
+if "%DS_PROBE_DIR%"=="" set DS_PROBE_DIR=C:\Users\breno\Downloads\GBA\Terrarium\probe_out_battlecards
+set POKEPORT_DRIVER=mods/TERRARIUM/tests/battlecards_probe.lua
+cd /d C:\Users\breno\Downloads\GBA\Quiver-Windows-x64\Apps\PokemonRedBlueYellow-Gen1RecompProject-Recomp
+mkdir "%DS_PROBE_DIR%" 2>nul
+copy /y options.lua options.lua.battlecards.bak >nul
+start /wait "" gen1recomp.exe --console
+copy /y options.lua.battlecards.bak options.lua >nul
+del options.lua.battlecards.bak

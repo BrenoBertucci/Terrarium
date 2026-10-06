@@ -975,31 +975,104 @@ local function placement(site, nNames)
   }
 end
 
+-- ------- THE FOREST IS CUT INTO BANDS
+--
+-- One mesh per species covering the whole map is four draw calls, which
+-- reads as free and is not: `Voxel3D.draw` submits a whole mesh, so every
+-- tree on the map runs the vertex stage every frame whether or not the
+-- camera can see it -- and the transforms are baked into the vertices, so
+-- there is no per-tree anything to skip at draw time. Measured on this
+-- machine, the forest was 75% of ROUTE_1's vertices and 80% of ROUTE_2's,
+-- and of ROUTE_2's 766 trees only 106 were inside the box the terrain beside
+-- them was already being culled with.
+--
+-- So the forest is bucketed by SPECIES AND BAND, each band its own mesh with
+-- its own box, and the draw skips the ones out of frame. This is not a new
+-- idea in this repo: it is exactly what whole-route sprite sheets already do
+-- (`ChunkMesher.SPRITE_CHUNK`, `ChunkMesher.spriteInBox`), where the water
+-- garden went from +2.8 ms as one mesh to +0.4 ms cut. Same size, same box
+-- shape, same test -- so the trees use that function rather than a second
+-- copy of it that could drift.
+--
+-- SIZE: measured, not guessed. A band is a draw call, and draw calls are the
+-- axis this frame has least to spare -- on the reference machine the whole
+-- RES ladder (sixteen times the pixels) moves the frame less than three
+-- milliseconds, so vertices are nearly free here and submissions are not.
+-- Whole map / 128px bands / 256px bands, vertices per frame and draws:
+--
+--   ROUTE_1   1881736 / 240   816162 / 361   938518 / 306
+--   ROUTE_2   2567445 / 242  1012562 / 387  1304873 / 306
+--   VIRIDIAN  3124969 / 274  1209141 / 374  1427667 / 309
+--
+-- 256 keeps about 85% of the vertex saving for about 55% of the added draws,
+-- so it is the default. 128 is there if a device ever turns out to be
+-- genuinely vertex-bound; this one is not.
+Trees3D.BAND = 256                -- world pixels a side (16 cells)
+
+-- Below this a map is left as one mesh per species. A small map's forest is
+-- mostly on screen anyway, so cutting it would buy a few hundred vertices
+-- and cost real draw calls -- and draw calls are the axis this frame is
+-- least able to spare (88 fewer of them moved it two tenths of a
+-- millisecond). The sprite path draws the same line for the same reason.
+Trees3D.BAND_OVER = 120           -- sites on a map before it is cut
+
+-- The bucket a tree belongs to, made on demand. `species` is the index into
+-- st.names; the box grows with every tree stamped into it.
+local function bucketFor(st, pick, px, pz)
+  local key = pick
+  if st.banded then
+    key = pick .. ":" .. math.floor(px / Trees3D.BAND)
+                .. ":" .. math.floor(pz / Trees3D.BAND)
+  end
+  local b = st.buckets[key]
+  if not b then
+    b = { verts = {}, indices = {}, sverts = {}, sindices = {},
+          species = pick,
+          x0 = 1e9, z0 = 1e9, x1 = -1e9, z1 = -1e9, ymax = 0 }
+    st.buckets[key] = b
+    st.order[#st.order + 1] = b
+  end
+  return b
+end
+
 -- Build this map's tree meshes from site records `{ mx, mz [, r] }` in
--- world pixels. One mesh per species, because each carries its own texture.
+-- world pixels. One mesh per species and band, because each species carries
+-- its own texture and each band its own box.
 -- Stamp sites [from..to] of a build into its buckets. One slice's worth.
 function Trees3D.stampRange(st, from, to)
-  local names, buckets = st.names, st.buckets
+  local names = st.names
   for i = from, to do
     local site = st.sites[i]
     local mx, mz = site.mx or 0, site.mz or 0
     local pl = placement(site, #names)
     local pick = pl.pick
-    local b = buckets[pick]
     local yaw, scale, yscale = pl.yaw, pl.scale, pl.yscale
     local jx, jz = pl.jx, pl.jz
+    local px, pz = mx + jx, mz + jz
+    local b = bucketFor(st, pick, px, pz)
     local tpl = template(names[pick])
-    stamp(b.verts, b.indices, tpl.verts, tpl.indices, mx + jx, mz + jz,
+    stamp(b.verts, b.indices, tpl.verts, tpl.indices, px, pz,
           yaw, scale, yscale, tpl.weights)
+    -- The band's box is the ground the trees in it COVER, not the cells they
+    -- stand on: a crown leans past its own cell, and a box drawn on the
+    -- trunks would pop the edge of the forest in and out as the camera
+    -- moves. `ymax` is the same northward slack the terrain chunks carry --
+    -- a tree whose ground is past the box is still in frame if it is tall.
+    local rad = (tpl.radius or 8) * scale + 4
+    if px - rad < b.x0 then b.x0 = px - rad end
+    if px + rad > b.x1 then b.x1 = px + rad end
+    if pz - rad < b.z0 then b.z0 = pz - rad end
+    if pz + rad > b.z1 then b.z1 = pz + rad end
+    local hgt = (tpl.height or 32) * yscale
+    if hgt > b.ymax then b.ymax = hgt end
     -- The caster is the HULL when there is one (buildShadowProxy above),
     -- and the card-less solid mesh when there is not -- an older bake, or
     -- one whose crown the profile could not read.
-    local sb = st.shadow[pick]
     if Trees3D.SHADOW_PROXY and tpl.shadowVerts then
-      stamp(sb.verts, sb.indices, tpl.shadowVerts, tpl.shadowIndices,
-            mx + jx, mz + jz, yaw, scale, yscale, tpl.shadowWeights)
+      stamp(b.sverts, b.sindices, tpl.shadowVerts, tpl.shadowIndices,
+            px, pz, yaw, scale, yscale, tpl.shadowWeights)
     else
-      stamp(sb.verts, sb.indices, tpl.verts, tpl.solidIndices, mx + jx, mz + jz,
+      stamp(b.sverts, b.sindices, tpl.verts, tpl.solidIndices, px, pz,
             yaw, scale, yscale, tpl.weights)
     end
   end
@@ -1011,22 +1084,36 @@ end
 function Trees3D.finishBuild(st)
   local out = {}
   local paint = st.map and Trees3D.set().palette
-  for i = 1, #st.names do
-    local b = st.buckets[i]
+  -- st.order, not 1..#names: a banded build has one bucket per species PER
+  -- BAND, and the order list is the only thing that knows how many there
+  -- are. Textures are looked up per species and cached here, because two
+  -- bands of the same species must not each bake their own palette strip.
+  local texFor = {}
+  for i = 1, #st.order do
+    local b = st.order[i]
     if #b.verts > 0 then
       local mesh = Voxel3D.newMesh(b.verts, b.indices)
       if mesh then
-        local tex = paint and paletteTexture(st.names[i], st.map)
-                    or loadTexture(st.names[i])
+        local name = st.names[b.species]
+        local tex = texFor[b.species]
+        if tex == nil then
+          tex = (paint and paletteTexture(name, st.map) or loadTexture(name))
+                or false
+          texFor[b.species] = tex
+        end
         if tex then pcall(mesh.setTexture, mesh, tex) end
         local shadowMesh = nil
-        local sb = st.shadow and st.shadow[i]
-        if sb and #sb.verts > 0 then
-          shadowMesh = Voxel3D.newMesh(sb.verts, sb.indices)
+        if #b.sverts > 0 then
+          shadowMesh = Voxel3D.newMesh(b.sverts, b.sindices)
           if shadowMesh and tex then pcall(shadowMesh.setTexture, shadowMesh, tex) end
         end
+        -- `box`: only a CUT map carries one, exactly as a cut sprite sheet
+        -- does. An uncut map's single mesh is always drawn, so it must not
+        -- be given a box that could reject it.
         out[#out + 1] = { mesh = mesh, shadowMesh = shadowMesh,
-                          tex = tex, species = st.names[i] }
+                          tex = tex or nil, species = name,
+                          box = st.banded
+                                and { b.x0, b.z0, b.x1, b.z1, b.ymax } or nil }
       end
     end
   end
@@ -1042,11 +1129,8 @@ function Trees3D.meshesFromSites(sites)
   local names = Trees3D.loaded()
   if #names == 0 or not sites or #sites == 0 then return nil end
   if #sites > Trees3D.MAX_TREES then return nil end
-  local st = { sites = sites, names = names, buckets = {}, shadow = {} }
-  for k = 1, #names do
-    st.buckets[k] = { verts = {}, indices = {} }
-    st.shadow[k] = { verts = {}, indices = {} }
-  end
+  local st = { sites = sites, names = names, buckets = {}, order = {},
+               banded = #sites > Trees3D.BAND_OVER }
   Trees3D.stampRange(st, 1, #sites)
   return Trees3D.finishBuild(st)
 end
@@ -1210,12 +1294,9 @@ local function meshesFor(map)
       meshes[id] = false
       return nil
     end
-    st = { sites = sites, names = names, i = 1, buckets = {}, shadow = {},
+    st = { sites = sites, names = names, i = 1, buckets = {}, order = {},
+           banded = #sites > Trees3D.BAND_OVER,
            frames = 0, seen = advances, map = map }
-    for k = 1, #names do
-      st.buckets[k] = { verts = {}, indices = {} }
-      st.shadow[k] = { verts = {}, indices = {} }
-    end
     pending[id] = st
   end
 
@@ -1373,7 +1454,30 @@ end
 -- `ox, oz` is the neighbour-map translation in world pixels (0 on the map
 -- being stood on); sites are stored in the map's own coordinates, so the
 -- offset rides the transform rather than the mesh.
-function Trees3D.draw(map, outdoor, ox, oz)
+-- Is this band in frame? The test itself lives in ChunkMesher, because the
+-- cut sprite sheets got there first and having ONE copy of it is the whole
+-- reason to reuse it rather than write a second that can drift.
+--
+-- Resolved lazily and defensively. The offline harness
+-- (tests/trees_ready_offline.lua) has no ChunkMesher at all, and the answer
+-- to a missing one has to be "draw the forest" -- a cull that fails open
+-- costs frame time, and a cull that fails closed deletes the world.
+local inBoxFn = nil
+local function inBox(entry, b)
+  if not (b and entry.box) then return true end
+  if inBoxFn == nil then
+    local ok, CM = pcall(V.require, "ChunkMesher")
+    inBoxFn = (ok and CM and CM.spriteInBox) or false
+  end
+  if not inBoxFn then return true end
+  return inBoxFn(entry, b)
+end
+
+-- `b` is the view box VoxelScene already computes for the terrain
+-- ({ x0, z0, x1, z1 }, in THIS map's coordinates -- a neighbour is handed a
+-- shifted one). Bands outside it are skipped. Passing nil draws everything,
+-- which is what an uncut map and every older caller get.
+function Trees3D.draw(map, outdoor, ox, oz, b)
   if not Trees3D.wantsMap(map, outdoor) then return end
   if not Voxel3D.available() then return end
   local built = meshesFor(map)
@@ -1411,8 +1515,23 @@ function Trees3D.draw(map, outdoor, ox, oz)
     end
   end
 
-  for i = 1, #built do
-    Voxel3D.draw(built[i].mesh, built[i].tex, xf, 0, xf, sway)
+  -- One state send for the whole forest, then one draw per band in frame.
+  -- Sending it per band is what made the first cut version slower than the
+  -- whole-map mesh it replaced. `bound` caches the atlas the same way
+  -- Voxel3D.drawGroup caches a chunk's: the texture only ever changes when
+  -- the palette is repainted, and re-binding it per band per frame is a
+  -- driver call for nothing.
+  if Voxel3D.beginBatch(xf, 0, xf, sway) then
+    for i = 1, #built do
+      local e = built[i]
+      if inBox(e, b) then
+        if e.tex and e.bound ~= e.tex then
+          pcall(e.mesh.setTexture, e.mesh, e.tex)
+          e.bound = e.tex
+        end
+        Voxel3D.batchDraw(e.mesh)
+      end
+    end
   end
 
   -- Put the load channel back the way VoxelScene left it. Leaving the
@@ -1435,7 +1554,10 @@ end
 -- The combined mesh is already in map space, so one call per species with
 -- the neighbour translation is the whole job -- no per-tree matrices, and
 -- the shadow pass costs the same one draw the scene pass does.
-function Trees3D.castShadows(map, ox, oz)
+-- `b` is the SUN's box, which is not the scene's: it reaches further so a
+-- tree standing off screen can still throw a shadow onto ground that is on
+-- it. VoxelScene computes both and hands each pass its own.
+function Trees3D.castShadows(map, ox, oz, b)
   if not Voxel3D.available() then return end
   -- builtFor, NOT meshesFor: this pass consumes the build, it does not
   -- advance it. See builtFor for the measurement that forced the split.
@@ -1449,11 +1571,13 @@ function Trees3D.castShadows(map, ox, oz)
   -- brightness and could displace or drop geometry the scene pass kept.
   if Voxel3D.packedShade then Voxel3D.packedShade(true) end
   for i = 1, #built do
-    local caster = built[i].mesh
-    if Trees3D.SHADOW_SOLID_ONLY and built[i].shadowMesh then
-      caster = built[i].shadowMesh
+    if inBox(built[i], b) then
+      local caster = built[i].mesh
+      if Trees3D.SHADOW_SOLID_ONLY and built[i].shadowMesh then
+        caster = built[i].shadowMesh
+      end
+      pcall(ShadowMap.draw, caster, built[i].tex, ShadowMap.snug(m))
     end
-    pcall(ShadowMap.draw, caster, built[i].tex, ShadowMap.snug(m))
   end
   if Voxel3D.packedShade then Voxel3D.packedShade(false) end
 end

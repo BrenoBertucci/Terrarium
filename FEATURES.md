@@ -55,14 +55,14 @@ menu.
 | the **W-COUNT** options row | SOME / FEW / MANY — how many stand within reach at once. Only on the menu while **WILD** is on |
 | the mon pack (always on when `assets/mons` is present) | the Pokemon standing on the field wear their Generation 5 (Black/White) sprites, front and back, in full colour, instead of the Game Boy pic through a palette. ADVANCED and the other COLORS modes do not touch them; the hour's light does. Trainer pics stay the engine's |
 | the **BACK SPRITES** options row | OFF / ON — your own Pokémon seen from behind, the series' shot: ON stands it on its tile in the arena wearing its back art, grown to a foreground hero (`OverworldBattle.BACK_HERO`) under the same light and shadow as the foe, with the move cards and the panels floating in front of it; OFF stands it on the map facing the foe, at the foe's own scale. Only on the menu while **3D-BTL** is on, because it decides nothing without it |
-| the **DAYTIME** options row | SYNC / DAY / NIGHT / DUSK / DAWN / CYCLE — what time it is outdoors, on the diorama *and* on the flat 2D world; held at SYNC (and off the menu) while VOXEL is FULL |
+| the **DAYTIME** options row | SYNC / DAY / AFTERNOON / DUSK / NIGHT / DAWN / CYCLE — what time it is outdoors, on the diorama *and* on the flat 2D world. On the menu under every VOXEL rung, FULL included |
 | the **SCREEN FX** options row (was **RTX**) | AUTO / SSR / AO / OFF / MAX — the screen-space pass. Not ray tracing, and no RTX hardware involved; see below |
 | the **AMBIENT** options row | ON / OFF — butterflies and ground birds by day (the birds startle and fly off when you get close), dragonflies over the water, fireflies through the night, a flock crossing the sky, leaves on the wind — and civilian NPCs glance at you as you pass. Trainers never turn: their facing is their line of sight |
 | the **CLOUD SHADE** options row | ON / OFF — the shadows of the clouds crossing the ground downwind: a smooth field evaluated per vertex that takes the sun's share of the light (and a little of the sky's) off the patch under a cloud, following the CLOUDS row's coverage; none under a flat overcast |
 | the **WEATHER** options row | AUTO / OFF / RAIN / SNOW — occasional showers, with the whole sky going over with them; snow through the winter of the SYNC clock. See below |
 | the **GROUND** options row | ON / OFF — what the weather leaves behind: puddles that gather through a shower and are still there afterwards, snow that settles in drifts, and footprints behind everybody walking on it. Only on the menu while **WEATHER** is on. See below |
 | the **TREES** options row | VOXEL / 3D — which trees stand on the round-tree sites. VOXEL (default) is the blocky tree grown by `tools/grow_voxel_tree.py`: 2.5-pixel cubes, a visible bole with roots, a crown of lobes with notches and tufts, four shapes (round, tiered, broad, tall) mixed across the wood — and no colour of its own: every leaf cube is painted at map load in the greens the map's own tree tile wears (`TerrainAtlas.tileShades`), so Route 2's trees are Route 2 green and the forest's are the forest's. 3D is `tools/bake_tree.py`'s finer bake: a smoother canopy under a fringe of photographed leaf cards, four species (oak, pine, birch, willow), in its own colours. Both bend in the wind while the trunk stays planted. The old carved ball from the tileset art is no longer a row option; it stands in only where a set fails to load. Flipping the row rebuilds the map's meshes over the next frames |
-| the **COMBAT** options row | DINAMICA / CLASSICA / MINIMA / DESLIGADA — the whole dynamic battle costume. DINAMICA swings the camera in behind the attacker, floats the menu and the box on glass in the arena, hangs HP capsules beside the mons, and puts typed hit sheets at the blow — and the blow reaches the room: a spotlight closes on the attacker, the hit flashes the defender's cell in the move's colour, voxel cubes fly off the floor, a scorch / puddle / frost / crater stays under the defender's feet, a gold damage figure floats up, and every pane of glass leans with the shove, cracks or ripples where the wave strikes it, and prints a shadow on the floor. On the move menu the chosen card wears its element: lightning crawls an ELECTRIC card's edges, flames lick a FIRE card's foot, a swell rolls a WATER card, frost grows on ICE, rings breathe on PSYCHIC, with the type's colour running the rim. CLASSICA holds the camera, lays every panel flat and answers a blow with nothing but the engine's own anims. MINIMA keeps the corner-pinned name/HP/EXP reading and the message text but draws no command menu and no move screen — not this mod's and not the engine's — leaving that phase to another battle-UI mod. DESLIGADA draws nothing at all: no box, no HUD, no menu, just the 3D scene and the models, which is the level to pick to hand the whole battle screen to another mod. Only on the menu while **3D-BTL** is on |
+| the **COMBAT** options row | DINAMICA / CLASSICA / MINIMA / DESLIGADA — the whole dynamic battle costume. DINAMICA swings the camera in behind the attacker, floats the menu and the box on glass in the arena, hangs HP capsules beside the mons, and puts typed hit sheets at the blow — and the blow reaches the room: a spotlight closes on the attacker, the hit flashes the defender's cell in the move's colour, voxel cubes fly off the floor, a scorch / puddle / frost / crater stays under the defender's feet, a gold damage figure floats up, and every pane of glass leans with the shove, cracks or ripples where the wave strikes it, and prints a shadow on the floor. On the move menu the moves are a hand of thick pixel cards (dark stepped rim, the type on a coloured tab with its pixel icon, POWER / ACCURACY large, the PP meter in the type's colours, a drained grey card for no PP or disabled), and the raised one comes alive in pixel art around it — never across its text: a glow hugging the rim, ribbons of its element orbiting it (behind on one side, in front on the other), glowing pixel squares drifting off onto the real floor, and the type's set piece — lightning crawling an ELECTRIC card's edges, ice crystals grown out of an ICE card's corners, a drop beside a WATER card, rings of light round a PSYCHIC one. Confirming a move charges the card, throws it at the foe trailing its element and bursts it there; B folds the hand back into your Pokémon (`lib/BattleCardVoxel.lua`, probe `tests/battlecards_probe.lua`). CLASSICA holds the camera, lays every panel flat and answers a blow with nothing but the engine's own anims. MINIMA keeps the corner-pinned name/HP/EXP reading and the message text but draws no command menu and no move screen — not this mod's and not the engine's — leaving that phase to another battle-UI mod. DESLIGADA draws nothing at all: no box, no HUD, no menu, just the 3D scene and the models, which is the level to pick to hand the whole battle screen to another mod. Only on the menu while **3D-BTL** is on |
 | the **EXP** options row | TEAM / SPLIT / OFF — experience for the whole party instead of only the Pokémon that fought. TEAM gives everyone still standing what the fighters got; SPLIT divides that same total among them; OFF is 1996. Only the fighter gets a text box |
 | the **ECOLOGY** options row | ON / TIME / OFF — who is out *right now*: the nocturnal half of the dex after dark, the birds and the caterpillars by day, and water Pokémon while it rains. See below |
 | the **WATER** options row | AUTO / CALM / SWELL / FLAT — how much the water moves. AUTO lets the weather pick the swell. On every rung the surface remembers what touches it: surfers, water Pokémon, raindrops and a fishing float leave rings that spread, bounce off the bank and cross each other (a wave equation, `lib/Ripples.lua`) |
@@ -75,10 +75,13 @@ menu.
 | the **HAUNT** options row | ON / OFF — the tower of graves is haunted. Lavender's Pokemon Tower stands as a tower now (plinth, ashlar body with a pointed portal, storeys of pointed windows under cornices, a lantern storey, a pagoda roof and a spire), its glass burns cold, sparse and breathing after dark, and pale wisps drift out of it. The row is the wisps and the cold glass; the tower stands either way. See below |
 | the **CRYPT** options row | NEW / CLASSIC — what the inside of the Pokemon Tower is. NEW stands its seven floors and Agatha's room as a crypt: one continuous octagon of grey stone (the stones proud of their joints, the corners chamfered, a plinth battering into the room) climbing out of the light, the near walls ramping down to a coped parapet so the camera looks over them, the dark beyond, every headstone on a plinth; candle lanterns in wall sconces, the room held dim and cool, a violet haze and wisps sighing out of the graves on the haunted floors, dark flagstones underfoot. CLASSIC is the profile's pins as they were. Flipping it rebuilds the map's meshes. See below |
 | the **CRYPT-FX** options row | ON / OFF — the crypt's light, in the shader: every wall and headstone lit by the face it actually turns to the lantern, a hemisphere of fill from above read through the stone's relief, a wet sheen on the stone under each flame, ground mist drifting through the graves, weathered stone and granite on the walls and the headstones with their grain in the light — the walls standing those stones in depth so a lantern rakes a block, not a crate — and the flames blooming into a split-toned frame. OFF lights the crypt the way the streets are lit. Only inside the tower, with CRYPT on NEW |
+| the **MIST** options row | ON / OFF — ground mist the clock grows and burns off: thick and sunlit at dawn, gone by noon, back at dusk, silver under the moon with a halo round every lamp. On the world only, never on a Pokémon or a person. See below |
+| the **GLOW** options row | ON / OFF — light that comes *from* things and stops at walls: a Charmander's tail, a Pikachu's sparks, a Gastly's glow, the doorways of a town at night, a Flamethrower in the arena. Caves go dark so it shows; Rock Tunnel before FLASH is the original's own darkness, and FLASH is a lantern. See below |
+| the **FOLLOW** options row | ON / OFF — the first Pokémon in your party walks one step behind you, the way Yellow's Pikachu does (in Yellow, while Pikachu is out, Pikachu is the one). Never blocks you; A at it and it answers |
 | the **TOWN** options row | ON / OFF — trainers' Pokemon loose in the streets of every town. Most are out for a stroll (press A to hear them); the one that STARES you down wants to battle, at your own lead's level |
 | the **A-FARM** options row | OFF / P1–P6 — pick a party slot and a bot trains that Pokemon; see below |
 | the **QOL** options row | ON / OFF — ten mercies: the **bag sorted into pockets** (balls, medicine, TMs and HMs, key items), wrapping and taking a held direction; the PC **following a catch** into whichever box it landed in, and a full box rolling forward instead of refusing a deposit; **RENAME** on the party menu, because Kanto has no NAME RATER; **hidden items glint** on the ground (it does not name them or take them — you still walk there and press A); hold **B to run**; **field poison stops at 1 HP** instead of killing; **trade evolutions at level 37** without a second machine; effectiveness markers on the move menu (`+`/`-`/`x` against the Pokémon in front of you); a fresh REPEL used the moment one wears off; and HMs on the A button — A at a tree CUTs, A at water SURFs, A at a boulder wakes STRENGTH, all behind the same badges and checks the menu applies. OFF is the full 1996 friction |
-| the **LANGUAGE** options row | ENGLISH / PORTUGUES — the language of the three places this mod writes its own words: the battle command buttons (ATTACK / SWITCH / ITEMS / FLEE), the bag's pocket tabs and the start menu's MAP row. English by default, because that is what they already said and what the engine's own menus say beside them; PORTUGUES is for a save running under a Portuguese translation mod. Nothing the engine prints — dialogue, item names, the flat menus this mod silences — is affected either way |
+| the **LANGUAGE** options row | ENGLISH / PORTUGUES — the language of the places this mod writes its own words: the battle command buttons (ATTACK / SWITCH / ITEMS / FLEE), the move cards' labels (type, PHYSICAL / FÍSICO, POWER / PODER, NO PP / SEM PP...), the bag's pocket tabs and the start menu's MAP row. English by default, because that is what they already said and what the engine's own menus say beside them; PORTUGUES is for a save running under a Portuguese translation mod. Nothing the engine prints — dialogue, item names, the flat menus this mod silences — is affected either way |
 | the **RES** options row | 1/2 / FULL / 1/3 / 1/4 — what fraction of the panel the 3D pass rasterises at |
 | the **SHADOWS** options row | LOW / OFF / HIGH / SOFT — the sun pass; SOFT widens each shadow's edge with distance from what throws it |
 
@@ -1283,3 +1286,107 @@ box and the menus over it — sits on frosted glass rather than on the white
 field it used to have behind it: the world underneath, blurred and laid back
 down translucent, with the ink flipping white where the ground it lands on is
 dark. Nothing the engine draws inside a box moves; only the paper is gone.
+## Light that comes from things — the GLOW and FOLLOW rows
+
+Every light this mod had before was a closed-form pool: eight street lamps
+sent to the shader, a crypt's candles, a shop's tubes. Good pools, and they
+walked straight through walls. What Gen 1 has that none of them could light
+is the thing that makes its darkness mean anything: a Charmander's tail in
+Rock Tunnel.
+
+**GLOW** is light that comes *from* things and stops where the map stops it.
+
+| what glows | how |
+| --- | --- |
+| the Pokémon walking behind you (**FOLLOW**) | by species: fire (Charmander's line, Vulpix, Growlithe, Ponyta, Magmar, Flareon, Moltres) flickers orange, electric (Pikachu, Voltorb, Magnemite, Electabuzz, Jolteon, Zapdos) crackles yellow, Gastly's line breathes violet, a Staryu's gem pulses, Articuno is ice and Mew/Mewtwo are pink |
+| wild and street Pokémon (**WILD**, **TOWN**) | the same table, a little dimmer — the Power Plant is lit by what lives in it |
+| **FLASH** | Rock Tunnel only, as in the original: a wide cold lantern around whoever walks with you |
+| doorways at night | every door out of a building onto an outdoor map spills the room onto the street, tinted by what the room is — a Center pink, a Mart fluorescent, a house amber |
+| a move in the arena | fire, electric, ice, psychic, ghost and dragon moves (and FLASH, SOLARBEAM, HYPER BEAM, SELFDESTRUCT, EXPLOSION, AURORA BEAM by name) light the attacker as they are thrown and the defender as they land |
+| lightning | a close strike lights the ground for the length of its flash, cold — the sky alone went white before |
+
+**How it works.** A small window of the world (128 texels square, one texel
+per half cell) is redrawn every frame as a stack of additive quads, one per
+lit thing. Each quad is textured with that thing's *mask*: how much of its
+light reaches each texel around it, built once on the CPU from the same
+heights the mesher extrudes (and the real tops of stamped buildings). A
+texel taller than the flame blocks; visibility is propagated outward ring by
+ring, each texel taking a blend of its two neighbours toward the source —
+so a rock throws a shadow that softens with distance, light turns a corner a
+little, and a shadowed texel near the flame keeps a tenth of its light off
+the walls. The scene shader reads the window **once per fragment**, however
+many lights are lit. Masks live in one shared texture and are cached by
+where the source stands, so a lantern that walks costs one small build per
+half cell (~0.35 ms on an i3 with Intel UHD) and a door that stands costs
+nothing.
+
+**The dark.** A light needs something to push against, and a cave in this
+renderer was lit at noon. With GLOW on, caves are held down to about a
+third of their light, and **Rock Tunnel before FLASH** to almost nothing —
+the original's own darkness, drawn as darkness. The engine darkens that map
+by permuting its palette (white to grey, every other shade to black), and a
+black texture stays black under any lantern, so while the diorama is on the
+palette shift is intercepted and the same darkness comes from the light
+instead. After FLASH the tunnel stays dim and the lantern is the circle of
+light you walk in. The flat 2D game, and GLOW off, keep the engine's own
+darkness exactly.
+
+With GLOW on, the ANIME rim light and its ink follow the light they stand
+in: a rock face in a dark cave no longer shines as a lit slab.
+
+**Cost** (i3-1115G4 + Intel UHD, 1536×864, vsync off, OFF/ON/ON/OFF
+palindrome, `tests/glow_cost_probe.lua`): +0.1 ms p50 at night in Viridian,
++0.5 ms in Rock Tunnel. It is a compile-time variant like the cel step, and
+the GLES2 shader ladder gives it up first on a driver that refuses it —
+the diorama comes up without the lights, and the caves stay lit.
+
+**FOLLOW** is the companion that carries the light: the first Pokémon in
+the party still standing, one step behind you, the way Yellow's Pikachu
+walks (and in Yellow, while Pikachu is out, the engine's own Pikachu is the
+companion and this stands down). It never blocks you, it hides while you
+surf or cycle, and pressing A at it gets a cry and a hop. It uses the same
+walk sheets as the wild Pokémon (`python tools/install_roamer_sprites.py`),
+and it is never saved — it simply walks back out after every warp.
+
+## The hour's air — the MIST row
+
+The day/night cycle moved the sun, the shadows, the sky and the light. It
+never moved the **air**, and the air is half of what makes a morning read as
+one. With **MIST** on (the default), the clock grows ground mist and burns it
+off:
+
+- **before sunrise** the low ground fills with it, and when the sun comes up
+  behind it — the camera looks north, and the arc rises and sets in the north
+  — the far half of the frame glows gold;
+- **by mid-morning** it has burnt away, and noon and the afternoon are the
+  clear world they always were;
+- **at dusk** it breathes back in, lilac under the violet sky;
+- **under the moon** it lies thin and silver, and every street lamp, lit
+  window and GLOW light stands in a halo of it.
+
+It is **scenery**: it lies on the ground, the water, the fences and the feet of
+the walls, and never on a Pokémon or a person — the sprites stand in it
+untouched. Height does the geography: it thins to nothing a waist's height up,
+so it pools in ponds, basins and the sea and leaves ledges, roofs and treetops
+clear. It lies heavier after rain, drifts and slowly changes shape, and parts
+around whoever walks through it, closing back over behind them in a few
+seconds. Outdoors only (and under the forest canopy); a cave has no dawn.
+
+It is the crypt's ground mist taken outside (`lib/Mist.lua` decides how much
+and what lights it; the shader block is shared). The drift reads one baked
+64×64 noise texture instead of eight sine hashes a pixel, sprites skip it per
+draw, and the wake is only tested near the feet that made it.
+
+**Cost** (i3-1115G4 + Intel UHD, FULL, vsync off, three OFF/ON/ON/OFF
+palindromes per map, `tests/mist_cost_probe.lua`): about **+1.5 ms p50 at
+dawn**, the thickest hour, in Pallet Town and in Vermilion's harbour. Zero from
+mid-morning through the late afternoon, when there is no mist to draw. MIST
+OFF removes it entirely.
+
+**DAYTIME, fixed:** the row used to disappear while VOXEL sat on FULL — the
+preset most people play on — and hold the sky at SYNC, the wall clock, so a
+FULL player never got an evening unless their own clock said so, and a DUSK
+picked on the mod manager's page snapped straight back. FULL no longer owns
+the hour. The row also gained **AFTERNOON**, the middle of the late golden
+hour. Both rows print in Portuguese when LANGUAGE is PORTUGUES
+(`ModSetting:translate`).

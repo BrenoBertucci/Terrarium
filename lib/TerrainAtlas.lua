@@ -173,6 +173,8 @@ local function staticAtlas(map, colors)
   end)
   cache[key] = ok and img or false
   cacheData[key] = (ok and data) or false
+  TerrainAtlas.bakes = TerrainAtlas.bakes + 1
+  TerrainAtlas.lastBakeKey = key
   return cache[key] or base, cacheData[key]
 end
 
@@ -599,6 +601,7 @@ function TerrainAtlas.animate(map, colors, base, baked)
     .. (perMap or "")
   local entry = animated[key]
   if entry == nil then
+    TerrainAtlas.animBuilds = TerrainAtlas.animBuilds + 1
     entry = newEntry(map, base, baked)
     if entry then
       entry.mapId = perMap
@@ -800,6 +803,17 @@ function TerrainAtlas.setLive(live)
       animated[key] = nil
     end
   end
+end
+
+-- For probes: how many baked atlases and animated copies are held, and the
+-- palette keys the last N bakes were made for.
+TerrainAtlas.bakes = 0
+TerrainAtlas.animBuilds = 0
+function TerrainAtlas.stats()
+  local c, a = 0, 0
+  for _ in pairs(cache) do c = c + 1 end
+  for _ in pairs(animated) do a = a + 1 end
+  return c, a
 end
 
 function TerrainAtlas.invalidate()

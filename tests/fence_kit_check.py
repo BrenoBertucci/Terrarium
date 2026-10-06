@@ -14,8 +14,8 @@ def tiles(tx, ty):
     if 0 <= tx < 6 and 0 <= ty < 2:
         return (14, 14, 85, 85)[(ty % 2) * 2 + tx % 2]
     return 57
-assert [Kit.signature(tiles, x, 0) for x in (0, 2, 4)] == ["0100", "0101", "0001"]
-mid = Kit.model(lua.table(W=32), "0101")
+assert [Kit.signature(tiles, x, 0) for x in (0, 2, 4)] == ["T0100", "T0101", "T0001"]
+mid = Kit.model(lua.table(W=32), "T0101")
 box = [(x, y, z) for x in range(16) for y in range(int(mid.ytop) + 1) for z in range(16) if mid.at(x, y, z) is not None]
 assert all(0 <= mid.at(*v) < 32 * 16 for v in box)                 # every voxel wears a texel of the sheet
 assert all(sheet.getpixel((mid.at(*v) % 32, mid.at(*v) // 32))[:3] != (0, 0, 0) for v in box), "a black texel"
@@ -25,7 +25,11 @@ assert mid.at(7, Kit.TOP, 0) is None                               # and none ru
 # the brace is an X, a voxel a column and two thick: it fills the gap between the rails at the post
 col = [y for y in range(16) if mid.at(10, y, 8) is not None]
 assert Kit.TOP - 1 in col and Kit.LOW + 2 in col, col
-assert Kit.signature(tiles, 0, 0, lambda x, y: x < 0) == "0101"          # ...unless a map is joined there
-end = Kit.model(lua.table(W=32), "0100")
+assert Kit.signature(tiles, 0, 0, lambda x, y: x < 0) == "T0101"          # ...unless a map is joined there
+end = Kit.model(lua.table(W=32), "T0100")
 assert end.at(2, Kit.TOP, 7) is None and end.at(12, Kit.TOP, 7) is not None  # a run ends in a post
+# Celadon's is iron: pickets every other voxel, a gilt tip over the top rail, no timber brace
+assert Kit.signature(tiles, 2, 0, None, "CELADON_CITY") == "I0101" and Kit.sheetFor("I0101").endswith("fence_iron.png")
+ir = Kit.model(lua.table(W=32), "I0101")
+assert ir.at(12, Kit.TOP + 3, 8) == 25 and ir.at(13, Kit.TOP + 3, 8) is None and ir.at(12, Kit.TOP, 8) is not None
 print("fence kit ok:", len(box), "voxels in a run cell")

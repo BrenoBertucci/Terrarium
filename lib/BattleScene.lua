@@ -252,7 +252,27 @@ local function shadowSignature(state, arena, terrain, nbMesh, token)
                   math.floor(ShadowMap.KX * 128),
                   math.floor(ShadowMap.KZ * 128) }
   for i = 1, #nbMesh do parts[#parts + 1] = tostring(nbMesh[i]) end
+  -- the sheet-built groups finish after the terrain does (a painted
+  -- ground's cells are models of their own), so their count is part of
+  -- the answer too -- else the first pass would freeze without them
+  parts[#parts + 1] = #(ChunkMesher.spriteGroups(host) or {})
   return table.concat(parts, ",")
+end
+
+-- The geometry built from sprite SHEETS rather than the tileset: the kits'
+-- houses, towers, bridges, the reef -- and the painted ground worlds
+-- (lib/LavenderGroundKit.lua), which CLAIM their cells away from the
+-- mesher. An arena that drew the terrain alone stood the fight on the sky
+-- wherever a town's ground had been painted: the floor was simply gone.
+-- Drawn the way free-roam draws them (VoxelScene.sheetFx), glass off --
+-- their UVs address a PNG, not the atlas the glass mask describes.
+local function drawSheets(map, model, sheetFx, sheetSway)
+  for _, g in ipairs(ChunkMesher.spriteGroups(map) or {}) do
+    local fx = sheetFx[g.path]
+    if fx then fx(true) end
+    Voxel3D.draw(g.mesh, g.tex, model, nil, nil, sheetSway[g.path] or 0)
+    if fx then fx(false) end
+  end
 end
 
 local function castShadows(state, arena, terrain, nbMesh, cx, cy, vw, vh,
@@ -278,6 +298,16 @@ local function castShadows(state, arena, terrain, nbMesh, cx, cy, vw, vh,
   for i, nb in ipairs(casters) do
     ShadowMap.drawGroup(nbMesh[i], atlasFor(nb.map),
                         Mat4.translate(nb.ox, 0, nb.oy), nil)
+  end
+  -- the sheet-built groups (see drawSheets): a house throws its shadow
+  -- into the arena exactly as it does onto the street
+  for _, g in ipairs(ChunkMesher.spriteGroups(host) or {}) do
+    ShadowMap.draw(g.mesh, g.tex, nil)
+  end
+  for _, nb in ipairs(casters) do
+    for _, g in ipairs(ChunkMesher.spriteGroups(nb.map) or {}) do
+      ShadowMap.draw(g.mesh, g.tex, Mat4.translate(nb.ox, 0, nb.oy))
+    end
   end
   -- thin cards are snugged toward the sun (ShadowMap.snug) so their shadows
   -- keep contact with their bases instead of starting a bias-width away
@@ -362,6 +392,14 @@ function BattleScene.render(state, arena, textures, token)
   -- a canopy floor (Viridian Forest) fights under the hour's tint too,
   -- with the rig and the void exactly as they were
   Voxel3D.tint = DayNight.tint(outdoor or DayNight.isCanopy(host))
+  -- and a cave's dark, the same as free-roam's (lib/Glow.lua): a fight in
+  -- Rock Tunnel is lit by the two Pokemon in it and whatever they throw
+  do
+    local okG, Glow = pcall(V.require, "Glow")
+    if okG and Glow and Glow.ambient then
+      Voxel3D.tint = Glow.ambient(host, Voxel3D.tint, outdoor)
+    end
+  end
   local GlassMask = V.require("GlassMask")
   Voxel3D.glassMask = outdoor and GlassMask.texture(host.tileset) or nil
   Voxel3D.glassNight = outdoor and DayNight.windowLight() or 0
@@ -441,6 +479,13 @@ function BattleScene.render(state, arena, textures, token)
     -- onto ground that has no posts standing on it.
     Voxel3D.lampLights = nil
     Voxel3D.lampFlicker = 0
+    -- ...but the GLOW field is staged here: the two Pokemon and the moves
+    -- they throw, on the arena's own patch of map (lib/Glow.lua). Drawn
+    -- before the scene opens, since it switches canvases.
+    Voxel3D.glow = nil
+    pcall(function()
+      V.require("Glow").prepareBattle(host, neighbors, arena, groundY)
+    end)
     -- its own canvas slot: this renders at the window's pixel size and the
     -- free-roam pass does too, but the two are alive at different moments
     -- and a shared slot would reallocate on every battle entry and exit
@@ -453,6 +498,15 @@ function BattleScene.render(state, arena, textures, token)
     for i, nb in ipairs(neighbors) do
       Voxel3D.drawGroup(nbMesh[i], atlasFor(nb.map),
                         Mat4.translate(nb.ox, 0, nb.oy), nil, nil, nil)
+    end
+    do
+      local sheetFx, sheetSway = VoxelScene.sheetFx()
+      Voxel3D.glass(false)
+      drawSheets(host, nil, sheetFx, sheetSway)
+      for _, nb in ipairs(neighbors) do
+        drawSheets(nb.map, Mat4.translate(nb.ox, 0, nb.oy), sheetFx, sheetSway)
+      end
+      Voxel3D.glass(true)
     end
     -- What the blows left on the floor, and the floating panes' contact
     -- shadows: flat decals between the terrain and the mons, so they lie

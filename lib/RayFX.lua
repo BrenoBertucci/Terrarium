@@ -1169,8 +1169,11 @@ function RayFX.level()
     -- the cost of guessing "desktop" wrong is a mod that does not run, and
     -- the cost of guessing "mobile" wrong is one row a desktop player turns
     -- back on in two presses.
-    local okD, mobile = pcall(Device.mobile)
-    deviceOff = (not okD) or mobile
+    -- weak(), not mobile(): AUTO existed to keep this pass off the GPUs
+    -- that cannot afford it, and an integrated desktop part is one of those
+    -- -- it just answers false to every tile-based test. See lib/Device.lua.
+    local okD, weak = pcall(Device.weak)
+    deviceOff = (not okD) or weak
     v = deviceOff and "off" or "rt"
   end
   if not (v == "off" or v == "ao" or v == "rt" or v == "max") then
@@ -1321,6 +1324,27 @@ end
 --   body    Voxel3D.skyBody's answer for this camera, or nil
 --   curve   { focusX, focusZ, k } -- the V-CURVE bend this frame was drawn
 --           with, so the water test can be asked of the FLAT world
+-- How much of the anime rim this frame's light can hold up, 0..1.
+--
+-- The rim is a flat +RIM of cool white on every upright face -- a key light
+-- that is always on. That was right for a world that was always lit. Under
+-- the GLOW row (lib/Glow.lua) a cave is dark and a town's night is lit by
+-- what is in it, and a rim that ignores that paints every rock face in Rock
+-- Tunnel as a lit slab. So with GLOW on the rim scales with the hour's own
+-- light (the scene tint): noon keeps every bit of it, a dark cave keeps
+-- none. GLOW off is exactly the rim of before.
+function RayFX.rimLight()
+  local okG, Glow = pcall(V.require, "Glow")
+  if not (okG and Glow and Glow.enabled and Glow.enabled()) then return 1 end
+  local okV, Voxel3D = pcall(V.require, "Voxel3D")
+  local t = okV and Voxel3D and Voxel3D.tint
+  if type(t) ~= "table" or not t[3] then return 1 end
+  local l = 0.2126 * t[1] + 0.7152 * t[2] + 0.0722 * t[3]
+  l = l / 0.85
+  if l < 0 then return 0 end
+  return l > 1 and 1 or l
+end
+
 function RayFX.apply(o)
   local level = RayFX.level()
   if level == "off" then return nil end
@@ -1363,11 +1387,16 @@ function RayFX.apply(o)
   -- inside `send` would absorb them, but absorbing six failures per frame
   -- is a cost, not a design.
   if Anime.screen() then
-    send("animeRim", Anime.RIM)
+    send("animeRim", Anime.RIM * RayFX.rimLight())
     send("animeRimEdge", Anime.RIM_EDGE)
     send("animeRimColor", Anime.RIM_COLOR)
     send("animeInk", Anime.INK)
-    send("animeInkColor", Anime.INK_COLOR)
+    -- and the ink with it: a navy line is a line on a lit wall and a pale
+    -- trace across the black of a cave, so it darkens as the light goes
+    do
+      local k, c = RayFX.rimLight(), Anime.INK_COLOR
+      send("animeInkColor", { c[1] * k, c[2] * k, c[3] * k })
+    end
     send("animeEdgeBias", Anime.EDGE_BIAS)
   end
 

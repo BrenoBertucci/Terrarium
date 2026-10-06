@@ -46,7 +46,9 @@ local V = ...
 -- picture (tools/lavender_ground.py); Vermilion City is another
 -- (tools/vermilion_ground.py), with its own origin -- so a cell's neighbour
 -- is only ever looked for inside its own world.
-local Kit = { LIFT = 1, INDEXES = { "lavground_index", "vermground_index" } }
+local Kit = { LIFT = 1, INDEXES = { "lavground_index", "vermground_index", "celground_index", "cerground_index",
+                                   "westground_index", "saffground_index", "fuchground_index",
+                                   "cinnground_index" } }
 
 local floor = math.floor
 

@@ -468,6 +468,11 @@ function OverworldBattle.finish()
   -- sweep tagged battle Vfx so they do not leak into the overworld
   pcall(BattleHitFX.clear)
   pcall(function() V.require("BattleNav").observe(nil) end)
+  -- and the glow's reading of the last fight (lib/Glow.lua), so the next
+  -- one's first move is seen starting rather than already under way
+  pcall(function() V.require("Glow").observeBattle(nil) end)
+  -- and the voxel cards' matter, so none of it lies on the next arena
+  pcall(function() V.require("BattleCardVoxel").clear() end)
   if not session then return end
   restoreCast()
   session = nil
@@ -517,6 +522,14 @@ function OverworldBattle.update(dt)
   -- dent in the grass -- presentational only (see BattleHitFX)
   pcall(BattleHitFX.observe, session.battle, dt, session.arena,
         session.shot and session.shot.groundY)
+  -- the voxel cards' matter falls and settles, and the move list closing
+  -- throws the chosen card at the foe (lib/BattleCardVoxel.lua)
+  pcall(function()
+    V.require("BattleCardVoxel").observe(session.battle, dt, session.arena)
+  end)
+  -- and the light a move throws: the attacker lit as it is thrown, the
+  -- defender as it lands (lib/Glow.lua, the GLOW row)
+  pcall(function() V.require("Glow").observeBattle(session.battle, dt) end)
   -- the turn ribbon glides its medallions toward whoever the round
   -- belongs to (see BattleRibbon)
   pcall(BattleRibbon.observe, session.battle, dt)
@@ -1642,6 +1655,11 @@ function OverworldBattle.snapHUDs(battle, shot)
       -- anything strung above the mons has to cross over it, not under
       pcall(BattleHitFX.aim, battle, shot)
       pcall(BattleRibbon.draw, battle, shot)
+    end
+    -- the voxel cards' crown and matter, and the thrown card, over the
+    -- ribbon: they stand in front of it (lib/BattleCardVoxel.lua)
+    if not screenUp then
+      pcall(function() V.require("BattleCardVoxel").draw(battle, shot) end)
     end
     -- OFF: neither arm of this dispatch runs -- no X/Y capsule and no
     -- Game Boy band either, since the band is exactly the vanilla HUD

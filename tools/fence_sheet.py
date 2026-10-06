@@ -78,6 +78,38 @@ def main():
     OUT.parent.mkdir(parents=True, exist_ok=True)
     img.save(OUT)
     print("wrote", OUT)
+    iron()
+
+
+def iron():
+    """The same layout in another material, for Celadon (FenceKit's IRON style): the
+    rail rows and the picket rows are wrought iron, the post is a dressed stone
+    pier on a dark plinth under a pale cap, column 25 is the gilt of a spear tip."""
+    rng = random.Random(9)
+    img = Image.new("RGBA", (32, 16), (0, 0, 0, 255))
+    black, hi, gilt = (44, 46, 56), (84, 88, 104), (240, 200, 96)
+    stone = [(226, 222, 212), (212, 208, 200), (236, 232, 224)]
+    for row in range(6):
+        for x in range(16):
+            img.putpixel((x, row), (hi if (row in (0, 2) or rng.random() < 0.12) else black) + (255,))
+    for y in range(16):
+        for x in range(4):
+            c = stone[(x + y // 4) % 3]
+            if y % 4 == 3:
+                c = tuple(int(v * 0.82) for v in c)            # a bed joint
+            if y >= 12:
+                c = (120, 122, 132)                           # the plinth
+            if y == 2:
+                c = (250, 248, 242)
+            img.putpixel((16 + x, y), c + (255,))
+    for y in range(4):
+        for x in range(4):
+            img.putpixel((20 + x, y), ((250, 248, 242) if max(abs(x - 1.5), abs(y - 1.5)) < 1 else (226, 222, 212)) + (255,))
+    img.putpixel((24, 0), black + (255,))
+    img.putpixel((25, 0), gilt + (255,))
+    out = OUT.with_name("fence_iron.png")
+    img.save(out)
+    print("wrote", out)
 
 
 if __name__ == "__main__":

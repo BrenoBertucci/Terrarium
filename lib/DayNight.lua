@@ -2,8 +2,8 @@
 -- frame asks it.
 --
 -- THE CLOCK is twenty minutes around: ten of day, ten of night. The DAYTIME
--- row either PINS it -- DAY, NIGHT, DUSK and DAWN are fixed times on that
--- dial, not separate looks -- or lets it run (CYCLE), in which case the pin
+-- row either PINS it -- DAY, AFTERNOON, DUSK, NIGHT and DAWN are fixed times
+-- on that dial, not separate looks -- or lets it run (CYCLE), in which case the pin
 -- the player left is where the cycle picks up. Everything below is a pure
 -- function of the clock, so the pinned settings and the running cycle can
 -- never drift apart: DUSK is simply the cycle stopped at sunset.
@@ -57,32 +57,26 @@ DayNight.CYCLE = 1200         -- seconds around the whole dial
 DayNight.DAY_LEN = 600        -- the sun's half; the moon has the rest
 DayNight.BLEND = 75           -- seconds of palette blend either side of a twilight
 
--- where the pinned settings stop the clock
-DayNight.T = { dawn = 0, day = 300, dusk = 600, night = 900 }
+-- where the pinned settings stop the clock. AFTERNOON is the middle of the
+-- late golden plateau (see the dial below): the one phase a player asking
+-- for "the afternoon" means, and one the row could only ever pass through.
+DayNight.T = { dawn = 0, day = 300, afternoon = 495, dusk = 600,
+               night = 900 }
 
 DayNight.KEY = "daytime"
 DayNight.LABEL = "DAYTIME"
 
 -- "sync" first: an unset or unreadable value follows the machine's own
--- clock, per the row's contract (ModSetting values[1] is the default) --
--- and forceSync below reaches for it by the same position.
+-- clock, per the row's contract (ModSetting values[1] is the default).
+-- Stored by VALUE, so slotting "afternoon" into the ladder leaves every
+-- saved pin where it was.
 DayNight.setting = ModSetting.new(DayNight.KEY, DayNight.LABEL,
-                                  { "sync", "day", "night", "dusk",
-                                    "dawn", "cycle" },
-                                  { "SYNC", "DAY", "NIGHT", "DUSK",
-                                    "DAWN", "CYCLE" })
-
--- The one writer for the FULL pin. While VOXEL sits on FULL the DAYTIME
--- row is off the menu with the rest of the rows the preset owns, and the
--- value is held HERE at SYNC -- the diorama preset's sky follows the clock
--- on the wall, whatever was chosen before. Called from every path that can
--- arrive at or act under FULL (main.lua: the preset itself, the rows hook,
--- the manager's options_changed), mirroring OverworldBattle.forceOG.
-function DayNight.forceSync(game)
-  if DayNight.setting:get() ~= "sync" then
-    DayNight.setting:setIndex(1, game)
-  end
-end
+                                  { "sync", "day", "afternoon", "dusk",
+                                    "night", "dawn", "cycle" },
+                                  { "SYNC", "DAY", "AFTERNOON", "DUSK",
+                                    "NIGHT", "DAWN", "CYCLE" })
+  :translate("HORARIO", { "SINCRONO", "DIA", "TARDE", "CREPUSCULO",
+                          "NOITE", "AURORA", "CICLO" })
 
 DayNight.clock = DayNight.T.day     -- the running cycle's own position
 
@@ -222,8 +216,8 @@ end
 -- of it is what keeps a sunset reading as a gradient rather than as stripes.
 -- Every channel is a multiple of 8 -- the 5-bit GBC lattice -- including
 -- after blending, which re-quantises onto it.
--- `golden` and `violet` are not pins -- the DAYTIME menu cannot stop on
--- them -- but they are not mere waypoints either: the dial below holds each
+-- `violet` is not a pin and `golden` is one only through AFTERNOON (the
+-- evening plateau) -- but neither is a mere waypoint: the dial below holds each
 -- of them, because a palette that is only ever passed THROUGH is a palette
 -- nobody sees. What they exist for is the blend: day's blue horizon and
 -- dusk's gold one are near-complements, and a straight lerp between

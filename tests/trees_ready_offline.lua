@@ -28,6 +28,11 @@ stubs.Voxel3D = {
   available = function() return true end,
   packedShade = function() end,
   draw = function() end,
+  -- The banded forest draws through the batch pair (state once, then a
+  -- mesh per band in frame), so the double has to carry it or the harness
+  -- stops exercising the path the game takes.
+  beginBatch = function() return true end,
+  batchDraw = function() end,
   newMesh = function(verts, indices)
     return { nv = #verts, ni = #indices, setTexture = function() end }
   end,
@@ -264,19 +269,17 @@ do
   sitesByMap.COVER = one
   local coverMap = { id = "COVER" }
 
-  local st = { sites = one, names = Trees3D.loaded(), buckets = {}, shadow = {} }
-  for k = 1, #st.names do
-    st.buckets[k] = { verts = {}, indices = {} }
-    st.shadow[k] = { verts = {}, indices = {} }
-  end
+  local st = { sites = one, names = Trees3D.loaded(), buckets = {}, order = {},
+               banded = false }
   Trees3D.stampRange(st, 1, 1)
 
   -- centroid of the CANOPY vertices only -- the trunk sits at the axis and
   -- would drag the answer toward it whatever the crown did
   local gx, gz, gw = 0, 0, 0
-  for k = 1, #st.names do
-    local tpl = Trees3D.templates[st.names[k]]
-    local v = st.buckets[k].verts
+  for k = 1, #st.order do
+    local b = st.order[k]
+    local tpl = Trees3D.templates[st.names[b.species]]
+    local v = b.verts
     for i = 1, #v do
       local w = (tpl.weights and tpl.weights[i]) or 0
       gx = gx + v[i][1] * w; gz = gz + v[i][3] * w; gw = gw + w

@@ -54,6 +54,13 @@ OUT = ROOT / "tools/_kit_out"
 # edge five blocks in, Route 11 the east edge four blocks down.
 MAPS = [("VERMILION_CITY", 0, 0), ("ROUTE_6", 10, -36), ("ROUTE_11", 40, 8)]
 TOWN = "VERMILION_CITY"
+# (tools/celadon_ground.py borrows write() and check(): it sets these, MAPS, GROWS,
+# REACH, kind_of and paint on this module, and calls them)
+PREFIX, START, BUDGET = "vermground", "Route 6", 110000
+# how high the walk to every door may step: 0 = over flush paving only (the
+# towns whose streets join up); 1 = over the laid turf too (Cerulean, whose
+# drawing crosses its lawns between paths -- the check still finds a hole)
+WALK = 0
 TOWN_W, TOWN_H = 640, 576               # its plan, in voxels
 EAST_ROAD = 36                          # from this cell column on, the town's ground is Route 11's road
 PAVED_T = {57, 35, 16, 32, 33}           # the cobble, the plain ground, and the lot's kerb marks
@@ -437,7 +444,7 @@ def paint(world):
 # ------------------------------------------------------------------ writing --
 
 def sheet_path(mid):
-    return ROOT / f"assets/buildings/vermground_{mid}.png"
+    return ROOT / f"assets/buildings/{PREFIX}_{mid}.png"
 
 
 def write():
@@ -457,7 +464,7 @@ def write():
                  if world.kind[gy + cy - world.cy0, gx + cx - world.cx0] == "."]
         sy, sx = spare[len(spare) // 2]
         lines = ["-- WRITTEN BY tools/vermilion_ground.py -- do not edit by hand.",
-                 f"-- The voxel half of assets/buildings/vermground_{mid}.png (the map's plan, one",
+                 f"-- The voxel half of assets/buildings/{PREFIX}_{mid}.png (the map's plan, one",
                  "-- texel a voxel): t = the tiles a cell was painted for, b = which texels are",
                  "-- turf, g = what grows (upper case stands two tall), claim = false: laid only.",
                  "return {", f"  sheet = {{ w = {w * 16}, h = {h * 16} }},", "  grows = {"]
@@ -493,13 +500,13 @@ def write():
                 n += 1
         lines += ["  },", "}", ""]
         Image.fromarray(px).save(sheet_path(mid))
-        data = ROOT / f"data/vermground_{mid}.lua"
+        data = ROOT / f"data/{PREFIX}_{mid}.lua"
         data.write_text("\n".join(lines), encoding="utf-8", newline="\n")
         index.append(f'  {mid} = {{ gx = {gx}, gy = {gy}, w = {w}, h = {h}, '
-                     f'data = "vermground_{mid}", sheet = "assets/buildings/vermground_{mid}.png" }},')
+                     f'data = "{PREFIX}_{mid}", sheet = "assets/buildings/{PREFIX}_{mid}.png" }},')
         print(f"{mid}: {n} cells, {data.stat().st_size // 1024} KB of data, sheet {w * 16}x{h * 16}")
     index += ["} }", ""]
-    (ROOT / "data/vermground_index.lua").write_text("\n".join(index), encoding="utf-8", newline="\n")
+    (ROOT / f"data/{PREFIX}_index.lua").write_text("\n".join(index), encoding="utf-8", newline="\n")
 
 
 # ----------------------------------------------------------------- checking --
@@ -545,28 +552,38 @@ def check():
                         i = int(model.at(x, hi, z))
                         lit = (0.86, 1.0, 1.1, 1.18)[hi]
                         top[r0 + z, c0 + x] = np.minimum(255, sheet[i // SW, i % SW] * lit)
-                        flush[r0 + z, c0 + x] = hi == 0
+                        flush[r0 + z, c0 + x] = hi <= WALK
         total += quads
         print(f"{mid}: {cells} cells, {quads} quads ({quads / cells:.0f} a cell)")
-    Image.fromarray(top).resize((W * 2, H * 2), Image.NEAREST).save(OUT / "vermground_world.png")
+    Image.fromarray(top).resize((W * 2, H * 2), Image.NEAREST).save(OUT / f"{PREFIX}_world.png")
     # every door and both roads can be walked to over flush paving
     ox, oz = -world.cx0 * 16, -world.cy0 * 16
     seen = np.zeros((H, W), bool)
-    start = (oz + REACH["Route 6"][1], ox + REACH["Route 6"][0])
-    assert flush[start], "the road from Route 6 is not paved"
-    seen[start] = True
-    todo = [start]
+    # START may be several names: a world of towns whose roads are shut between
+    # them (a Cut bush, a ledge) walks from one start in each
+    todo = []
+    for name in ([START] if isinstance(START, str) else START):
+        start = (oz + REACH[name][1], ox + REACH[name][0])
+        assert flush[start], f"the road from {name} is not paved"
+        seen[start] = True
+        todo.append(start)
     while todo:
         z, x = todo.pop()
         for nz, nx in ((z + 1, x), (z - 1, x), (z, x + 1), (z, x - 1)):
             if 0 <= nz < H and 0 <= nx < W and flush[nz, nx] and not seen[nz, nx]:
                 seen[nz, nx] = True
                 todo.append((nz, nx))
-    for name, (x, z) in REACH.items():
-        assert seen[max(0, oz + z - 4):oz + z + 5, max(0, ox + x - 4):ox + x + 5].any(), f"no paving reaches {name}"
+    missing = [name for name, (x, z) in REACH.items()
+               if not seen[max(0, oz + z - 4):oz + z + 5, max(0, ox + x - 4):ox + x + 5].any()]
+    if missing:
+        # where the walk DID get to, over the plan: red is paving it never reached
+        dbg = top.copy()
+        dbg[flush & ~seen] = (255, 40, 40)
+        Image.fromarray(dbg).save(OUT / f"{PREFIX}_reach.png")
+    assert not missing, f"no paving reaches {', '.join(missing)} -- see {PREFIX}_reach.png"
     print(f"{total} quads in all")
-    assert total < 110000, "over budget"
-    print("PASS ->", OUT / "vermground_world.png")
+    assert total < BUDGET, "over budget"
+    print("PASS ->", OUT / f"{PREFIX}_world.png")
 
 
 if __name__ == "__main__":

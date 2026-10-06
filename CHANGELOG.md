@@ -26,7 +26,438 @@ Tags and packages:
 
 ## Unreleased
 
-Nothing yet.
+### The move cards, in pixel art (COMBAT DINAMICA)
+
+- **feat: the move menu is a hand of thick pixel cards** -- a dark stepped
+  rim, the type on a coloured tab with its pixel icon, POWER / ACCURACY large,
+  the PP meter in the type's colours, a drained grey card for no PP or
+  disabled. The raised card comes alive AROUND it, never across its text: a
+  glow on the rim, ribbons of its element orbiting it, pixel squares drifting
+  onto the floor, and the type's set piece (lightning crawling an ELECTRIC
+  card, ice crystals out of an ICE card's corners, a drop beside a WATER card,
+  rings round a PSYCHIC one). Confirming a move charges the card, throws it at
+  the foe and bursts it there; B folds the hand back. Every effect is geometry
+  rasterised into a low-resolution canvas and blown up with nearest filtering,
+  so it moves smoothly on a fixed pixel grid (`lib/BattleCardVoxel.lua`,
+  `lib/BattleFanXY.lua`, probe `tests/battlecards_probe.lua`).
+
+### "4 fps walking between maps" -- measured, half fixed
+
+- **Known, NOT fixed: the Lua heap grows with every map visited in 3D**, by
+  100-280 MB a visit, and it is LIVE heap (it keeps growing on the way back to
+  maps already seen); with 3D off it stays at ~56 MB. A long session ends in
+  collector stalls of a second or more. Every module's own invalidate frees
+  only ~78 MB, so the holder is elsewhere; SKYLINE OFF cut one visit's growth
+  by 140 MB (one sample). Also measured: ~1 MB of garbage a frame (~1250 new
+  `Mat4` a frame, `casterMatrix`, `ShadowMap.snug`) and a 5-10 ms shadow pass.
+- The ENGINE's `options.lua` had grown to 15 MB (ModUpdate's cached release
+  notes), so every settings write stalled 1.7-2.9 s. Not this mod's data; it
+  was emptied on the test build only, and will grow back.
+- Instruments left behind, none of them active in play: `VoxelScene.PROFILE`
+  (section timers), `TerrainAtlas.stats()`, and `tests/perf_*_probe.lua` (heap
+  per map, leak bisect by setting, allocation per section, timeline). The
+  sandbox denies `jit.profile` and `debug`, and the engine steps the collector
+  every 4 frames, so a stopped collector does not stay stopped.
+
+### The hour's air -- the MIST row, and DAYTIME under FULL
+
+- **fix: DAYTIME was stuck on the wall clock under FULL.** The FULL preset took
+  the row off the menu and held it at SYNC (`DayNight.forceSync`, enforced from
+  the preset, the rows hook and the manager's `options_changed`), so a player
+  on FULL could never pin DUSK or NIGHT -- a pick on the manager's page snapped
+  back at once, and playing by day meant day forever. `forceSync` is gone; the
+  row carries `full = true` and FULL neither sets nor holds the hour
+- DAYTIME gains **AFTERNOON** (t=495, the middle of the evening golden
+  plateau). Values are stored by name, so reordering the ladder
+  chronologically (SYNC, DAY, AFTERNOON, DUSK, NIGHT, DAWN, CYCLE) moves no
+  saved pin
+- **MIST** (default ON): ground mist on a curve over the clock -- thickest
+  before and at sunrise, burnt off by mid-morning, clear through the
+  afternoon, back at dusk, thin and moonlit through the night, heavier after
+  rain. Lit from behind by the low sun (forward scatter toward the body's
+  bearing), by the lamp pools and by the GLOW field; parted by the feet of
+  whoever walks through it. It is the crypt's shader block taken outdoors:
+  `lib/Mist.lua` feeds `mist`/`mistColor` plus `mistSun`, `mistSunColor`,
+  `mistShape`, `mistWake[8]`, `mistWakeC`; the crypt's own mist is unchanged
+  in shape
+- the mist lies on the world only: sprite-sheet draws (`glassOn` 0 -- every
+  walker and Pokemon) skip it by a uniform test, so nobody reads as a ghost
+- cost on an i3 + Intel UHD, FULL, vsync off, 3 palindromes per map
+  (`tests/mist_cost_probe.lua`): **+1.5 ms p50 at dawn** in Pallet and in
+  Vermilion. The first cut cost +6 ms: two octaves of sine-hash value noise
+  and an 8-mark wake loop on every fragment. The noise now reads one baked
+  64x64 texture (two independent fields in R and G, morphing slowly between
+  them), the wake is only walked inside the circle holding its marks, and the
+  bank edges are worked out on the CPU
+- GLES2: one sampler more -- 7 on the no-crypt rung, 8 with GLOW, inside the
+  guaranteed 8; `tests/gpu_compat_probe.lua` still lands every rung (its six
+  refusal-count checks already expected half the tries GLOW now makes -- that
+  predates this)
+- `ModSetting:translate(label, labels)`: a row's Portuguese face, used when
+  LANGUAGE is PORTUGUES; DAYTIME (HORARIO) and MIST (NEVOA) carry one, and the
+  manager page's help text follows the language at load
+  (`tests/modsetting_translate_check.lua`)
+- probes: `tests/mist_probe.lua` (the FULL fix, the curve as numbers, pinned-
+  clock shots), `tests/mist_cost_probe.lua`
+
+### Light that comes from things -- the GLOW and FOLLOW rows
+
+- **GLOW** (default ON): a Charmander's tail, a Pikachu's sparks, a Gastly's
+  glow, a Staryu's gem, every lit doorway of a town at night and a
+  Flamethrower in the arena light the ground, the walls and the people around
+  them -- and **stop at walls**, with a soft shadow behind every rock. One
+  128x128 field around the camera, one additive quad per light, each carrying
+  a visibility mask propagated across the map's own heights on the CPU and
+  cached in a shared texture; the scene shader reads it once per fragment
+  however many lights are lit (`lib/Glow.lua`, `GLOW_FIELD` in
+  `lib/Voxel3D.lua`)
+- **Caves go dark** so the light shows: a third of their light, and **Rock
+  Tunnel before FLASH** almost none -- the original's own darkness. The
+  engine's palette shift for that map is intercepted while the diorama is on
+  (a black texture stays black under any lantern) and drawn as light instead;
+  the flat game and GLOW OFF keep the engine's own. **FLASH** is a wide cold
+  lantern around whoever walks with you
+- **Moves light the arena**: fire, electric, ice, psychic, ghost and dragon
+  moves (and FLASH, SOLARBEAM, HYPER BEAM, SELFDESTRUCT, EXPLOSION, AURORA BEAM
+  by name) light the attacker as they are thrown and the defender as they
+  land; both Pokemon glow by species where they stand
+- a close lightning strike lights the ground for the length of its flash
+- with GLOW on, the ANIME rim light and its ink scale with the scene's light,
+  so a rock face in a dark cave no longer shines as a lit slab
+- **FOLLOW** (default ON): the first Pokemon still standing walks one step
+  behind you, the way Yellow's Pikachu does -- and in Yellow, while Pikachu is
+  out, the engine's own Pikachu is the one. Passable, hidden while surfing or
+  cycling, never saved; A at it gets a cry and a hop (`lib/Follower.lua`)
+- cost on an i3 + Intel UHD, vsync off, palindrome A/B
+  (`tests/glow_cost_probe.lua`): +0.1 ms p50 at night in Viridian, +0.5 ms in
+  Rock Tunnel. The first cut cost a fifth of the scene shader's speed whether a
+  light was lit or not -- a texture read inside a non-uniform branch off a
+  derivative normal -- and the branch-free read is what made it free
+- GLES2: the field is a droppable rung, tried first and given up alone on a
+  driver that refuses it (the diorama comes up unlit and the caves stay lit);
+  `tests/glow_compile_probe.lua` builds all 32 variants and stands up a fake
+  driver that refuses the field
+
+### Saffron's streets, Fuchsia's garden and Cinnabar's basalt
+
+Three more painted worlds, the same kit, each town its own ground:
+
+- **Saffron** (`tools/saffron_ground.py`), "the golden land of commerce", the
+  one town the drawing gives real streets: dark asphalt inside the drawn kerb
+  lines with a dashed **saffron-gold** line down the middle and white bars where
+  a way out of town crosses it; granite kerbs with a raised edge and
+  gold-capped bollards; sidewalks of big cream terrazzo slabs with brass in the
+  joints; plazas in **Art Deco** panels (a saffron diamond in each, charcoal
+  rims) and a medallion of nested diamonds before Silph Co.; clipped lawns with
+  marigolds; the street trees in iron grates with a gold rim
+- **Fuchsia** with Routes 15 and 18 (`tools/fuchsia_ground.py`), "passion
+  pink", the ninja's town: **raked gravel** faintly pink with the rake's lines
+  along each path and **stepping stones** set in it; lawns with fallen blossom,
+  azaleas along the walks and a carpet of **petals** under every tree; the brick
+  way down from the Safari Zone's gate a **timber boardwalk**; smooth stones at
+  the ponds; the routes' brick roads in pink granite setts
+- **Cinnabar** (`tools/cinnabar_ground.py`), the volcano's island: its drawing
+  lays all its ground as a checker of grass and stone -- the grass stays grass,
+  the checker does not: **hexagonal basalt** column tops running between the
+  doors, red scoria with tough grass in drifts across it, black sand at the
+  shore, fire-lilies, and a **flame** in red and orange stone before the Gym
+
+38k quads between them. With these every town in Kanto but Indigo Plateau has
+a ground of its own. Cost of a painted ground, `tests/ground_cost_probe.lua`
+(Viridian with three roads in view, and Cerulean; off/on/on/off, vsync off,
+the mesher drained first): Viridian 7.03 / 9.94 ms off against 7.17 / 12.50 on,
+Cerulean 11.44 / 11.47 against 11.04 / 14.90 -- about +1 ms a step inside a
+wide spread, what Lavender's ground already cost. The dearer part is the build
+on entering a map: the roads next door are laid a few seconds after, as they
+are in the older worlds. Probe: `tests/run_south_ground.cmd`.
+
+### Pallet, Viridian and Pewter's ground, and the roads between them
+
+The fifth painted world (`tools/west_ground.py`): the three towns and Routes 1,
+2, 22 and 3 on one canvas, each town its own ground and each road taking its
+town's out with it, blended where two meet.
+
+- **Pallet** ("a fresh and pure white"): a country village -- lanes of pale
+  packed earth with two wheel ruts and grass down the crown between them, a
+  border of little white stones, lawns thick with daisies and white clover,
+  and a **compass rose** in pale stone in the lane between the two houses:
+  where every journey starts
+- **Viridian** ("the eternally green paradise"): flagstones in a random ashlar
+  (a block halved and halved again, every which way), moss in every joint and
+  grass pushing through it, moss on the older flags, the deepest lawns, ferns,
+  and a **leaf** laid in green stone where the roads cross
+- **Pewter** ("a stone gray city"): granite setts laid in **fans**, the old
+  stone-city way, long kerb stones along the edges, lawns gone olive with
+  pebbles, rocks and heather, and an **ammonite** spiralling out before the Museum
+- the roads: Route 1 an earth track, Routes 2 and 22 mossy forest gravel,
+  Route 3 rocky mountain gravel
+
+Flagstones in courses of one height read as a brick wall from this camera, as
+Celadon's first slabs did; the ashlar and the fans are what does not. 205k
+quads over seven maps; the game's count matched the bench's. The check can
+now walk from several starts (`START` a list), for towns whose roads are shut
+between them. Probe: `tests/run_west_ground.cmd`.
+
+### Cerulean's ground, and the four roads out of it
+
+The fourth painted world (`tools/cerulean_ground.py`, stood by the same
+`lib/LavenderGroundKit.lua`): Cerulean City and Routes 24, 5, 4 and 9 on one
+canvas, so no edge shows between them. The drawing decides where everything is
+-- its paths are paved, its lawns are lawn (the green is grass), its flowers
+keep standing, the brick yards behind the north houses stay yards -- and the
+water town decides what they are:
+
+- **the streets**: a mosaic of white river pebbles with a RIVER down the middle
+  of every one, a deep-blue channel meandering between paler banks; slate-blue
+  pebbles along the edges; corners rounded rather than cut to the cell
+- **ripples** of blue pebble spreading from the Gym's, the Centre's, the Mart's
+  and the Bike Shop's doors, and where the road off Nugget Bridge comes in
+- **the yards**: blue-and-white glazed tiles, a flower in each and a ring where
+  four meet, a chipped one here and there, moss in the joints
+- **the lawns** a voxel proud of the stone, with clover, daisies and drifts of
+  forget-me-nots; reeds and blue iris where they meet the water
+- **the bike lanes** out to Route 5: blue-grey asphalt, a dashed white line, a
+  raised kerb, bollards
+- **trodden paths** where the drawing makes you cross grass: off Nugget Bridge,
+  to the burgled house, to Melanie's, out to the bush that shuts Route 9
+- **the routes**: the same pebbles loose as gravel, a wilder meadow
+
+117k quads over the five maps (33 a cell in town); the in-game count matched
+the bench's to the quad. `tools/vermilion_ground.py`'s check can now walk over
+laid turf too (`WALK = 1`), for a town whose drawing crosses its lawns between
+paths, and on a failure it lists every unreached door and saves where the walk
+got to. Probe: `tests/run_cerulean_ground.cmd`.
+
+### Cerulean's and Celadon's houses, every one its own
+
+Twenty-five houses rebuilt from their Yellow drawings (`lib/TownHouseKit.lua`,
+sheet `assets/buildings/town_houses.png`, bench `tools/town_houses.py`). The
+drawing sets the FORM -- Cerulean's long low hipped house with its door at the
+west end and two pairs of windows; Celadon's flat-roofed block, a lattice for a
+roof and six windows under the cornice -- and who lives there sets the rest.
+Celadon's houses had been folded into green pyramids, one after another, and
+the drawing has no pyramid in it: they are flat again, and the roof, which is
+most of what this camera sees, is what each of them does.
+
+- **Cerulean** (white stucco on river stone, glazed tile in six blues): the
+  medal collector's (a glass case of eight medals, gilded finials, a flag);
+  the house the Rockets broke into (a tarp roped over the roof, a window
+  boarded, one cracked, caution tape, the hole in the back wall); Melanie's (a
+  vine pergola over two pet beds, a picket fence, herb beds); a dyeworks
+  (blue cloth drying on frames, vats, a louvred ridge vent); a painter's
+  studio (a skylight in the south slope, every shutter a different colour, an
+  easel); a bakery (a bread oven's chimney, awnings, loaves); a glassworks (a
+  brick bottle kiln with a glowing stoke-hole, blue glass lit along the sill);
+  and the **Bike Shop** -- a neon bicycle on the roof, bikes in a rack, a wall
+  of tyres, BIKE SHOP in lights.
+- **Celadon**: balcony flats (every balcony lived in differently, a water tank
+  on stilts), a perfumery in glazed celadon tile (an arcade, a roof of scented
+  beds round a glass dome, a lit flask), a tea house (red parasols and lanterns
+  on the roof), a watchmaker (a clock tower with a lit face), an apothecary
+  (herb beds, a green cross), a pond pavilion (red lacquer, swept-up celadon
+  eaves), the Prize Exchange (a marquee of bulbs, a gold coin), a cinema
+  (CINEMA climbing past the roof), a bathhouse (its brick chimney, a bath on
+  the roof), a radio station (a lattice mast over the whole town, ON AIR), a
+  bookshop, a record shop (a gramophone horn), a toy shop (giant blocks, a
+  spinning top), a potter's (three great crackle-glazed vases), the diner (a
+  giant donut), the chief's townhouse (a pent roof, a raked gravel garden with
+  a pine) and a gallery with the city's rainbow across its front.
+
+Windows light after dark by a hash of their room and signs always, through
+the same alpha marks and `Voxel3D.emissive` the skyline uses. The Celadon
+towers keep their kit; `lib/CeladonTowerKit.lua` loses the houses it had been
+drawing (792 -> 403 lines) and its sheet the two Cerulean rows.
+
+Cost, `tests/houses_cost_probe.lua` (off/on/on/off per town, vsync off, the
+mesher queue drained first): Cerulean 9.45 / 8.42 ms off against 9.07 / 10.38
+on, Celadon 7.98 / 11.12 off against 8.05 / 8.38 on -- inside the spread. Kit
+quads: 32k in Cerulean, 79k in Celadon, where the old pyramids had cost
+128k. `TownHouseKit.ENABLED = false` stands the classic drawings back up.
+Probe `tests/run_houses.cmd` checks every door's cell and photographs each
+house by day and by night.
+
+### The measuring stick was broken
+
+`tests/mali_cost_probe.lua` -- the probe every per-subsystem cost number in
+this repo came from -- never turned vsync off. Every one of its fifteen
+conditions read 16.7 ms, every saving was noise around the refresh interval,
+and the resolution sweep came out NEGATIVE. Every other cost probe in `tests/`
+already called `love.window.setVSync(0)`; this one did not, and it was the one
+being trusted. The old log is kept beside the new one as
+`probe_out_mali/mali_cost_probe.PRE-VSYNC-FIX.log`.
+
+Two more faults in the same file: the `scene=` column reported
+`Voxel3D.canvas()`, which is the PRESENTATION target and is always the
+window's size, so every RES rung printed the same number and the row could
+never be seen working (now `Voxel3D.renderSize()`); and the baseline condition
+ran on whatever the RES row happened to say, which is AUTO -- a governor that
+walks the ladder mid-run. Pinned to 1/2, which is what the report at the
+bottom already assumed it was.
+
+With the instrument working, on the reference i3 + Intel UHD: the mod's 3D
+pass is **+12.6 ms of an 18.1 ms frame** (`voxel=OFF` is 5.5 ms), and the
+whole RES ladder -- sixteen times the pixels between FULL and 1/4 -- moves the
+frame less than three milliseconds, with the sign flipping between two runs.
+This frame is not fill-bound.
+
+### Where the frame's geometry goes, and the forest cut into bands
+
+New `tests/vertex_budget_probe.lua` attributes every vertex to the line that
+drew it. The answer was one line: **the forest was 75% of ROUTE_1's vertices
+and 80% of ROUTE_2's**, in eight draws, with no cull of any kind -- the only
+large mesh in the mod without one, while the terrain beside it has been
+chunk-culled all along. Of ROUTE_2's 766 trees, 106 were inside the box the
+terrain was being culled with.
+
+So `Trees3D` now buckets by species AND 256-pixel band, each band carrying its
+own box, and `Trees3D.draw` / `castShadows` skip the bands out of frame --
+through `ChunkMesher.spriteInBox`, the same test the cut sprite sheets already
+use, rather than a second copy that could drift. `VoxelScene` passes the boxes
+it was already computing, shifted per neighbour, so a forest map whose corner
+clips the view no longer pays for its whole forest.
+
+Vertices per frame, whole map -> banded: ROUTE_1 1.88M -> 0.94M, ROUTE_2 2.57M
+-> 1.30M, VIRIDIAN 3.12M -> 1.43M.
+
+**It does not make this machine faster, and the entry says so.** A paired A/B
+over three maps and three rounds (`tests/tree_band_probe.lua`) put every
+saving inside its own spread -- +0.66 ms against 3.71, +1.93 against 8.13,
+-0.92 against 7.96 -- which by this repo's own rule is not a measurement. An
+Intel UHD is not vertex-bound at these counts. It is kept because vertices are
+a real resource on the hardware this mod also ships to, because the change is
+proven correct, and because `Trees3D.BAND_OVER` turns it off. 256 rather than
+128 because a band is a draw call and draw calls are the axis this frame has
+least to spare: 256 keeps ~85% of the vertex saving for ~55% of the added
+draws.
+
+### The mesher's fast path had never run
+
+`lib/ChunkMesher.lua` has had an FFI vertex sink since before this entry, and
+**the game has never used it**. `ffi` is in the engine sandbox's DENIED table
+(`src/mods/Sandbox.lua`, beside `io`, `os`, `debug` and `package`), so the
+`pcall(require, "ffi")` at the top of the file always failed and `newSink`
+always returned the TABLE sink: one six-field Lua table per vertex, four per
+quad, millions per route. That is where `probe_out_lavground`'s 699 MB heap
+and its 900-992 ms full collect came from, and a 900 ms collect and
+`probe_out_f5_perf`'s 986 ms worst frame are the same event written twice.
+
+`newPackSink` builds the identical float32 stream with `love.data.pack`, which
+the sandbox does allow and which the FFI path was already half using
+(`love.data.newByteData`). The accumulator is one flat array of numbers,
+reused. The index buffer is not stored at all: every quad's six indices are a
+pure function of its ordinal, so the whole map is regenerated at `finish()`
+from the quad count.
+
+Measured over three runs of `tests/sink_probe.lua` across three maps: **build
+time better in 8 of 9**, ~10-15%; **full-collect time better in 8 of 9**,
+~10-25%; live heap unchanged, which is the point -- what went away was the
+garbage, not the data. Frame time is unchanged, and was never the target.
+
+Correctness is proved by bytes, not by a picture: `ChunkMesher.sinkSelfCheck()`
+pushes synthetic quads through both sinks, unpacks the float32 back and
+compares field by field, plus the index map. Screenshots cannot settle this --
+rebuilding a map twice leaves the camera at two points of its own ease, and on
+a frame this full of dither two pixels of pan differ in half their pixels.
+`ChunkMesher.SINK` (`auto` / `table` / `pack`) exists for that A/B and as
+somewhere to send a driver that chokes on a packed upload.
+
+### A persistent mesh cache -- built, proven correct, and SHIPPED OFF
+
+Entering a map runs the whole geometry pass and rebuilds every mesh, on every
+visit and again on every launch. `lib/MeshCache.lua` keeps the answer: the
+little-endian float32 vertex stream `newPackSink` already builds, plus each
+chunk's cull box and quad count, in the engine's per-playthrough storage
+(`mod.storage:writeBytes`, which needs no permission). Terrain indices are not
+stored -- they are a pure function of the quad ordinal and are regenerated on
+load by the same `setIndexMap` a cold build uses, not by a second copy of the
+arithmetic. Grass and flowers ride in their own entry and DO store indices,
+because a stamped template's are whatever the template says.
+
+The identity is deliberately paranoid, because the failure mode is not a crash
+but a quietly WRONG world -- last week's ledges, a forest from before the row
+was flipped -- which gets reported weeks later as a different bug. A payload is
+refused unless it names the format, the geometry generation, the mod version
+and the five rows that change geometry. The neighbour-mask set is fingerprinted
+in too: a map's FULL mesh is built with masks taken from whichever neighbours
+the overworld has in hand, and one written with a partial set and read back
+with a complete one is a border ring standing through a neighbour's ground.
+Refusing is always safe -- the caller builds, which is what it did before.
+
+**It is `ChunkMesher.CACHE = false` in this build**, and that is a report, not
+a placeholder. Proven over three maps and three arms (no-cache, cold, warm):
+the format round-trips and refuses a stale identity, a truncated payload and a
+bad magic; `mod.storage` itself is sound -- write, read, overwrite and read
+again all agree, so the storage layer is not the bug; and when an entry loads,
+the rebuilt world is identical to the one the no-cache arm built, down to every
+cull box.
+
+Not working: in a cold-then-warm cycle the warm visit still reads the PREVIOUS
+session's payload at the keys the cold visit just wrote. Hits stay at zero and
+the first visit costs one to two seconds, so shipping it on would make the mod
+worse. Three real bugs were found and fixed while chasing it, and none was the
+cause -- worth recording because each was a genuine defect:
+
+- the mask variant lived in the payload but not in the KEY, so VoxelScene's
+  masked FULL slot and BattleScene's unmasked one overwrote each other at a
+  single key;
+- the write sat behind the generation check, so the map being STOOD ON -- the
+  one whose generation every step bumps -- was the only map that never got
+  written, while its neighbours wrote normally. Those bytes are a pure function
+  of (map, slot, masks); nothing in `runGeometry` reads the player, so the
+  check that rightly guards the live swap should never have guarded the write;
+- `MeshCache.wipe` returned `0` both for "nothing was cached" and for "the
+  listing failed".
+
+Where to pick it up: the probe resets its counters before the WARM arm, so the
+cold arm's write outcomes are not printed. Print those -- specifically whether
+the write of the map under test succeeds -- and the answer is either "it never
+wrote that key" or "it wrote and the read found something else", which are
+different bugs with different fixes.
+
+Two engine facts found on the way, both worth knowing before anyone tries
+again: `Storage.list` answers `storage_unavailable` on this build because the
+backend cannot enumerate a directory, so the cache keeps its own key index --
+without one a wipe has nothing to wipe and orphaned entries stay forever. And
+`mod.storage` needs no permission at all, while the `filesystem` permission
+Terrarium declares is a no-op: `love.filesystem` writes are quietly rerouted to
+`mod_compat/` by the engine's LegacyCompat shim.
+
+### Four instruments that lied, and the shape they share
+
+Worth recording as one entry, because it happened four times in one session and
+always the same way: **a meter that does not cover every state reports the last
+state it knows.**
+
+- `tests/mali_cost_probe.lua` never called `setVSync(0)`, so every condition
+  read 16.7 ms and every saving was noise around the refresh interval.
+- Its `scene=` column reported the presentation canvas, which is always the
+  window's size, so every RES rung printed the same number.
+- `ChunkMesher.stage` is never cleared, so idle frames were charged to whatever
+  pass ran last -- which made `grass` look like the bottleneck, then `figures`.
+  `runGeometry` set no stage at all, so its frames were charged to its
+  predecessor.
+- `MeshCache.wipe` returned `0` both for "nothing was cached" and for "the
+  listing failed". The second silently turned four rounds of cold-versus-warm
+  measurement into warm-versus-warm, which read as noise and was not.
+
+The probes now name the ambiguous cases apart, and `tests/cache_probe.lua`
+prints `*** WARNING: the cold arm below is NOT cold` when it cannot clear.
+
+### An Intel UHD was taking the desktop preset
+
+`Device.mobile()` asks whether this is a tile-based mobile GPU. Three defaults
+were reading it as though it asked whether this GPU can afford the expensive
+optional passes -- and on an integrated desktop part every mobile test is
+false. So the machine this mod is developed and measured on was getting
+SCREEN FX resolved to `rt`, the top rung (`lib/RayFX.lua`), the tilt-shift
+pinned at its maximum level (`main.lua`), **and the T-SHIFT row taken off the
+OPTIONS page**, so there was no switch left to reach. The comment beside that
+last one describes closing exactly this trap, for phones.
+
+New `Device.weak()` -- mobile, or a known integrated family (Intel UHD/HD/Iris,
+AMD APU Vega/Radeon Graphics, llvmpipe and friends) -- and the three gates now
+read it. Verified on the reference machine: `mobile() false, weak() true`. A
+rung the player picked by hand is still never overridden.
 
 ## 1.39.0-beta
 

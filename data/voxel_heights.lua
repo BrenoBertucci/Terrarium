@@ -2620,6 +2620,11 @@ return {
     -- wears the panel's grey. Tiles this list leaves unclaimed (the
     -- Celadon Hotel's different layout) still fall to the pins above.
     POKECENTER = {
+      -- The Celadon Hotel FIRST (lib/CeladonRoomKit.lua): it shares this tileset
+      -- but not the Centre's plan, and first claim wins.
+      { id = "celadon_room_pokecenter", celroom = true, wild = true, grid = true,
+        maps = { CELADON_HOTEL = true },
+        tiles = { { 0, 0 }, { 0, 0 } } },
       -- the two pillars: four rows of shaft (16 light / 41 grey halves)
       -- over the plinth (4/5 top, 20/21 base) in the row below the wall
       { id = "pc_pillar", room = "pillar", seal = "nsew",
@@ -2778,6 +2783,31 @@ return {
         tiles = { { 90, 91 }, { 25, 24 } } },
     },
 
+    -- ------- THE ROOMS OF CELADON (lib/CeladonRoomKit.lua, `celroom`)
+    -- Eighteen plans over five tilesets. `wild`: the template matches every
+    -- cell of the listed maps and the KIT says what stands there, from the
+    -- classes Structures gave the cell's tiles. One list a tileset.
+    -- the department store, the diner, the Game Corner
+    LOBBY = {
+      { id = "celadon_room_lobby", celroom = true, wild = true, grid = true,
+        maps = { CELADON_MART_1F = true, CELADON_MART_2F = true, CELADON_MART_3F = true, CELADON_MART_4F = true, CELADON_MART_5F = true, CELADON_MART_ROOF = true, CELADON_MART_ELEVATOR = true, CELADON_DINER = true, GAME_CORNER = true, GAME_CORNER_PRIZE_ROOM = true },
+        tiles = { { 0, 0 }, { 0, 0 } } },
+    },
+
+    -- the mansion and the chief's house
+    MANSION = {
+      { id = "celadon_room_mansion", celroom = true, wild = true, grid = true,
+        maps = { CELADON_MANSION_1F = true, CELADON_MANSION_2F = true, CELADON_MANSION_3F = true, CELADON_MANSION_ROOF = true, CELADON_CHIEF_HOUSE = true },
+        tiles = { { 0, 0 }, { 0, 0 } } },
+    },
+
+    -- Erika's gym
+    GYM = {
+      { id = "celadon_room_gym", celroom = true, wild = true, grid = true,
+        maps = { CELADON_GYM = true },
+        tiles = { { 0, 0 }, { 0, 0 } } },
+    },
+
     -- The Pokemon Fan Club, inside (lib/VermilionHomeKit.lua, `club`): its own
     -- plan, nobody else's -- no other map in the game hashes to it. The room
     -- first, then the two couches: their cells are walkable (the fans and
@@ -2819,6 +2849,9 @@ return {
     -- The seats are their own templates because their cells
     -- are walkable and carry a standH the rest of the room must not.
     HOUSE = {
+      { id = "celadon_room_house", celroom = true, wild = true, grid = true,
+        maps = { CELADON_MANSION_ROOF_HOUSE = true },
+        tiles = { { 0, 0 }, { 0, 0 } } },
       { id = "lav_home_room", home = "room", where = { 0, 0, 0, 0 },
         maps = { MR_FUJIS_HOUSE = true, LAVENDER_CUBONE_HOUSE = true,
                  NAME_RATERS_HOUSE = true, VERMILION_OLD_ROD_HOUSE = true,
@@ -3670,7 +3703,22 @@ return {
         -- painter's picture (tools/vermilion_ground.py): brick and a quay.
         maps = { LAVENDER_TOWN = true, ROUTE_8 = true, ROUTE_10 = true,
                  ROUTE_12 = true, VERMILION_CITY = true, ROUTE_6 = true,
-                 ROUTE_11 = true },
+                 ROUTE_11 = true,
+                 -- ...and CELADON_CITY's (tools/celadon_ground.py): dressed stone
+                 CELADON_CITY = true, ROUTE_7 = true, ROUTE_16 = true,
+                 -- ...and CERULEAN_CITY's (tools/cerulean_ground.py): river
+                 -- pebbles with a blue wave, and the four roads out of it
+                 CERULEAN_CITY = true, ROUTE_24 = true, ROUTE_5 = true,
+                 ROUTE_4 = true, ROUTE_9 = true,
+                 -- ...and the west's (tools/west_ground.py): Pallet's earth
+                 -- lanes, Viridian's mossy flags, Pewter's granite fans
+                 PALLET_TOWN = true, ROUTE_1 = true, VIRIDIAN_CITY = true,
+                 ROUTE_2 = true, ROUTE_22 = true, PEWTER_CITY = true, ROUTE_3 = true,
+                 -- ...Saffron's streets, Fuchsia's garden gravel (and its two
+                 -- roads), Cinnabar's basalt (tools/saffron_ground.py,
+                 -- fuchsia_ground.py, cinnabar_ground.py)
+                 SAFFRON_CITY = true, FUCHSIA_CITY = true, ROUTE_15 = true,
+                 ROUTE_18 = true, CINNABAR_ISLAND = true },
         tiles = { { 0, 0 }, { 0, 0 } } },
       -- ------- VERMILION'S FENCES (lib/FenceKit.lua, `fence`)
       --
@@ -3679,7 +3727,9 @@ return {
       -- cell without claiming it, and this one then stands in what was laid.
       -- Only Vermilion's and its two routes' -- the cell is every town's fence.
       { id = "vermilion_fence", fence = true, grid = true,
-        maps = { VERMILION_CITY = true, ROUTE_6 = true, ROUTE_11 = true },
+        -- ...and Celadon's and its two roads', in IRON (FenceKit picks by map)
+        maps = { VERMILION_CITY = true, ROUTE_6 = true, ROUTE_11 = true,
+                 CELADON_CITY = true, ROUTE_7 = true, ROUTE_16 = true },
         tiles = { { 14, 14 }, { 85, 85 } } },
       -- ------- LEDGES AS BANKS (lib/LedgeKit.lua, `bank`)
       --

@@ -22,6 +22,7 @@ local TerrainAtlas = V.require("TerrainAtlas")
 local Voxel = V.require("VoxelState")
 local Sky = V.require("Sky")
 local DayNight = V.require("DayNight")
+local Mist = V.require("Mist")
 local GroundFX = V.require("GroundFX")
 local Quality = V.require("Quality")
 local Wind = V.require("Wind")
@@ -44,6 +45,7 @@ local animeHeld = false
 local Roamer = V.require("Roamer")
 local StreetLamps = V.require("StreetLamps")
 local Skyline = V.require("Skyline")
+local Glow = V.require("Glow")
 local PaletteFX = require("src.render.PaletteFX")
 local Map = require("src.world.Map")
 
@@ -1294,11 +1296,12 @@ local function castShadows(state, terrain, nbMesh, posed, cx, cy, vw, vh,
   do
     local okT, Trees3D = pcall(V.require, "Trees3D")
     if okT and Trees3D and Trees3D.castShadows then
-      pcall(Trees3D.castShadows, state.map)
+      pcall(Trees3D.castShadows, state.map, nil, nil, box)
       if Quality.neighbourShadows() then
         for _, nb in ipairs(state.neighbors or {}) do
           if mapInBox(nb.map, box, nb.ox, nb.oy) then
-            pcall(Trees3D.castShadows, nb.map, nb.ox, nb.oy)
+            pcall(Trees3D.castShadows, nb.map, nb.ox, nb.oy,
+                  shifted(box, nb.ox, nb.oy))
           end
         end
       end
@@ -1308,12 +1311,98 @@ local function castShadows(state, terrain, nbMesh, posed, cx, cy, vw, vh,
   ShadowMap.finish(sig)
 end
 
+-- Sheets that ask something of the shader for the length of their own
+-- draw, keyed by sheet path, and the sway a sheet's draw carries. Shared
+-- by free-roam (below) and the battle arena (lib/BattleScene.lua): one
+-- answer to "how is this sheet drawn", wherever it stands.
+function VoxelScene.sheetFx()
+  local sheetFx = {}
+  local okB, BridgeKit = pcall(V.require, "BridgeKit")
+  if okB and BridgeKit then
+    sheetFx[BridgeKit.SHEET] = function(on)
+      Voxel3D.lantern(on and BridgeKit.GLASS_UV or nil, BridgeKit.GLOW)
+      Voxel3D.reef(on)                 -- its piles stand in the water too
+    end
+  end
+  -- Vermilion's houses: their window glass burns after dark (an authored
+  -- sheet has no glass mask; the GLASS row is handed over as a UV rect)
+  local okH, HouseKit = pcall(V.require, "VermilionHouseKit")
+  if okH and HouseKit and HouseKit.GLASS_UV then
+    sheetFx[HouseKit.SHEET] = function(on)
+      Voxel3D.lantern(on and HouseKit.GLASS_UV or nil, { 0, 0 })
+    end
+  end
+  -- Celadon's towers: glass, signs and neon marked in the sheet's alpha
+  local okT, TowerKit = pcall(V.require, "CeladonTowerKit")
+  if okT and TowerKit and TowerKit.SHEET then sheetFx[TowerKit.SHEET] = Voxel3D.emissive end
+  -- ...and the houses of Cerulean and Celadon, the same way
+  local okH2, TownKit = pcall(V.require, "TownHouseKit")
+  if okH2 and TownKit and TownKit.SHEET then sheetFx[TownKit.SHEET] = Voxel3D.emissive end
+  local okR, ReefKit = pcall(V.require, "ReefKit")
+  local sheetSway = {}
+  if okR and ReefKit then
+    -- under the sheet it is absorbed like the bed; its shades are packed
+    -- with which plant each corner is (Buildings' reef branch), and the
+    -- shader moves each kind its own way. For this one draw the crush
+    -- slots carry the swimmers' hulls and wakes (lib/WakeFX.lua) and the
+    -- load channel the weather, both put back after -- the pass that
+    -- wants them asks, as the forest does (Trees3D.draw).
+    local heldCrush, heldLoad = nil, nil
+    sheetFx[ReefKit.SHEET] = function(on)
+      Voxel3D.reef(on)
+      Voxel3D.packedShade(on)
+      if on then
+        heldCrush, heldLoad = Voxel3D.crush, Voxel3D.grassLoad
+        Voxel3D.crush = Voxel3D.stir
+        local okL, wet, snow, gust = pcall(Wind.load)
+        Voxel3D.grassLoad = okL and { wet or 0, snow or 0, gust or 0 } or nil
+      else
+        Voxel3D.crush, Voxel3D.grassLoad = heldCrush, heldLoad
+      end
+    end
+    -- the reeds' reach: WIND OFF stills them, but the floor keeps the
+    -- branch alive for the water and the swimmers (Voxel3D.SWAY_FLOOR)
+    sheetSway[ReefKit.SHEET] = math.max(Wind.amount() * ReefKit.SWAY,
+                                        Voxel3D.SWAY_FLOOR)
+  end
+  return sheetFx, sheetSway
+end
+
+-- Probe seam: set VoxelScene.PROFILE to a table and render() adds each
+-- section's wall time to it (seconds). nil in play, which costs one test
+-- per marker.
+VoxelScene.PROFILE = nil
+local profClock = love and love.timer and love.timer.getTime
+local function mark(tag)
+  local P = VoxelScene.PROFILE
+  if not P then return end
+  if P._mem then
+    -- KB the section allocated. A collector step inside it reads as a
+    -- drop; those samples are thrown away rather than counted as negative.
+    local now = collectgarbage("count")
+    local d = now - (P._t or now)
+    if d >= 0 then
+      P[tag] = (P[tag] or 0) + d
+      P["#" .. tag] = (P["#" .. tag] or 0) + 1
+    end
+    P._t = now
+    return
+  end
+  local now = profClock()
+  P[tag] = (P[tag] or 0) + (now - (P._t or now))
+  P._t = now
+end
+
 function VoxelScene.render(state, w, h, vw, vh, paletteFor)
+  if VoxelScene.PROFILE then
+    VoxelScene.PROFILE._t = VoxelScene.PROFILE._mem and collectgarbage("count") or profClock()
+  end
   -- With nothing cached at all (the first frame of a fresh toggle),
   -- return nil: the engine keeps the 2D path for the frame and
   -- Voxel.ready holds the camera tween at flat, so the switch waits
   -- invisibly instead of freezing or tilting an empty stage.
   local terrain, nbMesh = VoxelScene.prefetch(state)
+  mark("prefetch")
   if not terrain then return nil end
   pcall(function()
     V.require("Grass3D").bindMap(state.map)
@@ -1408,6 +1497,20 @@ function VoxelScene.render(state, w, h, vw, vh, paletteFor)
     -- is what left the room with no occluder at all -- see Shop.SHADOW_SCALE
     Voxel3D.SHADOW_ALPHA = (Voxel3D.SHADOW_ALPHA or 0) * Shop.SHADOW_SCALE
   end
+  -- A CAVE IS DARK, the lesson of the passage and the crypt once more, for
+  -- the GLOW row's lights (lib/Glow.lua): the Charmander walking behind you,
+  -- FLASH, a sparking Magnemite. Rock Tunnel before FLASH is the original's
+  -- own darkness, drawn as light instead of as a palette.
+  Voxel3D.tint = Glow.ambient(state.map, Voxel3D.tint, outdoor)
+  -- and a close lightning strike lights the ground for the length of its
+  -- flash, cold (Glow.boltFill): the sky alone went white before
+  if outdoor then
+    local bolt = Glow.boltFill()
+    local t = Voxel3D.tint
+    if bolt and type(t) == "table" and t[3] then
+      Voxel3D.tint = { t[1] + bolt[1], t[2] + bolt[2], t[3] + bolt[3] }
+    end
+  end
   -- The sun's SHEAR, held nearly vertical while the shop is the map.
   --
   -- ONLY while the shop is the map. DayNight.applyRig ran a few lines up
@@ -1484,6 +1587,10 @@ function VoxelScene.render(state, w, h, vw, vh, paletteFor)
   -- plaster, cloth and wood, one texel per voxel, ruled over the same way.
   local homeDef = (not outdoor) and state.map and state.map.def
   local home = homeDef and LavenderHomeKit.MAPS[homeDef.id or homeDef.name]
+  if homeDef and not home then                      -- ...and Celadon's eighteen rooms
+    local okC, CKit = pcall(V.require, "CeladonRoomKit")
+    home = okC and CKit and CKit.MAPS and CKit.MAPS[homeDef.id or homeDef.name]
+  end
   if homeDef and not home then                      -- ...and Vermilion's three
     local okV, VKit = pcall(V.require, "VermilionHomeKit")
     home = okV and VKit and VKit.MAPS and VKit.MAPS[homeDef.id or homeDef.name]
@@ -1521,7 +1628,24 @@ function VoxelScene.render(state, w, h, vw, vh, paletteFor)
   Voxel3D.lampSpec = 0
   Voxel3D.mist = nil
   Voxel3D.mistColor = nil
+  Voxel3D.mistSun = nil
+  Voxel3D.mistSunColor = nil
+  Voxel3D.mistShape = nil
   Voxel3D.stone = nil
+  -- The hour's air (lib/Mist.lua, the MIST row): the crypt's ground mist,
+  -- outdoors, grown and burnt off by the clock. Set before the crypt and
+  -- shop branches below, which overwrite it with their own (or none) --
+  -- neither of them is outdoors, so the two can never both apply.
+  do
+    local okA, air = pcall(Mist.frame, outdoor or DayNight.isCanopy(state.map))
+    if okA and air then
+      Voxel3D.mist, Voxel3D.mistColor = air.mist, air.color
+      Voxel3D.mistSun, Voxel3D.mistSunColor = air.sun, air.sunColor
+      Voxel3D.mistShape = air.shape
+    end
+    local okW, wk = pcall(Mist.wake)
+    Voxel3D.mistWake = okW and wk or nil
+  end
   -- Send only the nearby active posts to the shader.  This belongs before
   -- beginScene: the ground is the first mesh drawn and must receive the same
   -- warm pools as the post itself.
@@ -1658,9 +1782,20 @@ function VoxelScene.render(state, w, h, vw, vh, paletteFor)
     return modeColors(paletteFor, map)
   end
 
+  mark("setup")
   local posed, me = posesOf(state, spriteColors)
+  mark("poses")
   castShadows(state, terrain, nbMesh, posed, cx, cy, vw, vh, atlasFor)
+  mark("shadows")
+  -- the GLOW field for this frame, around the same focus (lib/Glow.lua).
+  -- Ahead of the scene for the shadow map's reason: it draws into a canvas
+  -- of its own. A failure costs the lights, never the frame.
+  do
+    local okG = pcall(Glow.prepareWorld, state, cx, cy)
+    if not okG then Voxel3D.glow = nil end
+  end
 
+  mark("glow")
   if not Voxel3D.beginScene(w, h, cx, cy, vw, vh, skyFor(state.map)) then
     return nil
   end
@@ -1684,6 +1819,7 @@ function VoxelScene.render(state, w, h, vw, vh, paletteFor)
   -- shape, not a surface, and whitening its crowns would put a snowfield
   -- on a hill nobody can reach.
   Skyline.frame()
+  mark("beginScene")
   Skyline.draw(state, cx, cy, vh)
 
   Voxel3D.snowTop = GroundFX.snowTint(state.map)
@@ -1718,6 +1854,7 @@ function VoxelScene.render(state, w, h, vw, vh, paletteFor)
   end
   Voxel3D.snowMap = snowState
   local box = VoxelScene.bounds(cx, cy, vw, vh, false)
+  mark("skyline+snow")
   Voxel3D.drawGroup(terrain, atlasFor(state.map), nil, nil, nil, box)
   Voxel3D.snowMap = nil
   for i, nb in ipairs(state.neighbors or {}) do
@@ -1734,52 +1871,7 @@ function VoxelScene.render(state, w, h, vw, vh, paletteFor)
       local okK, ShopKit = pcall(V.require, "ShopKit")
       shopSheet = okK and ShopKit and ShopKit.SHEET or nil
     end
-    -- Sheets that ask something of the shader for the length of their own
-    -- draw: the bridges' carries lantern glass and baked lamplight
-    -- (lib/BridgeKit.lua), the reef's stands under water (lib/ReefKit.lua).
-    local sheetFx = {}
-    local okB, BridgeKit = pcall(V.require, "BridgeKit")
-    if okB and BridgeKit then
-      sheetFx[BridgeKit.SHEET] = function(on)
-        Voxel3D.lantern(on and BridgeKit.GLASS_UV or nil, BridgeKit.GLOW)
-        Voxel3D.reef(on)                 -- its piles stand in the water too
-      end
-    end
-    -- Vermilion's houses: their window glass burns after dark (an authored
-    -- sheet has no glass mask; the GLASS row is handed over as a UV rect)
-    local okH, HouseKit = pcall(V.require, "VermilionHouseKit")
-    if okH and HouseKit and HouseKit.GLASS_UV then
-      sheetFx[HouseKit.SHEET] = function(on)
-        Voxel3D.lantern(on and HouseKit.GLASS_UV or nil, { 0, 0 })
-      end
-    end
-    local okR, ReefKit = pcall(V.require, "ReefKit")
-    local sheetSway = {}
-    if okR and ReefKit then
-      -- under the sheet it is absorbed like the bed; its shades are packed
-      -- with which plant each corner is (Buildings' reef branch), and the
-      -- shader moves each kind its own way. For this one draw the crush
-      -- slots carry the swimmers' hulls and wakes (lib/WakeFX.lua) and the
-      -- load channel the weather, both put back after -- the pass that
-      -- wants them asks, as the forest does (Trees3D.draw).
-      local heldCrush, heldLoad = nil, nil
-      sheetFx[ReefKit.SHEET] = function(on)
-        Voxel3D.reef(on)
-        Voxel3D.packedShade(on)
-        if on then
-          heldCrush, heldLoad = Voxel3D.crush, Voxel3D.grassLoad
-          Voxel3D.crush = Voxel3D.stir
-          local okL, wet, snow, gust = pcall(Wind.load)
-          Voxel3D.grassLoad = okL and { wet or 0, snow or 0, gust or 0 } or nil
-        else
-          Voxel3D.crush, Voxel3D.grassLoad = heldCrush, heldLoad
-        end
-      end
-      -- the reeds' reach: WIND OFF stills them, but the floor keeps the
-      -- branch alive for the water and the swimmers (Voxel3D.SWAY_FLOOR)
-      sheetSway[ReefKit.SHEET] = math.max(Wind.amount() * ReefKit.SWAY,
-                                          Voxel3D.SWAY_FLOOR)
-    end
+    local sheetFx, sheetSway = VoxelScene.sheetFx()
     Voxel3D.glass(false)
     Voxel3D.snowMap = snowState
     for _, g in ipairs(ChunkMesher.spriteGroups(state.map) or {}) do
@@ -1830,6 +1922,7 @@ function VoxelScene.render(state, w, h, vw, vh, paletteFor)
   -- terrain and the characters, depth-tested and never depth-writing --
   -- the same footing the flat drop shadows below use, for the same
   -- reasons. See lib/GroundFX.lua.
+  mark("terrain")
   GroundFX.draw3D(state)
 
   -- Without a shadow map (headless, or a driver that could not make the
@@ -1853,6 +1946,7 @@ function VoxelScene.render(state, w, h, vw, vh, paletteFor)
   -- the panes' atlas positions stripe the cast with lamplight at night
   Voxel3D.glass(false)
 
+  mark("groundfx")
   -- ------- THE TREES, and they have to be here
   --
   -- The authored trees (lib/Trees3D.lua) were drawn with the street lamps,
@@ -1871,11 +1965,19 @@ function VoxelScene.render(state, w, h, vw, vh, paletteFor)
     if okT and Trees3D then
       Voxel3D.seams(false)
       Voxel3D.snowTop = snowOnWorld
-      pcall(Trees3D.draw, state.map, outdoor)
+      -- The same box the terrain twenty lines up was culled with. Until
+      -- this was passed the forest was the one large mesh in the mod with
+      -- no cull at all -- and the largest, at 75-80% of the frame's
+      -- vertices. A neighbour is handed the box shifted into ITS
+      -- coordinates, exactly as its terrain is: mapInBox only says the map
+      -- is in frame, and a forest map whose corner clips the box was
+      -- paying for its whole forest.
+      pcall(Trees3D.draw, state.map, outdoor, nil, nil, box)
       for _, nb in ipairs(state.neighbors or {}) do
         if mapInBox(nb.map, box, nb.ox, nb.oy) then
           local nOut = nb.map and nb.map.def and Map.isOutdoor(nb.map.def)
-          pcall(Trees3D.draw, nb.map, nOut, nb.ox, nb.oy)
+          pcall(Trees3D.draw, nb.map, nOut, nb.ox, nb.oy,
+                shifted(box, nb.ox, nb.oy))
         end
       end
       Voxel3D.snowTop = 0
@@ -1975,6 +2077,7 @@ function VoxelScene.render(state, w, h, vw, vh, paletteFor)
   -- in these passes rather than in the terrain group -- which is why the
   -- crowns stayed green while the ground and the walls went white.
   Voxel3D.snowTop = snowOnWorld
+  mark("trees+figures")
   -- ------- the snow around everybody's legs
   --
   -- The card cut hid the boots; this is what hides them. One small white
@@ -2105,6 +2208,7 @@ function VoxelScene.render(state, w, h, vw, vh, paletteFor)
   local sway = math.max(Wind.amount(), Voxel3D.SWAY_FLOOR)
   -- 3D grass bake (if present) + foot-crush physics from everyone walking
   -- through the meadow this frame.
+  mark("legs-snow")
   local grassTex = atlasFor(state.map)
   local Grass3D = nil
   local GrassMod = nil
@@ -2209,6 +2313,8 @@ function VoxelScene.render(state, w, h, vw, vh, paletteFor)
     local dt = (lastGrassAt and (now - lastGrassAt)) or 0
     lastGrassAt = now
     if dt < 0 then dt = 0 elseif dt > 0.1 then dt = 0.1 end
+    -- and the same feet part the mist (lib/Mist.lua), on the same dt
+    pcall(Mist.walk, feet, dt, state.map)
     local crush = nil
     if GrassMod and GrassMod.crushFrame then
       local okc, c = pcall(GrassMod.crushFrame, feet, dt)
@@ -2337,6 +2443,7 @@ function VoxelScene.render(state, w, h, vw, vh, paletteFor)
   -- lands behind the card and the player obscures the patch they stand
   -- ON, while the nearest flower of the cell south (+20) stays in front
   -- and keeps overdrawing their feet.
+  mark("grass")
   local fpull = math.max(0, pull - 8 * math.sin(math.max(Voxel.angle, 0.05)))
   -- flowers are snugged casters too, so they read their own shadowing
   -- through the same snugged transform the sun stored them with
@@ -2369,6 +2476,7 @@ function VoxelScene.render(state, w, h, vw, vh, paletteFor)
   -- stripe the shaft with window-light at night (same contract as sprites).
   Voxel3D.seams(false)
   Voxel3D.glass(false)
+  mark("flowers")
   pcall(StreetLamps.draw, state.map, outdoor)
   for _, nb in ipairs(state.neighbors or {}) do
     if mapInBox(nb.map, box, nb.ox, nb.oy) then
@@ -2387,6 +2495,7 @@ function VoxelScene.render(state, w, h, vw, vh, paletteFor)
   pcall(Underpass.draw, state.map)
   Voxel3D.seams(true)
 
+  mark("lamps")
   -- ------- THE WATER SURFACE, over everything it covers
   --
   -- The terrain pass drew the basin -- the bed and the banks (see
@@ -2406,6 +2515,7 @@ function VoxelScene.render(state, w, h, vw, vh, paletteFor)
   end
   Voxel3D.seams(true)
 
+  mark("water")
   -- ------- AND THE AIR, INSIDE THE PASS RATHER THAN OVER IT
   --
   -- Wind motes used to be painted in main.lua's overlay, which has no
@@ -2491,7 +2601,9 @@ function VoxelScene.render(state, w, h, vw, vh, paletteFor)
   Voxel3D.glass(true)
   Voxel3D.seams(true)
 
+  mark("air")
   local out = Voxel3D.endScene()
+  mark("endScene")
   -- The crypt's bloom, on the finished diorama and IN PLACE: what the
   -- overlay draws on next is this same canvas, so the radar and the 2D
   -- effects stay sharp over it. Here rather than as a pipeline because

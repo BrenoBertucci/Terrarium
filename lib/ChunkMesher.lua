@@ -313,10 +313,297 @@ local function newFfiSink(cap0)
   return sink
 end
 
+-- ------- THE SAME BYTES, WITHOUT FFI
+--
+-- newFfiSink above is the fast path and IT HAS NEVER RUN IN THE GAME. The
+-- engine's mod sandbox denies `ffi` outright -- it is in the DENIED table in
+-- src/mods/Sandbox.lua beside io, os, debug and package -- so the
+-- `pcall(require, "ffi")` at the top of this file always fails, `ffi` is
+-- always nil, and newSink has always returned the TABLE sink: one six-field
+-- Lua table per vertex, four per quad, millions per route.
+--
+-- That is where the heap goes. probe_out_lavground/lavground_cost.log
+-- measures 699-700 MB live with a full collect taking 900-992 ms, and
+-- probe_out_f5_perf/buildings_perf_probe.log measures p99 frame times of
+-- 111-195 ms with maxima of 805-986 ms. A 900 ms collect and a 986 ms frame
+-- are the same event seen twice.
+--
+-- So this builds the identical float32 stream the FFI sink built, using
+-- love.data.pack -- which the sandbox DOES allow, and which the FFI sink was
+-- already relying on half of (love.data.newByteData). The accumulator is one
+-- flat array of numbers, reused: LuaJIT keeps an array-part table's numbers
+-- unboxed, so a vertex costs six slots in one table rather than one whole
+-- table of its own.
+--
+-- The index buffer is not stored at all. Every quad's six indices are a pure
+-- function of its ordinal (base+0,1,2, base+0,2,3 off base = 4*ordinal), so
+-- the whole map is regenerated arithmetically at finish() from the quad
+-- count -- the FFI sink kept a uint32 buffer for it only because it had one
+-- to hand.
+--
+-- Vertices per love.data.pack call. Divides 65536 exactly so a block never
+-- straddles the upload slice below, and small enough that unpack() is
+-- nowhere near LuaJIT's argument ceiling.
+local PACK_VERTS = 128
+local unpack = unpack or table.unpack
+
+-- "<ffff..." by float count, built once per distinct count (there are two:
+-- a full block, and whatever the last partial one needs).
+local FLOAT_FMT = {}
+local function floatFmt(n)
+  local f = FLOAT_FMT[n]
+  if not f then f = "<" .. string.rep("f", n); FLOAT_FMT[n] = f end
+  return f
+end
+local INT_FMT = {}
+local function intFmt(n, code)
+  local key = code .. n
+  local f = INT_FMT[key]
+  if not f then f = "<" .. string.rep(code, n); INT_FMT[key] = f end
+  return f
+end
+
+-- The index map, regenerated from the quad count alone.
+--
+-- Nothing stores indices: every quad's six are a pure function of its ordinal
+-- (base+0,1,2 and base+0,2,3 off base = 4*ordinal), so a buffer for them
+-- would be a buffer for something already known. Shared by the pack sink and
+-- by the cache loader, because two copies of this arithmetic is exactly the
+-- kind of duplication that survives one edit and not the next.
+--
+-- Same width rule the FFI sink spelled out: LOVE picks uint16 vs uint32
+-- itself when setVertexMap is given a Lua table, but the raw-Data overload
+-- takes it explicitly.
+local function setIndexMap(m, nQuads)
+  local n = nQuads * 4
+  local nIdx = nQuads * 6
+  local wide = n > 65535
+  local code = wide and "I4" or "I2"
+  local PER = 1024                  -- indices per pack call
+  local iparts, ip = {}, 0
+  local ibuf, nI = {}, 0
+  local q = 0
+  while q < nQuads do
+    local base = q * 4
+    ibuf[nI + 1] = base
+    ibuf[nI + 2] = base + 1
+    ibuf[nI + 3] = base + 2
+    ibuf[nI + 4] = base
+    ibuf[nI + 5] = base + 2
+    ibuf[nI + 6] = base + 3
+    nI = nI + 6
+    q = q + 1
+    if nI >= PER or q >= nQuads then
+      ip = ip + 1
+      iparts[ip] = love.data.pack("string", intFmt(nI, code),
+                                  unpack(ibuf, 1, nI))
+      nI = 0
+      Budget.tick()
+    end
+  end
+  local idata = love.data.newByteData(table.concat(iparts))
+  m:setVertexMap(idata, wide and "uint32" or "uint16", nIdx)
+  idata:release()
+end
+
+-- A mesh from a packed vertex stream and a quad count -- the cache's half of
+-- a build, with the geometry pass deleted. Uploaded in the same 65536-vertex
+-- slices with a budget tick between, for the same reason: a route-sized mesh
+-- is ten to twenty megabytes and one atomic setVertices is a dropped frame.
+local function meshFromPacked(bytes, nQuads)
+  if not (nQuads and nQuads > 0 and type(bytes) == "string") then return nil end
+  local n = nQuads * 4
+  if #bytes ~= n * 6 * 4 then return nil end
+  if not (love.graphics and love.graphics.newMesh
+          and love.data and love.data.newByteData) then return nil end
+  local ok, mesh = pcall(function()
+    local m = love.graphics.newMesh(Voxel3D.FORMAT, n, "triangles", "static")
+    local SLICE = 65536
+    local at = 0
+    while at < n do
+      local count = math.min(SLICE, n - at)
+      local data = love.data.newByteData(
+        bytes:sub(at * 24 + 1, (at + count) * 24))
+      m:setVertices(data, at + 1)
+      data:release()
+      at = at + count
+      Budget.check()
+    end
+    setIndexMap(m, nQuads)
+    return m
+  end)
+  return ok and mesh or nil
+end
+
+local function newPackSink(cap0)
+  local blocks, nBlocks = {}, 0      -- packed byte strings
+  local counts = {}                  -- vertices in each block
+  local acc, nAcc = {}, 0            -- reusable flat float buffer
+  local nQuads = 0
+
+  local function flush()
+    if nAcc == 0 then return end
+    nBlocks = nBlocks + 1
+    blocks[nBlocks] = love.data.pack("string", floatFmt(nAcc),
+                                     unpack(acc, 1, nAcc))
+    counts[nBlocks] = nAcc / 6
+    nAcc = 0
+  end
+
+  return {
+    push = function(c, uv, shade, sky)
+      local flat = type(shade) ~= "table"
+      local s = faceSign(c, sky)
+      for i = 1, 4 do
+        local cc, t = c[i], uv[i]
+        acc[nAcc + 1] = cc[1]
+        acc[nAcc + 2] = cc[2]
+        acc[nAcc + 3] = cc[3]
+        acc[nAcc + 4] = t[1]
+        acc[nAcc + 5] = t[2]
+        acc[nAcc + 6] = s * (flat and shade or shade[i])
+        nAcc = nAcc + 6
+      end
+      nQuads = nQuads + 1
+      if nAcc >= PACK_VERTS * 6 then flush() end
+    end,
+    -- The packed vertex bytes and the quad count, without uploading
+    -- anything. Exists for sinkSelfCheck below: a picture cannot prove this
+    -- sink correct (two builds put the camera in different places and half
+    -- the dithered frame flips), but the bytes can.
+    raw = function()
+      flush()
+      return table.concat(blocks), nQuads
+    end,
+    finish = function()
+      flush()
+      if nQuads == 0 then return nil end
+      local n = nQuads * 4
+      local ok, mesh = pcall(function()
+        local m = love.graphics.newMesh(Voxel3D.FORMAT, n,
+                                        "triangles", "static")
+        -- Uploaded in slices with a budget tick between, for the reason the
+        -- FFI sink gives: a route-sized mesh is 10-20 MB and one atomic
+        -- setVertices was the last frame spike left in the build.
+        local SLICE = 65536
+        local at, blockAt = 0, 1
+        while at < n do
+          local want = math.min(SLICE, n - at)
+          local group, got = {}, 0
+          while blockAt <= nBlocks and got < want do
+            group[#group + 1] = blocks[blockAt]
+            got = got + counts[blockAt]
+            blockAt = blockAt + 1
+          end
+          local data = love.data.newByteData(table.concat(group))
+          m:setVertices(data, at + 1)
+          data:release()
+          at = at + got
+          Budget.check()
+        end
+        setIndexMap(m, nQuads)
+        return m
+      end)
+      return ok and mesh or nil
+    end,
+  }
+end
+
+-- Which sink to build with. "auto" picks the best one available and is what
+-- ships; the other two exist so the A/B can be run against the path that
+-- was actually in the game before (tests/sink_probe.lua), and so a driver
+-- that chokes on a packed upload has somewhere to be sent by hand.
+ChunkMesher.SINK = "auto"
+
+-- Whether ffi reached THIS module. A probe cannot answer this for the mod:
+-- probes load through POKEPORT_DRIVER and run outside the sandbox, where
+-- require("ffi") succeeds. In here it does not, and that is the whole
+-- reason newPackSink exists.
+function ChunkMesher.hasFFI()
+  return ffi ~= nil
+end
+
+-- Do the two sinks agree, float for float?
+--
+-- The pack sink writes the vertex stream as raw little-endian float32 rather
+-- than as Lua tables, and a packing bug there is silent: the mesh uploads,
+-- the map draws, and the world is subtly wrong in a way no exception
+-- reports. A screenshot cannot settle it either -- rebuilding a map twice
+-- leaves the camera at two different points of its ease, and on a frame this
+-- full of dither a two-pixel pan differs in half its pixels.
+--
+-- So compare the numbers. A handful of synthetic quads through both sinks,
+-- unpacked back to floats, checked against the table sink's own vertices at
+-- float32 tolerance -- plus the index map, which the pack sink does not
+-- store at all and regenerates from the quad ordinal.
+function ChunkMesher.sinkSelfCheck()
+  if not (love and love.data and love.data.pack and love.data.unpack) then
+    return nil, "love.data.pack unavailable"
+  end
+  local quads = {
+    { c = { { 1, 2, 3 }, { 4, 5, 6 }, { 7, 8, 9 }, { 10, 11, 12 } },
+      uv = { { 0.25, 0.5 }, { 0.75, 0.5 }, { 0.75, 1 }, { 0.25, 1 } },
+      shade = 0.5, sky = nil },
+    { c = { { -3, 0.5, 2 }, { -3, 0.5, 18 }, { 13, 0.5, 18 }, { 13, 0.5, 2 } },
+      uv = { { 0, 0 }, { 1, 0 }, { 1, 1 }, { 0, 1 } },
+      shade = { 0.1, 0.2, 0.3, 0.4 }, sky = true },
+    { c = { { 100, -2, 100 }, { 116, -2, 100 }, { 116, -2, 116 }, { 100, -2, 116 } },
+      uv = { { 0.5, 0.5 }, { 0.6, 0.5 }, { 0.6, 0.6 }, { 0.5, 0.6 } },
+      shade = 0.875, sky = false },
+  }
+  local t, p = newTableSink(), newPackSink(4)
+  for _, q in ipairs(quads) do
+    t.push(q.c, q.uv, q.shade, q.sky)
+    p.push(q.c, q.uv, q.shade, q.sky)
+  end
+  local tv, ti = t.results()
+  local bytes, nq = p.raw()
+  if nq ~= #quads then
+    return false, ("quad count %d, expected %d"):format(nq, #quads)
+  end
+  local n = #tv
+  if #bytes ~= n * 6 * 4 then
+    return false, ("%d bytes for %d vertices, expected %d")
+                    :format(#bytes, n, n * 6 * 4)
+  end
+  local got = { love.data.unpack("<" .. string.rep("f", n * 6), bytes) }
+  for v = 1, n do
+    for k = 1, 6 do
+      local a, b = tv[v][k], got[(v - 1) * 6 + k]
+      -- the table sink keeps Lua doubles and LOVE narrows them on upload;
+      -- this sink narrows them here, so compare at float32 resolution
+      if math.abs(a - b) > math.max(1e-6, math.abs(a) * 1e-6) then
+        return false, ("vertex %d field %d: %s vs %s"):format(v, k, a, b)
+      end
+    end
+  end
+  -- and the index map, which the table sink builds 1-based through
+  -- Voxel3D.pushQuad and this one regenerates 0-based from the ordinal
+  for q = 0, nq - 1 do
+    local base = q * 4
+    local want = { base, base + 1, base + 2, base, base + 2, base + 3 }
+    for k = 1, 6 do
+      local have = ti[q * 6 + k]
+      if have - 1 ~= want[k] then
+        return false, ("index %d: %s vs %s"):format(q * 6 + k, have - 1, want[k])
+      end
+    end
+  end
+  return true, ("%d vertices, %d indices agree"):format(n, #ti)
+end
+
 local function newSink(cap0)
-  if ffi and love and love.data and love.data.newByteData
+  local want = ChunkMesher.SINK
+  if want == "table" then return newTableSink() end
+  if want ~= "pack" and ffi and love and love.data and love.data.newByteData
      and love.graphics and love.graphics.newMesh then
     return newFfiSink(cap0)
+  end
+  -- The real in-game path, since ffi is never there (see newPackSink).
+  if want ~= "table" and love and love.data and love.data.pack
+     and love.data.newByteData
+     and love.graphics and love.graphics.newMesh then
+    return newPackSink(cap0)
   end
   return newTableSink()
 end
@@ -399,7 +686,62 @@ function Group:release()
   if w and w.release then pcall(w.release, w) end
 end
 
-local function newChunkedSink()
+-- A plain (unchunked) mesh from cached bytes: the grass and the flowers.
+-- Their index lists are stamped from a template rather than derived from a
+-- quad ordinal, so unlike the terrain they are stored and restored.
+function ChunkMesher.meshFromBlob(blob)
+  if not (blob and blob.n and blob.n > 0) then return nil end
+  if not (love.graphics and love.graphics.newMesh
+          and love.data and love.data.newByteData) then return nil end
+  local ok, mesh = pcall(function()
+    local m = love.graphics.newMesh(Voxel3D.FORMAT, blob.n, "triangles", "static")
+    local SLICE = 65536
+    local at = 0
+    while at < blob.n do
+      local count = math.min(SLICE, blob.n - at)
+      local data = love.data.newByteData(
+        blob.verts:sub(at * 24 + 1, (at + count) * 24))
+      m:setVertices(data, at + 1)
+      data:release()
+      at = at + count
+      Budget.check()
+    end
+    if blob.m and blob.m > 0 then
+      local idata = love.data.newByteData(blob.idx)
+      m:setVertexMap(idata, "uint32", blob.m)
+      idata:release()
+    end
+    return m
+  end)
+  return ok and mesh or nil
+end
+
+-- Rebuild a culled group from cached chunk records. Returns nil on the first
+-- chunk that will not upload: half a map is worse than none, because none is
+-- a build and half is a hole nobody can explain.
+function ChunkMesher.groupFromRecords(records)
+  if not records or #records == 0 then return nil end
+  local chunks = {}
+  for i = 1, #records do
+    local r = records[i]
+    local mesh = meshFromPacked(r.bytes, r.quads)
+    if not mesh then
+      for _, done in ipairs(chunks) do
+        if done.mesh and done.mesh.release then pcall(done.mesh.release, done.mesh) end
+      end
+      return nil
+    end
+    chunks[i] = { mesh = mesh, x0 = r.x0, z0 = r.z0, x1 = r.x1, z1 = r.z1,
+                  ymax = r.ymax }
+  end
+  return setmetatable({ chunks = chunks }, Group)
+end
+
+-- `keep` asks finish() to hand back the packed bytes beside the group, so
+-- the caller can write them to the cache. Off by default: holding a whole
+-- route's vertex stream in a Lua string costs megabytes, and a build nobody
+-- is going to cache should not pay for it.
+local function newChunkedSink(keep)
   local buckets, order = {}, {}
 
   local function bucketFor(x, z)
@@ -449,7 +791,7 @@ local function newChunkedSink()
       b.sink.push(c, uv, shade, sky)
     end,
     finish = function()
-      local chunks = {}
+      local chunks, records = {}, keep and {} or nil
       for _, b in ipairs(order) do
         -- finish() is where the upload happens, and it yields to the build
         -- budget partway through a big one -- so this loop is already a
@@ -458,10 +800,22 @@ local function newChunkedSink()
         if mesh then
           chunks[#chunks + 1] = { mesh = mesh, x0 = b.x0, z0 = b.z0,
                                   x1 = b.x1, z1 = b.z1, ymax = b.ymax }
+          -- raw() after finish() is safe and cheap: the packed blocks are
+          -- still there and flush() is idempotent. A table sink has no
+          -- raw(), and on that path there is nothing to cache.
+          if records and b.sink.raw then
+            local bytes, quads = b.sink.raw()
+            records[#records + 1] = { x0 = b.x0, z0 = b.z0, x1 = b.x1,
+                                      z1 = b.z1, ymax = b.ymax,
+                                      quads = quads, bytes = bytes }
+          end
         end
       end
       if #chunks == 0 then return nil end
-      return setmetatable({ chunks = chunks }, Group)
+      -- records only when EVERY chunk produced one; a partial record set
+      -- would cache a map with holes in it
+      if records and #records ~= #chunks then records = nil end
+      return setmetatable({ chunks = chunks }, Group), records
     end,
   }
 end
@@ -1285,7 +1639,9 @@ local function quadsMesh(quads)
     Voxel3D.pushQuad(indices, n)
     n = n + 1
   end
-  return Voxel3D.newMesh(verts, indices)
+  -- verts and indices come back too, so a caller that wants to remember
+  -- this mesh does not have to build it a second time to see it
+  return Voxel3D.newMesh(verts, indices), verts, indices
 end
 
 -- The tall-grass rows as their own mesh: VoxelScene draws it AFTER the
@@ -1301,8 +1657,8 @@ local function buildGrassMesh(map)
   if S.grassInstances and #S.grassInstances > 0 then
     local ok, G = pcall(V.require, "Grass3D")
     if ok and G and G.meshFromInstances then
-      local mesh = G.meshFromInstances(S.grassInstances)
-      if mesh then return mesh end
+      local mesh, verts, indices = G.meshFromInstances(S.grassInstances)
+      if mesh then return mesh, verts, indices end
     end
   end
   return quadsMesh(S.grassQuads)
@@ -1507,15 +1863,148 @@ end
 -- A build only lands if the map's generation still matches the one the
 -- job was queued under -- invalidate/evict bump it to cancel in-flight
 -- work whose inputs went stale.
+-- ------- REACHING THE CACHE
+--
+-- Required LAZILY and once. MeshCache builds its identity by asking Trees3D,
+-- Grass3D and the kits what their rows say, and those modules reach back to
+-- this one -- a require at load time would be a cycle. By the time a job
+-- runs, the whole mod is up and the require is a table lookup.
+--
+-- `ChunkMesher.game` is set by main.lua beside the pump call, because the
+-- engine's storage API is scoped per playthrough and therefore wants the
+-- game object. Before a save is loaded it is nil, the cache is off, and the
+-- mesher behaves exactly as it did before any of this existed.
+-- OFF BY DEFAULT, AND THAT IS THE HONEST SETTING TODAY.
+--
+-- What is proven (tests/cache_probe.lua, three maps, three arms):
+--   * the byte format round-trips and REFUSES a stale identity, a truncated
+--     payload and a corrupt magic (MeshCache.selfCheck)
+--   * when an entry does load, the world it rebuilds is identical -- chunk
+--     count, vertices summed off the meshes themselves, and every cull box
+--
+-- What is NOT proven, and is why this is false:
+--   * a genuinely cold start (salted identity, so no pre-existing entry can
+--     match) writes its entries and then REFUSES ALL OF THEM on the next
+--     visit of the same session -- hits=0, and the warm arm rewrites the
+--     very keys the cold arm just wrote. The refusal buffer fills with
+--     legitimate refusals of older orphans before the interesting ones are
+--     reached, so the cause is not yet isolated.
+--   * with hits=0 the cache is pure cost: the first visit measured 0.8-2.4 s
+--     SLOWER and the second no faster.
+--
+-- Turning this on is one word, and the machinery is all here. It should not
+-- be turned on until a run reports hits > 0 and a first visit that is not
+-- worse -- both of which tests/cache_probe.lua already measures and prints.
+-- OFF, and this is an honest report rather than a placeholder.
+--
+-- PROVEN (tests/cache_probe.lua, three maps, three arms -- no-cache, cold,
+-- warm):
+--   * the byte format round-trips and refuses a stale identity, a truncated
+--     payload and a bad magic (MeshCache.selfCheck)
+--   * mod.storage itself is sound: write, read, overwrite and read again all
+--     agree (MeshCache.storageCheck) -- so the storage layer is NOT the bug
+--   * when an entry loads, the rebuilt world is identical to the one the
+--     no-cache arm built: chunk count, vertices summed off the meshes, and
+--     every cull box
+--
+-- NOT WORKING: in a cold-then-warm cycle the warm visit still reads the
+-- PREVIOUS session's payload at the keys the cold visit just wrote --
+-- hits=0, refused=5-7, every run. Three real bugs were found and fixed while
+-- chasing it and none of them was the cause:
+--   1. the mask variant lived in the payload but not in the KEY, so
+--      VoxelScene's masked FULL and BattleScene's unmasked FULL overwrote
+--      each other at one key;
+--   2. the write sat behind the generation check, so the map being stood on
+--      -- the one whose generation every step bumps -- was the only map that
+--      never got written, while its neighbours did;
+--   3. MeshCache.wipe returned 0 both for "nothing cached" and for "the
+--      listing failed", which quietly turned four rounds of cold-vs-warm
+--      measurement into warm-vs-warm.
+--
+-- WHERE TO PICK IT UP: the probe resets stats before the WARM arm, so the
+-- cold arm's write outcomes are not printed. Print those -- specifically
+-- whether the write of the map under test succeeds -- and the answer is
+-- either "it never wrote that key" or "it wrote and the read found something
+-- else", which are different bugs with different fixes.
+--
+-- Until then this stays false: with no hits the cache is pure cost, measured
+-- at roughly one to two seconds added to the FIRST visit.
+ChunkMesher.CACHE = false
+ChunkMesher.game = nil
+
+local MeshCache = nil
+local meshCacheTried = false
+local function MeshCacheOK()
+  if not ChunkMesher.CACHE then return false end
+  if ChunkMesher.game == nil then return false end
+  if not meshCacheTried then
+    meshCacheTried = true
+    local ok, m = pcall(V.require, "MeshCache")
+    MeshCache = (ok and m) or false
+  end
+  if not MeshCache then return false end
+  local ok, yes = pcall(MeshCache.available)
+  return ok and yes
+end
+
+-- The mask SET, as a stable string. Sorted, because the masks arrive in
+-- whatever order the overworld happens to list its neighbours and that order
+-- is not part of the geometry -- leaving it unsorted would turn "the same
+-- map" into a miss every time the neighbour list was walked the other way.
+local function maskFingerprint(masks)
+  if not masks or #masks == 0 then return "" end
+  local parts = {}
+  for i = 1, #masks do
+    local m = masks[i]
+    parts[i] = ("%d,%d,%d,%d"):format(m[1] or 0, m[2] or 0, m[3] or 0, m[4] or 0)
+  end
+  table.sort(parts)
+  return table.concat(parts, ";")
+end
+
 local function runJob(job)
   local map = job.map
   local c = entry(job.id)
   if c.grass == nil or c.flowers == nil or c.figures == nil
      or c.sprites == nil or (c.stale and c.stale.aux) then
-    ChunkMesher.stage = { map = job.id, pass = "grass" }
-    local okG, grass = pcall(buildGrassMesh, map)
-    ChunkMesher.stage = { map = job.id, pass = "flowers" }
-    local okF, flowers = pcall(buildFlowerMesh, map)
+    -- ------- THE MEADOW, REMEMBERED
+    --
+    -- This is the pass a map build actually spends itself on: sampling the
+    -- stage once a frame (tests/cache_probe.lua) puts 166-277 frames in
+    -- `grass` against 58-88 in the whole terrain geometry, because
+    -- Grass3D.meshFromInstances stamps every tuft into a Lua table per
+    -- vertex. The cold build still pays that. What this removes is paying it
+    -- AGAIN on every visit and every launch.
+    --
+    -- Flowers ride along in the same entry: they are the same shape of
+    -- thing, and one entry per map is one write rather than two.
+    local okG, grass, gv, gi = false, nil, nil, nil
+    local okF, flowers, fv, fi = false, nil, nil, nil
+    local auxHit = false
+    if MeshCacheOK() then
+      ChunkMesher.stage = { map = job.id, pass = "aux-cache" }
+      local blobs = MeshCache.loadAux(ChunkMesher.game, job.id)
+      if blobs then
+        grass = blobs.grass and ChunkMesher.meshFromBlob(blobs.grass) or nil
+        flowers = blobs.flowers and ChunkMesher.meshFromBlob(blobs.flowers) or nil
+        -- A hit is a hit even when a map has no meadow: the entry records
+        -- that too, and rebuilding on a legitimately empty one would mean
+        -- every flowerless map paying the miss forever.
+        okG, okF, auxHit = true, true, true
+        if grass then
+          local okT, G = pcall(V.require, "Grass3D")
+          if okT and G and G.texture then pcall(function()
+            local tex = G.texture(); if tex then grass:setTexture(tex) end
+          end) end
+        end
+      end
+    end
+    if not auxHit then
+      ChunkMesher.stage = { map = job.id, pass = "grass" }
+      okG, grass, gv, gi = pcall(buildGrassMesh, map)
+      ChunkMesher.stage = { map = job.id, pass = "flowers" }
+      okF, flowers, fv, fi = pcall(buildFlowerMesh, map)
+    end
     ChunkMesher.stage = { map = job.id, pass = "figures" }
     local okX, figures = pcall(buildFigureMeshes, map)
     ChunkMesher.stage = { map = job.id, pass = "sprites" }
@@ -1536,18 +2025,97 @@ local function runJob(job)
     releaseFigures(c.figures)
     c.figures = (okX and figures) or false
     if c.stale then c.stale.aux = nil end
+    -- Same reasoning as the terrain write below: these bytes are a function
+    -- of the map, not of where the player is standing.
+    if not auxHit and MeshCacheOK() and (gv or fv) then
+      ChunkMesher.stage = { map = job.id, pass = "aux-write" }
+      pcall(function()
+        MeshCache.saveAux(ChunkMesher.game, job.id, {
+          grass = gv and MeshCache.blobOf(gv, gi) or nil,
+          flowers = fv and MeshCache.blobOf(fv, fi) or nil,
+        })
+      end)
+    end
   end
-  local sink, water = newChunkedSink(), newChunkedSink()
-  runGeometry(map, job.slot == "body", job.masks, sink, water)
-  ChunkMesher.stage = { map = job.id, pass = "finish" }
-  local mesh = sink.finish()
+  -- ------- THE CACHE
+  --
+  -- Everything below this comment until `swapSlot` is the expensive half of
+  -- a map: runGeometry walks every tile, every structure and every kit, and
+  -- measured on the reference machine a full settle is six to eleven
+  -- SECONDS. It produces the same answer every time, so the answer is kept
+  -- (lib/MeshCache.lua) and this is where it is spent.
+  --
+  -- A miss costs one failed read and then exactly what this always did. That
+  -- property is the whole safety argument: there is no path here that can
+  -- leave the game worse off than no cache, only slower.
+  local mesh, wmesh, records
+  local variant = maskFingerprint(job.masks)
+  local hit = false
+  if MeshCacheOK() then
+    ChunkMesher.stage = { map = job.id, pass = "cache" }
+    local got = MeshCache.load(ChunkMesher.game, job.id, job.slot, variant)
+    if got then
+      mesh = ChunkMesher.groupFromRecords(got.terrain)
+      -- A map with no water has an empty water group, which is not a
+      -- failure; a map WITH water whose group will not rebuild is, and it
+      -- takes the terrain down with it rather than shipping a dry lake.
+      if mesh and got.water and #got.water > 0 then
+        wmesh = ChunkMesher.groupFromRecords(got.water)
+        if not wmesh then
+          pcall(mesh.release, mesh)
+          mesh = nil
+        end
+      end
+      hit = mesh ~= nil
+    end
+  end
+
+  if not hit then
+    -- `keep` only when there is somewhere to put the bytes: holding a
+    -- route's whole vertex stream in Lua strings costs megabytes, and a
+    -- build nobody will cache should not pay for it.
+    local wantBytes = MeshCacheOK()
+    local sink, water = newChunkedSink(wantBytes), newChunkedSink(wantBytes)
+    -- Named BEFORE the pass, not after. runGeometry is the longest thing in
+    -- a build and it used to set no stage at all, so every frame it spent
+    -- was charged to whichever pass happened to run before it -- which is
+    -- how "figures" came to look like the bottleneck in a probe that only
+    -- ever sampled a stage nobody had updated.
+    ChunkMesher.stage = { map = job.id, pass = "geometry" }
+    runGeometry(map, job.slot == "body", job.masks, sink, water)
+    ChunkMesher.stage = { map = job.id, pass = "finish" }
+    local trec, wrec
+    mesh, trec = sink.finish()
+    wmesh, wrec = water.finish()
+    if trec then records = { terrain = trec, water = wrec or {} } end
+  end
+
   -- the surface group rides on the terrain group, so the cache's
   -- swapSlot / releaseEntry free both without learning there are two
-  local wmesh = water.finish()
   if mesh then
     mesh.water = wmesh
   elseif wmesh then
     pcall(wmesh.release, wmesh)
+  end
+  -- ------- WRITE BEFORE THE GENERATION CHECK, AND THAT IS DELIBERATE
+  --
+  -- The check below protects the LIVE cache: a build whose map was
+  -- invalidated underneath it must not be swapped in, because what is in
+  -- memory would then disagree with what the map now says. The bytes are a
+  -- different question. They are a pure function of (map, slot, masks) --
+  -- nothing in runGeometry reads the player, the clock or the camera -- so a
+  -- build that finished is a correct answer for that key whether or not the
+  -- player is still standing there, and an identity change is what makes a
+  -- payload stale, not a generation bump.
+  --
+  -- Writing after the check meant the map you are STANDING ON was the one
+  -- map that never got cached: every setMap and every step bumps its
+  -- generation, so its own jobs were abandoned while its neighbours' wrote
+  -- normally. The probe measured exactly that -- six entries written, none
+  -- of them the map under test, and every warm read finding an orphan.
+  if records and MeshCacheOK() then
+    ChunkMesher.stage = { map = job.id, pass = "cache-write" }
+    pcall(MeshCache.save, ChunkMesher.game, job.id, job.slot, records, variant)
   end
   if (gen[job.id] or 0) ~= job.gen then
     if mesh and mesh.release then pcall(mesh.release, mesh) end

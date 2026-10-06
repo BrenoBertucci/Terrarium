@@ -175,11 +175,23 @@ return function(game)
                 and battle.data.moves[mv.id]
     local want = def and Box.typeName(def.type)
     wait(20)
-    local td = FX.typeDebug and FX.typeDebug() or {}
-    verdict((td.draws or 0) > 0 and td.last == want,
-            "the chosen card wears its type's element",
-            ("draws=%d last=%s want=%s err=%s"):format(td.draws or 0,
-              tostring(td.last), tostring(want), tostring(td.err)))
+    -- With the voxel dressing (lib/BattleCardVoxel.lua) the element lives
+    -- AROUND the raised card -- its rim glow and orbiting ribbons -- and the
+    -- face stays clean; without it, on the glass (BattleGlassFX).
+    local okV, Vox = pcall(lib.require, "BattleCardVoxel")
+    if okV and Vox and Vox.ENABLED then
+      local vd = Vox.debug() or {}
+      verdict((vd.fxverts or 0) > 0 and vd.slabs == #battle.player.curMoves,
+              "the chosen card wears its type's element",
+              ("fxverts=%s ribbons=%s slabs=%s err=%s"):format(tostring(vd.fxverts),
+                tostring(vd.ribbons), tostring(vd.slabs), tostring(vd.err)))
+    else
+      local td = FX.typeDebug and FX.typeDebug() or {}
+      verdict((td.draws or 0) > 0 and td.last == want,
+              "the chosen card wears its type's element",
+              ("draws=%d last=%s want=%s err=%s"):format(td.draws or 0,
+                tostring(td.last), tostring(want), tostring(td.err)))
+    end
     -- the showcase: the same card wearing other elements, for the eye
     -- (typeName is read at draw time; the face keeps its own art)
     local realTypeName = Box.typeName

@@ -391,7 +391,12 @@ function Grass3D.meshFromInstances(instances)
   if mesh and loadTexture() then
     pcall(mesh.setTexture, mesh, loadTexture())
   end
-  return mesh
+  -- Handed back so ChunkMesher can remember this meadow instead of stamping
+  -- it again on every visit: the loop above is the single longest pass in a
+  -- map build (tests/cache_probe.lua samples 166-277 frames in it against
+  -- 58-88 for the whole terrain geometry). Extra return values, so every
+  -- existing caller is untouched.
+  return mesh, verts, indices
 end
 
 -- One instance record for a grass TILE at (tx, ty) in tile coords.

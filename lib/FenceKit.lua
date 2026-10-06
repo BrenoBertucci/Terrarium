@@ -25,7 +25,13 @@
 
 local V = ...
 
-local Kit = { SHEET = "assets/buildings/fence_kit.png", SHEET_W = 32,
+-- TWO STYLES, one layout of sheet. Timber is a harbour's (Vermilion). IRON is a
+-- city's (Celadon and the two roads into it): a dressed stone pier a cell, two
+-- iron rails, a picket every other voxel with a gilt spear tip standing over
+-- the top rail. The signature carries the style as its first letter.
+local Kit = { SHEET = "assets/buildings/fence_kit.png", SHEET_IRON = "assets/buildings/fence_iron.png",
+              IRON_MAPS = { CELADON_CITY = true, ROUTE_7 = true, ROUTE_16 = true },
+              SHEET_W = 32,
               TILES = { 14, 14, 85, 85 },
               POST_H = 14,             -- to the underside of the cap
               LOW = 3, TOP = 11 }      -- each rail's lower course
@@ -45,13 +51,16 @@ end
 -- is joined to? A run that reaches such an edge is taken to carry on across
 -- it -- the next map's tiles are not this one's to read, and a fence that
 -- stopped a post short either side of the seam drew the seam.
-function Kit.signature(tileAt, tx, ty, joins)
+function Kit.sheetFor(sig) return sig:sub(1, 1) == "I" and Kit.SHEET_IRON or Kit.SHEET end
+
+function Kit.signature(tileAt, tx, ty, joins, mapId)
   if Kit.ENABLED == false then return nil end
+  local style = (mapId and Kit.IRON_MAPS[mapId]) and "I" or "T"
   local function c(dx, dy)
     local on = fenceAt(tileAt, tx + dx, ty + dy) or (joins and joins(tx + dx, ty + dy))
     return on and "1" or "0"
   end
-  return c(0, -2) .. c(2, 0) .. c(0, 2) .. c(-2, 0)
+  return style .. c(0, -2) .. c(2, 0) .. c(0, 2) .. c(-2, 0)
 end
 
 -- Each arm in its own frame: `a` runs from the post's face (0) out to the
@@ -65,6 +74,8 @@ local ARMS = {
 
 function Kit.model(sp, sig)
   if not sp or sp.W ~= W then return nil, "sheet is not " .. W .. " wide" end
+  local iron = sig:sub(1, 1) == "I"
+  sig = sig:sub(2)
   local on = {}
   for i = 1, 4 do on[i] = sig:sub(i, i) == "1" end
   local H, LOW, TOP = Kit.POST_H, Kit.LOW, Kit.TOP
@@ -91,6 +102,15 @@ function Kit.model(sp, sig)
           -- along the rail, in the run's own direction, so the grain carries
           -- on from one cell's arm into the next's
           local along = (i == 2 or i == 3) and (10 + a) or (5 - a)
+          if iron then
+            if d == 2 then
+              if y == LOW or y == TOP then return (y == TOP and 0 or 2) * W + along end
+              if along % 2 == 0 and y > LOW and y <= TOP + 3 then
+                return y == TOP + 3 and IRON_HI or (4 * W + along)
+              end
+            end
+            return nil
+          end
           if d == 1 or d == 2 then
             if y == TOP + 1 then return 0 * W + along end
             if y == TOP then return 1 * W + along end

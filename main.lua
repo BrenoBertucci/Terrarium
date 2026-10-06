@@ -146,9 +146,12 @@ local Aerial = V.require("Aerial")
 local Skyline = V.require("Skyline")
 local OverworldBattle = V.require("OverworldBattle")
 local WildRoamers = V.require("WildRoamers")
+local Follower = V.require("Follower")
+local Glow = V.require("Glow")
 local GrassWear = V.require("GrassWear")
 local BattleExit = V.require("BattleExit")
 local DayNight = V.require("DayNight")
+local Mist = V.require("Mist")
 local DayTint = V.require("DayTint")
 local Quality = V.require("Quality")
 local Device = V.require("Device")
@@ -396,6 +399,14 @@ mod.content.render_pipelines:register(PIPE_VOXEL, {
     -- gate, because what is standing in the grass is not a question about
     -- the camera.
     WildRoamers.update()
+    -- The lead Pokemon walking behind you rides it for the same reasons: it
+    -- is a real map object on the flat game too, and it must never be
+    -- added to a battle's culled cast (it gates itself on the overworld).
+    Follower.update()
+    -- and the GLOW row's bookkeeping: the shader variant it asks for, the
+    -- heights it forgets when a map finishes building, and who owns the
+    -- dark of a dark cave (lib/Glow.lua). The drawing happens in the scene.
+    Glow.update()
     -- The ambient life -- butterflies, fireflies, birds, wind-blown leaves
     -- -- keeps its clocks on the same tick, and gates itself down to the
     -- frames where there is a diorama on screen to be alive on.
@@ -557,6 +568,12 @@ mod.content.render_pipelines:register(PIPE_VOXEL, {
     -- is the flag the rest of the mod already reads as "stand down, the
     -- screen is not the player's right now" (Weather, AmbientSound,
     -- WildRoamers all gate on it), and it is the honest answer here too.
+    -- The mesh cache is scoped per playthrough, so it needs the game object
+    -- the engine's storage API is keyed on. Handed over here rather than
+    -- reached for, because this is the one place that already has it every
+    -- frame -- and nil before a save is loaded, which is exactly when the
+    -- cache should be off.
+    ChunkMesher.game = Game
     ChunkMesher.pump((Game and Game.stack and Game.stack:top() ~= ow)
                      or (ow and ow.transitioning) or false)
   end,
@@ -768,8 +785,11 @@ applyFull = function(level)
   -- post-process in the mod with no way to reach the switch. The preset sets
   -- the cheapest blur rung there instead, and leaves the row where they can
   -- find it.
+  -- weak(), not mobile(): an integrated desktop GPU fails every mobile test
+  -- and was taking the full-fat branch, which is the same trap this comment
+  -- describes closing for phones. See lib/Device.lua.
   Pipelines.setLevel(PIPE_TILT,
-                     Device.mobile() and 1 or Pipelines.maxLevel(PIPE_TILT))
+                     Device.weak() and 1 or Pipelines.maxLevel(PIPE_TILT))
   Pipelines.syncOptions(opts)
   -- the horizon flat. The curve bends the world away from a walking player,
   -- which fights a fixed diorama framing
@@ -791,11 +811,12 @@ applyFull = function(level)
   -- is solved against (OverworldBattle.forceOG); FULL has just switched staged
   -- fights on, so the layout follows them.
   OverworldBattle.forceOG(Game)
-  -- and the sky on the clock on the wall: FULL pins DAYTIME to SYNC. Unlike
-  -- the rest of the preset this one IS held, not just set -- the row is off
-  -- the menu while FULL owns it (the rows hook below), so a value changed
-  -- under it could never be seen or changed back.
-  DayNight.forceSync(Game)
+  -- DAYTIME is deliberately NOT here. FULL used to pin it to SYNC and hold it
+  -- there with the row off the menu, which meant a player on FULL -- the
+  -- preset most people arrive at -- could never have an afternoon or a night
+  -- unless their own wall clock said so: pick DUSK on the manager's page and
+  -- it snapped straight back. What hour it is in Kanto is not part of the
+  -- diorama's look, so FULL neither sets nor holds it.
   if Game.writeOptions then pcall(Game.writeOptions, Game) end
 end
 
@@ -1456,11 +1477,21 @@ local SETTINGS = {
     .. "applies, for the reason a cave at midnight is exactly as dark as a "
     .. "cave at noon.",
     full = true },
+  -- `full = true`: the hour is not part of the diorama's look. FULL used to
+  -- hide this row and hold it at SYNC, which left a FULL player stuck on
+  -- whatever their wall clock said (see applyFull).
   { DayNight.setting,
-    "What time it is outdoors: pin the sky to DAY, NIGHT, DUSK or DAWN, "
-    .. "let CYCLE run it -- ten minutes of sun, ten of moon, with the "
-    .. "shadows, the sky and the light following -- or SYNC it to the "
-    .. "clock on the wall, so Kanto's evening falls when yours does." },
+    "What time it is outdoors: pin the sky to DAY, AFTERNOON, DUSK, NIGHT "
+    .. "or DAWN, let CYCLE run it -- ten minutes of sun, ten of moon, with "
+    .. "the shadows, the sky, the light and the mist following -- or SYNC "
+    .. "it to the clock on the wall, so Kanto's evening falls when yours "
+    .. "does.",
+    pt = "Que horas sao la fora: fixe o ceu em DIA, TARDE, CREPUSCULO, "
+    .. "NOITE ou AURORA, deixe o CICLO girar -- dez minutos de sol, dez de "
+    .. "lua, com as sombras, o ceu, a luz e a nevoa acompanhando -- ou "
+    .. "SINCRONIZE com o relogio da parede, pra noite de Kanto cair junto "
+    .. "com a sua.",
+    full = true },
   -- Night depth and street lamps travel together in the options list: DEEP
   -- only reads as a city night when something is lit on the street, and
   -- LAMPS only matter once the sky is dark enough to need them.
@@ -1478,6 +1509,48 @@ local SETTINGS = {
     .. "lamp. After dusk the heads burn in the hour's lamp colour so a "
     .. "DEEP night still has light on the street. Routes and forests get "
     .. "none -- only outdoor maps without a grass encounter table.",
+    full = true },
+  -- The hour's air (lib/Mist.lua). `full` for the same reason as DAYTIME:
+  -- what the morning is doing is not a knob on the diorama's look.
+  { Mist.setting,
+    "Ground mist that the clock grows and burns off. Before sunrise the "
+    .. "low ground fills with it and the rising sun behind it sets it "
+    .. "glowing; by mid-morning it has burnt away and the afternoon is "
+    .. "clear. At dusk it creeps back in, under the moon it lies thin and "
+    .. "silver, and every street lamp and lit window stands in a halo of "
+    .. "it. It pools in ponds and hollows, leaves ledges and roofs clear, "
+    .. "lies heavier after rain, and parts around whoever walks through "
+    .. "it. It lies on the world, never on a Pokemon or a person. Outdoors "
+    .. "only; about 1.5 ms at dawn on an Intel UHD, nothing from "
+    .. "mid-morning to the late afternoon, when there is none.",
+    pt = "Nevoa rasteira que o relogio faz nascer e queima. Antes do sol "
+    .. "nascer o chao baixo se enche dela e o sol nascente por tras a faz "
+    .. "brilhar; no meio da manha ela ja queimou e a tarde fica limpa. No "
+    .. "crepusculo ela volta, sob a lua fica fina e prateada, e cada poste "
+    .. "e janela acesa ganha um halo nela. Acumula em lagos e baixadas, "
+    .. "deixa degraus e telhados de fora, fica mais grossa depois da "
+    .. "chuva e se abre em volta de quem anda nela. Ela "
+    .. "fica no mundo, nunca num Pokemon ou numa pessoa. So ao ar livre; "
+    .. "cerca de 1,5 ms ao amanhecer numa Intel UHD, e nada do meio da "
+    .. "manha ao fim da tarde, quando nao ha nenhuma.",
+    full = true },
+  -- `full` because it decides what a cave IS: with it on, Rock Tunnel is
+  -- dark and a lantern lights it; a preset has no business owning that.
+  { Glow.setting,
+    "Light that comes from things, and stops at walls. A Charmander's tail, "
+    .. "a Pikachu's sparks, a Gastly's glow and the doorways of a town at "
+    .. "night light the ground, the walls and the people around them, with "
+    .. "real shadows behind every rock -- the Pokemon walking behind you is "
+    .. "your lantern. Caves go dark so it shows: Rock Tunnel before FLASH is "
+    .. "the original's own darkness, and FLASH lights the cave around you. "
+    .. "Moves light the arena as they are thrown. One texture lookup per "
+    .. "pixel however many lights are lit. OFF is the flat noon of before.",
+    full = true },
+  { Follower.setting,
+    "The first Pokemon in your party walks one step behind you, the way "
+    .. "Yellow's Pikachu does (and in Yellow, while Pikachu is out, Pikachu "
+    .. "is the one). It never blocks you; press A at it and it answers. "
+    .. "With GLOW on it is the light you carry.",
     full = true },
   -- Orientation radar. Always-on by default at the cheap rung; FULL adds a
   -- local 4-colour cell grid. Not the classic Town Map item -- that stays
@@ -1504,7 +1577,7 @@ local SETTINGS = {
 
 local schema = {}
 for i, entry in ipairs(SETTINGS) do
-  schema[i] = entry[1]:schema(entry[2])
+  schema[i] = entry[1]:schema(Lang.pick(entry[2], entry.pt or entry[2]))
 end
 mod.options:define(schema)
 
@@ -1942,12 +2015,11 @@ mod.hooks:wrap("ui.options.rows", function(next, game, rows)
   local full = Voxel.isFull(Pipelines.level(PIPE_VOXEL))
   if full then
     -- FULL owns the rows that PARAMETERISE the diorama -- the wireframe, the
-    -- horizon bend, the blur, the hour -- so those come off the menu and
-    -- DAYTIME is held at SYNC while its row is unreachable.
-    DayNight.forceSync(game)
+    -- horizon bend, the blur -- so those come off the menu. DAYTIME is not
+    -- one of them any more (`full = true`; see applyFull).
     -- ...but not the blur, on a device where the blur is a performance row
     -- rather than a look. See applyFull.
-    if not Device.mobile() then dropRow(out, "pipeline:" .. PIPE_TILT) end
+    if not Device.weak() then dropRow(out, "pipeline:" .. PIPE_TILT) end
   end
   local extra = {}
   for _, entry in ipairs(SETTINGS) do
@@ -2016,11 +2088,6 @@ mod.events:on("mod.options_changed", function(payload)
   -- the OPTIONS row does. The manager persists its own value; this is the one
   -- that has to follow it.
   if stagedBattles() then OverworldBattle.forceOG() end
-  -- and DAYTIME changed from the manager's page while FULL owns it snaps
-  -- straight back to SYNC -- the OPTIONS row is hidden, but the manager's is
-  -- not, and FULL's pin must hold against both
-  local Pipelines = require("src.render.Pipelines")
-  if Voxel.isFull(Pipelines.level(PIPE_VOXEL)) then DayNight.forceSync() end
 end)
 
 -- ------- keeping the geometry in step with the world
@@ -2247,6 +2314,16 @@ WildRoamers.install()
 -- and a line of flavour text, or a challenge. lib/CityLife.lua holds the
 -- reasoning.
 CityLife.install()
+
+-- ------- the one walking behind you, and the light it carries
+--
+-- The same talkTo seam once more for the follower (lib/Follower.lua): A at
+-- it is a cry and a hop. And the GLOW row's hold on the palette's darkness
+-- (lib/Glow.lua): while the diorama is on, Rock Tunnel's wMapPalOffset is
+-- drawn as light rather than baked into the tiles, so a lantern has a floor
+-- to light. The flat game keeps the engine's own.
+Follower.install()
+Glow.install()
 
 -- ------- and asleep on the floor indoors
 --

@@ -1882,6 +1882,10 @@ precision highp sampler2D;
   // lantern reaches that voxel (0 = none). `y` is the strength. This is how
   // a pier of sixty lanterns lights its whole deck with eight lamp pools.
   uniform vec2 lanternGlow;
+  // EMISSIVE TEXELS on an authored sheet (lib/CeladonTowerKit.lua): 1 for the
+  // length of that sheet's draw. The sheet marks its glass in ALPHA -- 254 a
+  // window, lit or dark by a hash of its room; 253 a sign, always lit.
+  uniform float emissiveOn;
   // (reefOn, the reef's sheet, is declared with the shared uniforms: the
   // vertex stage moves the garden)
   // ...and its sibling, which is a fact about the FRAME rather than about
@@ -1914,6 +1918,53 @@ precision highp sampler2D;
   uniform vec4 lamp6;
   uniform vec4 lamp7;
   uniform float lampGlow;
+#ifdef GLOW_FIELD
+  // ------- THE GLOW FIELD (lib/Glow.lua, the GLOW row)
+  //
+  // Every other light in this shader is a closed-form pool that walks
+  // through walls. This one is a TEXTURE: a small window of the world, one
+  // texel per half cell, into which the CPU has already drawn every glowing
+  // thing's light -- a fire Pokemon, FLASH, a lit doorway, a Thunderbolt --
+  // each pre-multiplied by what that source can actually SEE across the
+  // map's own heights. So the light stops at a wall and a shadow falls
+  // behind the rock, at the price of one fetch per fragment however many
+  // sources are lit. Behind a define like the cel step, so the OFF rung
+  // carries neither the sampler nor the fetch.
+  uniform Image glowField;
+  uniform VXFP vec4 glowRect;  // xy = world XZ of the field's corner, zw = 1/extent
+  uniform float glowGain;      // decode scale x the row's strength; 0 = nothing lit
+  uniform float glowHeight;    // world y the field was measured at (see Glow.HEIGHT)
+
+  // The field's light at a world point. Read at the fragment itself, with
+  // no normal: the geometry does the directional work. Every wall face
+  // stands on a cell edge, halfway between the wall's own texel and the
+  // open one in front of it, and the CPU gave the wall texel light only
+  // from ITS open side (Glow's dilation) -- so a face turned toward the
+  // flame reads lit and the same wall's far face reads dark.
+  //
+  // Branch-free and called only where it is added, both on purpose. The
+  // first cut fetched inside an `if` (a texture read in non-uniform control
+  // flow) off a face normal from derivatives, computed early and carried
+  // across the whole material block: an Intel UHD compiled that into a
+  // scene shader a FIFTH slower whether a light was lit or not (measured,
+  // tests/glow_cost_probe.lua). Out here the fetch is in uniform flow and
+  // nothing extra is live across the rest of effect().
+  vec3 glowAt(VXFP vec3 w) {
+    VXFP vec2 guv = (w.xz - glowRect.xy) * glowRect.zw;
+    vec3 g = Texel(glowField, guv).rgb;
+    // outside the window the sampler's clamp would smear the edge texel
+    // across the rest of the map
+    vec2 inside = step(vec2(0.0), guv) * step(guv, vec2(1.0));
+    g *= glowGain * inside.x * inside.y;
+    // measured at the height a Pokemon's body stands at: a roof or a
+    // cliff top far above it is lit from further away, at a grazing angle
+    float up = max(0.0, w.y - glowHeight) * (1.0 / 22.0);
+    g *= 1.0 / (1.0 + up * up);
+    // saturating, like the lamps: a Charizard beside a lit door is
+    // brighter than either, and never a white blot
+    return g / (1.0 + g * 0.30);
+  }
+#endif
 
 #ifdef ANIME_CEL
   // The cel rung's three numbers (see lib/Anime.lua). Declared inside the
@@ -1952,6 +2003,37 @@ precision highp sampler2D;
   uniform vec3 eyePos;        // the camera, always sent (fogEye is not)
   uniform vec4 mist;
   uniform vec3 mistColor;
+  // The OUTDOOR mist's extras (lib/Mist.lua, the MIST row). All zero in the
+  // crypt, which keeps exactly the mist it had.
+  //   mistSun      xy the ground-plane bearing TOWARD the sun or moon (unit),
+  //                z how much that low body lights the mist it shines
+  //                through, w 1 outdoors: the crypt's albedo gate off, since
+  //                out here a dark texel is a pond or a shadow, not the end
+  //                of the world.
+  //   mistSunColor the body's own colour.
+  //   mistWake     the mist parted by whoever just walked through it: xy
+  //                world XZ, z 1/radius^2, w how open it still is (1 fresh,
+  //                0 closed over again). mistWakeN live entries, and
+  //                mistWakeC the circle holding them all (xy centre, z its
+  //                radius squared; 0 = none). Fragment-only: no
+  //                link-precision pairing to break.
+  uniform vec4 mistSun;
+  uniform vec3 mistSunColor;
+  uniform vec4 mistWake[8];
+  uniform float mistWakeN;
+  uniform vec3 mistWakeC;
+  // The drift field itself, baked once (see mistTex in the Lua below): two
+  // independent fields of tileable two-octave value noise in R and G. ONE
+  // read of it stands in for the two octaves of mistNoise this block used
+  // to run -- eight sin-hashes a fragment, most of what the mist cost.
+  //   mistShape    x, y the bank edges the noise is shaped between; z the
+  //                colour's base (0.7 the crypt's grey breath, 1.0 outdoors,
+  //                where it arrives already lit and must stand paler than
+  //                the ground); w how far from field R toward field G the
+  //                mist has morphed (it breathes as well as drifts). All
+  //                worked out on the CPU, once a frame, not per fragment.
+  uniform Image mistTex;
+  uniform vec4 mistShape;
   // ------- THE CRYPT'S MATERIALS (the same row)
   //
   // The kit's walls wear the drawing's WHITE and its headstones the
@@ -2533,6 +2615,15 @@ precision highp sampler2D;
     // attenuation peaks near a half, and the core should still reach white.
     vec3 warm = mix(lampColor, lampCore, clamp(lamps.y * 1.6, 0.0, 1.0));
     light += warm * energy * lampGlow;
+    // kept apart as well as summed: the mist at the end of the chain is lit
+    // by the same field, which is what puts a halo in it around a fire
+    vec3 glowHere = vec3(0.0);
+#ifdef GLOW_FIELD
+    // the GLOW row's field (see glowAt), with the lamps: before the
+    // material is shaded, so the stone keeps its colour under the fire
+    glowHere = glowAt(vWorld);
+    light += glowHere;
+#endif
 #ifdef ANIME_CEL
     // THE CEL STEP. Everything above has finished summing light and nothing
     // below has spent it yet, which is the one instant where a single
@@ -3204,6 +3295,14 @@ precision highp sampler2D;
                      + dot(floor(vWorld.xz / 16.0), vec2(3.1, 5.7)));
       rgb = mix(rgb, lampColor * (0.55 + 0.75 * shineL) * flickL, glassNight);
     }
+    if (emissiveOn > 0.5 && p.a < 0.9985) {
+      float always = step(p.a, 0.994);
+      float roomE = voxelHash(floor(vec3(vWorld.x / 8.0, vWorld.y / 6.0, vWorld.z / 8.0)));
+      float onE = max(always, step(0.42, roomE));
+      float lumE = dot(p.rgb, vec3(0.299, 0.587, 0.114));
+      vec3 glowE = mix(lampColor * (0.55 + 0.75 * lumE), p.rgb * 1.25, always);
+      rgb = mix(rgb, glowE, glassNight * onE);
+    }
     if (lanternGlow.x > 0.5) {
       float bandL = floor(tc.y * lanternGlow.x + 0.001);
       rgb += p.rgb * lampColor * (bandL / max(lanternGlow.x - 1.0, 1.0))
@@ -3350,6 +3449,11 @@ precision highp sampler2D;
         vec3 snowLight = (skyTint * (1.0 - 0.50 * hollow)
                         + sunTint * lit * relief * (1.0 - 0.60 * hollow))
                        * form;
+#ifdef GLOW_FIELD
+        // a Charmander walking a snowfield lights the snow it walks
+        // through, and white is where that shows
+        snowLight += glowAt(vWorld);
+#endif
         vec3 snow = snowColor * snowLight;
         // a crest catches more sky than the hollow between drifts
         snow *= 0.90 + 0.14 * drift;
@@ -3408,26 +3512,71 @@ precision highp sampler2D;
       ft = floor(ft * fog.w + 0.5) / fog.w;
       rgb = mix(rgb, fogColor, ft * fog.z);
     }
-    // ------- GROUND MIST (the crypt's; see the uniform)
+    // ------- GROUND MIST (the crypt's, and the hour's outdoors)
     //
     // Denser at the floor (squared, so it hugs the ground and a headstone's
     // top stands clear of it), drifting on two octaves of noise so it is
     // never a flat wash, and lit by the pools it lies under: mist under a
     // lantern is what the lantern's light is IN.
-    if (mist.x > 0.0) {
+    //
+    // Outdoors (mistSun.w) it lies on the WORLD only: a sprite-sheet draw
+    // (a walker, a Pokemon -- glassOn 0, see Voxel3D.glass) stands in it
+    // untouched, so nobody reads as a ghost. glassOn is set per draw, so
+    // this skip is uniform and costs no divergence.
+    float mistHere = mist.x * (1.0 - (1.0 - glassOn) * mistSun.w);
+    if (mistHere > 0.0) {
       float hgt = clamp(1.0 - vWorld.y / max(mist.y, 1.0), 0.0, 1.0);
-      vec2 q = vWorld.xz * mist.z;
-      float n = mistNoise(q + vec2(mist.w * 0.05, mist.w * 0.03)) * 0.65
-              + mistNoise(q * 2.3 - vec2(mist.w * 0.04, -mist.w * 0.06)) * 0.35;
-      // Not over the dark. The slabs and the void beyond the walls wear
-      // the sheet's black, and mist lying on them would paint a violet
-      // floor where the room is supposed to end -- so the mist keys on
-      // the texel under it, and black is where it stops.
-      float alb = dot(p.rgb, vec3(0.2126, 0.7152, 0.0722));
-      float gate = smoothstep(0.24, 0.42, alb);
-      float m = mist.x * hgt * hgt * smoothstep(0.12, 1.0, n) * gate;
-      vec3 mc = mistColor * (0.7 + 1.4 * energy);
-      rgb = mix(rgb, mc, clamp(m, 0.0, 0.85));
+      // The two reads sit in uniform flow on purpose: a texture read
+      // inside a branch that diverges (hgt, say) slowed this whole shader
+      // on Intel UHD once already (see Glow).
+      vec2 nf = Texel(mistTex, (vWorld.xz * mist.z
+                                + vec2(mist.w * 0.05, mist.w * 0.03))
+                               * 0.125).rg;
+      float n = mix(nf.r, nf.g, mistShape.w);
+      // Above the layer -- a roof, a wall's upper half, a treetop -- the
+      // rest is not worth paying for.
+      if (hgt > 0.0) {
+        // Not over the dark. The slabs and the void beyond the walls wear
+        // the sheet's black, and mist lying on them would paint a violet
+        // floor where the room is supposed to end -- so the mist keys on
+        // the texel under it, and black is where it stops. Outdoors there
+        // is no void to stop at.
+        float alb = dot(p.rgb, vec3(0.2126, 0.7152, 0.0722));
+        float gate = max(smoothstep(0.24, 0.42, alb), mistSun.w);
+        // Outdoors the drift is shaped into BANKS -- dense where the noise
+        // is high, clear between -- because a soft wash over a lit street
+        // reads as the street getting paler, not as mist lying on it. The
+        // crypt keeps its thin breath.
+        float m = mistHere * hgt * hgt * gate
+                * smoothstep(mistShape.x, mistShape.y, n);
+        // Parted where somebody just walked, closing back over behind
+        // them -- tested only inside the one circle that holds every mark
+        // (mistWakeC: xy centre, z radius squared), which is a patch round
+        // the player's feet rather than the whole screen.
+        vec2 wc = vWorld.xz - mistWakeC.xy;
+        if (dot(wc, wc) < mistWakeC.z) {
+          float open = 0.0;
+          for (int wi = 0; wi < 8; wi++) {
+            if (float(wi) >= mistWakeN) break;
+            vec4 wk = mistWake[wi];           // z is 1 / radius squared
+            vec2 wd = vWorld.xz - wk.xy;
+            open = max(open, wk.w * clamp(1.0 - dot(wd, wd) * wk.z, 0.0, 1.0));
+          }
+          m *= 1.0 - open;
+        }
+        vec3 mc = mistColor * (mistShape.z + 1.4 * energy);
+        // The low sun BEHIND the mist lights it: strongest on the patches
+        // lying toward the body from the eye (forward scatter), which with
+        // this camera is the far half of the frame at dawn and at dusk --
+        // the sun rises and sets in the north it looks at.
+        vec2 away = vWorld.xz - eyePos.xz;
+        float toward = max(dot(away, mistSun.xy)
+                           * inversesqrt(max(dot(away, away), 1.0)), 0.0);
+        mc += mistSunColor * mistSun.z * (0.3 + 0.7 * toward * toward * toward);
+        // and a fire, a lamp, a lit window's field is IN the mist around it
+        mc += glowHere * 0.9;
+        rgb = mix(rgb, mc, clamp(m, 0.0, mix(0.85, 0.65, mistSun.w)));
+      }
     }
     // The hidden player is a SHAPE, not a dimmed picture of itself. Tinting
     // through `color` could only multiply the sprite's own pixels, which
@@ -3451,6 +3600,13 @@ precision highp sampler2D;
 -- Each entry is nil = untried, false = unavailable.
 local shaders = {}
 local activeShader = nil      -- the variant this pass bound
+
+-- Whether each built variant carries the glow field, by cache key; and the
+-- two orders the ladder tries a rung in (see Voxel3D.shader).
+local glowBuilt = {}
+local GLOW_TRIES = { true, false }
+local NO_GLOW = { false }
+local glowBlank = nil         -- the 1x1 black texel bound when nothing glows
 
 -- Scene canvases, one per NAMED SLOT. There are exactly two callers and
 -- they want different sizes -- the free-roam pass renders at the window's
@@ -3881,6 +4037,11 @@ function Voxel3D.shader(grid)
   -- not a uniform: an `if` around the quantisation would be paid by every
   -- fragment on the OFF rung too, which is the rung most people are on.
   local cel = Anime.cel()
+  -- The GLOW row's field (lib/Glow.lua), a compile-time branch for the cel
+  -- step's reason. Glow writes the flag rather than this file requiring it:
+  -- Glow reads the scene state this module owns, and the arrow only points
+  -- one way.
+  local glow = Voxel3D.glowWanted and true or false
   -- The WATER STYLE row (Water.style): the ANIME sheet is a compile-time
   -- branch for the same reason. A driver that refuses it keeps CLASSIC for
   -- the session, silently, rather than losing the mode (see below).
@@ -3888,6 +4049,7 @@ function Voxel3D.shader(grid)
   local key = (grid and "g" or "-")
               .. (oneTap and "1" or (soft and "p" or "4"))
               .. (cel and "c" or "-")
+              .. (glow and "l" or "-")
               .. (animeW and "w" or "-")
   if shaders[key] == nil then
     if grid and not derivativesOK() then
@@ -3921,27 +4083,41 @@ function Voxel3D.shader(grid)
         for p = p0, #PRECISIONS do
           for r = Voxel3D.rung, #LADDER do
             local rung = LADDER[r]
-            local src = "#define VXHP " .. PRECISIONS[p] .. "\n"
-                        .. (FRAG_DEFS[FRAG_HP[fh]] or "")
-                        .. head
-                        .. (rung.vtf and "#define VERTEX_TEX 1\n" or "")
-                        .. (rung.crypt and "#define CRYPT_MATS 1\n" or "")
-                        .. SHADER
-            local ok, sh = pcall(love.graphics.newShader, src)
-            if ok then
-              built = sh
-              -- Only ever downward: a later variant that happens to build at
-              -- full must not drag the session back up past a rung something
-              -- else already proved this driver refuses.
-              if r > Voxel3D.rung then Voxel3D.rung = r end
-              if p > Voxel3D.prec then Voxel3D.prec = p end
-              if fh > Voxel3D.fragHp then Voxel3D.fragHp = fh end
-              break
+            -- The glow field is the newest thing in this shader and the one
+            -- sampler more, so it is the first thing given up -- tried WITH
+            -- it and then, on the same rung, without. Only a build that
+            -- fails with it and passes without it convicts it (sticky, like
+            -- the rung): a refusal for any other reason fails both and the
+            -- walk goes on down as it always did.
+            local tries = (glow and not Voxel3D.glowRefused)
+                          and GLOW_TRIES or NO_GLOW
+            for _, withGlow in ipairs(tries) do
+              local src = "#define VXHP " .. PRECISIONS[p] .. "\n"
+                          .. (FRAG_DEFS[FRAG_HP[fh]] or "")
+                          .. head
+                          .. (rung.vtf and "#define VERTEX_TEX 1\n" or "")
+                          .. (rung.crypt and "#define CRYPT_MATS 1\n" or "")
+                          .. (withGlow and "#define GLOW_FIELD 1\n" or "")
+                          .. SHADER
+              local ok, sh = pcall(love.graphics.newShader, src)
+              if ok then
+                built = sh
+                glowBuilt[key] = withGlow
+                if glow and not withGlow then Voxel3D.glowRefused = true end
+                -- Only ever downward: a later variant that happens to build
+                -- at full must not drag the session back up past a rung
+                -- something else already proved this driver refuses.
+                if r > Voxel3D.rung then Voxel3D.rung = r end
+                if p > Voxel3D.prec then Voxel3D.prec = p end
+                if fh > Voxel3D.fragHp then Voxel3D.fragHp = fh end
+                break
+              end
+              err = tostring(sh)
+              Voxel3D.compileLog[#Voxel3D.compileLog + 1] =
+                { key = key, rung = r, name = rung.name, prec = PRECISIONS[p],
+                  fragHp = FRAG_HP[fh], glow = withGlow, err = err }
             end
-            err = tostring(sh)
-            Voxel3D.compileLog[#Voxel3D.compileLog + 1] =
-              { key = key, rung = r, name = rung.name, prec = PRECISIONS[p],
-                fragHp = FRAG_HP[fh], err = err }
+            if built then break end
           end
           if built then break end
         end
@@ -3959,6 +4135,9 @@ function Voxel3D.shader(grid)
       end
     end
   end
+  -- what beginScene may send: the field's uniforms only exist on a variant
+  -- that was built with them
+  Voxel3D.glowLive = glowBuilt[key] and true or false
   return shaders[key] or nil
 end
 
@@ -3997,6 +4176,8 @@ Voxel3D.precCount = #PRECISIONS
 -- would be waiting on somebody else's phone.
 function Voxel3D.resetShaders()
   for k in pairs(shaders) do shaders[k] = nil end
+  for k in pairs(glowBuilt) do glowBuilt[k] = nil end
+  Voxel3D.glowRefused = nil
   Voxel3D.animeWaterRefused = nil
   activeShader = nil
   Voxel3D.rung = 1
@@ -4018,7 +4199,7 @@ end
 -- highp so the existing callers keep asking the same question they did.
 --
 -- Returns ok, err. Nothing here touches the cache or Voxel3D.rung.
-function Voxel3D.buildRung(i, grid, prec)
+function Voxel3D.buildRung(i, grid, prec, glow)
   local rung = LADDER[i]
   if not rung then return false, "no such rung: " .. tostring(i) end
   local p = PRECISIONS[prec or 1]
@@ -4032,6 +4213,7 @@ function Voxel3D.buildRung(i, grid, prec)
               .. (Water.anime() and "#define ANIME_WATER 1\n" or "")
               .. (rung.vtf and "#define VERTEX_TEX 1\n" or "")
               .. (rung.crypt and "#define CRYPT_MATS 1\n" or "")
+              .. (glow and "#define GLOW_FIELD 1\n" or "")
               .. SHADER
   local ok, sh = pcall(love.graphics.newShader, src)
   return ok and true or false, ok and rung.name or tostring(sh)
@@ -4314,6 +4496,59 @@ Voxel3D.lampNormals = 0
 Voxel3D.lampSpec = 0
 Voxel3D.mist = nil
 Voxel3D.mistColor = nil
+Voxel3D.mistSun = nil        -- the MIST row's extras (lib/Mist.lua)
+Voxel3D.mistSunColor = nil
+Voxel3D.mistWake = nil
+Voxel3D.mistShape = nil
+local mistWakeScratch = {}
+for i = 1, 8 do mistWakeScratch[i] = { 0, 0, 0, 0 } end
+
+-- The mist's drift field (the shader's mistTex): one octave of value noise
+-- on an 8x8 lattice that wraps, smoothstepped between lattice points, 64
+-- texels square, repeat-wrapped so the shader can slide over it forever.
+-- Baked once. Always bound, like every sampler here -- unbound is a crash.
+local mistTexImg = nil
+local function mistTex()
+  if mistTexImg == nil then
+    local ok, img = pcall(function()
+      local N = 64
+      local seed = 7
+      -- a lattice of `P` cells a side that wraps, and value noise on it
+      local function field(P)
+        local lat = {}
+        for i = 0, P * P - 1 do
+          seed = (seed * 1103515245 + 12345) % 2147483648
+          lat[i] = seed / 2147483648
+        end
+        local cell = N / P
+        return function(x, y)
+          local fx, fy = x / cell, y / cell
+          local ix, iy = math.floor(fx), math.floor(fy)
+          local tx, ty = fx - ix, fy - iy
+          tx, ty = tx * tx * (3 - 2 * tx), ty * ty * (3 - 2 * ty)
+          local function L(i, j) return lat[(j % P) * P + (i % P)] end
+          local a = L(ix, iy) + (L(ix + 1, iy) - L(ix, iy)) * tx
+          local b = L(ix, iy + 1) + (L(ix + 1, iy + 1) - L(ix, iy + 1)) * tx
+          return a + (b - a) * ty
+        end
+      end
+      -- banks (8 cells a tile) with wisps over them (16), the 0.65/0.35
+      -- split mistNoise's two octaves had -- twice, independently
+      local r1, r2, g1, g2 = field(8), field(16), field(8), field(16)
+      local data = love.image.newImageData(N, N)
+      data:mapPixel(function(x, y)
+        return r1(x, y) * 0.65 + r2(x, y) * 0.35,
+               g1(x, y) * 0.65 + g2(x, y) * 0.35, 0, 1
+      end)
+      local im = love.graphics.newImage(data)
+      im:setWrap("repeat", "repeat")
+      im:setFilter("linear", "linear")
+      return im
+    end)
+    mistTexImg = (ok and img) or false
+  end
+  return mistTexImg or nil
+end
 Voxel3D.stone = nil          -- { art, granite, norm, graniteNorm, scale, mix, bump }
 Voxel3D.aoPower = nil        -- RayFX's ambient occlusion, harder for a room
 Voxel3D.aoRange = nil
@@ -4566,6 +4801,56 @@ function Voxel3D.beginScene(w, h, cx, cy, vw, vh, sky, slot)
         (Voxel3D.normalsOK and Voxel3D.lampSpec) or 0)
   pcall(sh.send, sh, "mist", Voxel3D.mist or { 0, 1, 1, 0 })
   pcall(sh.send, sh, "mistColor", Voxel3D.mistColor or { 0.5, 0.5, 0.6 })
+  local mt = mistTex()
+  if mt then pcall(sh.send, sh, "mistTex", mt) end
+  pcall(sh.send, sh, "mistShape", Voxel3D.mistShape or { 0.12, 1.0, 0.7, 0 })
+  pcall(sh.send, sh, "mistSun", Voxel3D.mistSun or { 0, 0, 0, 0 })
+  pcall(sh.send, sh, "mistSunColor", Voxel3D.mistSunColor or { 0, 0, 0 })
+  -- whole array every scene, like crush: a wake left from the last map
+  -- would part the mist where nobody is standing
+  local wake = Voxel3D.mistWake
+  local wn = (wake and #wake) or 0
+  if wn > 8 then wn = 8 end
+  -- the circle round them all, so the shader only walks the list near them
+  local mx, mz = 0, 0
+  for i = 1, wn do mx, mz = mx + wake[i][1], mz + wake[i][2] end
+  if wn > 0 then mx, mz = mx / wn, mz / wn end
+  local reach = 0
+  for i = 1, 8 do
+    local d, s = mistWakeScratch[i], i <= wn and wake[i] or nil
+    if s then
+      local r = math.max(1, s[3])
+      d[1], d[2], d[3], d[4] = s[1], s[2], 1 / (r * r), s[4]
+      local far = math.sqrt((s[1] - mx) ^ 2 + (s[2] - mz) ^ 2) + r
+      if far > reach then reach = far end
+    else
+      d[1], d[2], d[3], d[4] = 0, 0, 0, 0
+    end
+  end
+  pcall(sh.send, sh, "mistWake", unpack(mistWakeScratch))
+  pcall(sh.send, sh, "mistWakeN", wn)
+  pcall(sh.send, sh, "mistWakeC", { mx, mz, reach * reach })
+  -- The glow field (lib/Glow.lua), on a variant built with it. The pass
+  -- that owns this scene set Voxel3D.glow just before opening it -- the
+  -- free-roam world or the arena, each over its own patch of map -- and a
+  -- pass that set nothing gets gain 0 over a bound black texel: never an
+  -- unbound sampler, the rule every sampler here follows.
+  if Voxel3D.glowLive then
+    local gl = Voxel3D.glow
+    if not glowBlank then
+      local okB, img = pcall(function()
+        local d = love.image.newImageData(1, 1)
+        d:setPixel(0, 0, 0, 0, 0, 1)
+        return love.graphics.newImage(d)
+      end)
+      glowBlank = okB and img or false
+    end
+    local tex = (gl and gl.tex) or glowBlank or nil
+    if tex then pcall(sh.send, sh, "glowField", tex) end
+    pcall(sh.send, sh, "glowRect", gl and gl.rect or { 0, 0, 1, 1 })
+    pcall(sh.send, sh, "glowGain", (gl and gl.tex and gl.gain) or 0)
+    pcall(sh.send, sh, "glowHeight", gl and gl.height or 14)
+  end
   -- and its materials: the two surfaces, always bound (an unbound sampler
   -- is a driver-dependent crash, the rule every sampler here follows), the
   -- switch off unless the scene handed a set over this frame
@@ -4788,6 +5073,7 @@ function Voxel3D.beginScene(w, h, cx, cy, vw, vh, sky, slot)
   pcall(sh.send, sh, "shopOn", 0)
   pcall(sh.send, sh, "lanternUV", { 0, 0, 0, 0 })
   pcall(sh.send, sh, "lanternGlow", { 0, 0 })
+  pcall(sh.send, sh, "emissiveOn", 0)
   pcall(sh.send, sh, "reefOn", 0)
   -- NOT shopFloorOn. That one is written from the materials block further
   -- up this same setup (it is a fact about the map, not about a draw), and
@@ -5070,6 +5356,13 @@ function Voxel3D.lantern(rect, glow)
   if not (active and activeShader) then return end
   pcall(activeShader.send, activeShader, "lanternUV", rect or { 0, 0, 0, 0 })
   pcall(activeShader.send, activeShader, "lanternGlow", rect and glow or { 0, 0 })
+end
+
+-- Whether the sheet drawn next marks emissive texels in its alpha (see
+-- emissiveOn). One draw long, like lantern().
+function Voxel3D.emissive(on)
+  if not (active and activeShader) then return end
+  pcall(activeShader.send, activeShader, "emissiveOn", on and 1 or 0)
 end
 
 -- Whether what is drawn next is the reef's sheet (lib/ReefKit.lua): under
@@ -5387,13 +5680,16 @@ end
 -- pixels, and it defaults to ZERO -- sent on every draw rather than only on
 -- the ones that want it, so a swaying pass can never leak into the terrain
 -- that follows it.
-function Voxel3D.draw(mesh, texture, model, pull, sunModel, sway)
-  if not (active and mesh) then return end
-  -- the variant beginScene actually bound, not whichever one is default:
-  -- sending a uniform to the other shader would go nowhere
-  local sh = activeShader
-  if not sh then return end
-  if texture then mesh:setTexture(texture) end
+-- Everything a one-mesh draw sends before the mesh itself.
+--
+-- Split out so that a caller with SEVERAL meshes sharing one state can send
+-- it once (Voxel3D.beginBatch below) instead of once per mesh. That is not
+-- a micro-optimisation: cutting the forest into bands turned 8 tree draws
+-- into ~130, and at fourteen uniform sends each that is eighteen hundred
+-- extra pcall-through-FFI round trips a frame -- which cost more than the
+-- 1.5 million vertices the banding had just saved. The terrain never had
+-- this problem because drawGroup was written this way from the start.
+local function sendDrawState(sh, model, pull, sunModel, sway)
   -- LOVE defaults matrix uniforms to column-major; Mat4 is row-major
   pcall(sh.send, sh, "model", "row", model or IDENTITY)
   pcall(sh.send, sh, "sunModel", "row", sunModel or model or IDENTITY)
@@ -5444,6 +5740,38 @@ function Voxel3D.draw(mesh, texture, model, pull, sunModel, sway)
   -- neighbour map, which has its own trails and is not asked for them)
   sendSnowMap(sh, Voxel3D.snowMap)
   sendCoat(sh, true)
+end
+
+function Voxel3D.draw(mesh, texture, model, pull, sunModel, sway)
+  if not (active and mesh) then return end
+  -- the variant beginScene actually bound, not whichever one is default:
+  -- sending a uniform to the other shader would go nowhere
+  local sh = activeShader
+  if not sh then return end
+  if texture then mesh:setTexture(texture) end
+  sendDrawState(sh, model, pull, sunModel, sway)
+  love.graphics.draw(mesh)
+end
+
+-- Send the per-pass state once for a caller about to draw several meshes
+-- that share it -- a banded forest, and anything else that gets cut up
+-- later. Returns false when there is no shader to send to, and a false
+-- return means the batchDraws must be skipped, not that they are harmless.
+function Voxel3D.beginBatch(model, pull, sunModel, sway)
+  if not active then return false end
+  local sh = activeShader
+  if not sh then return false end
+  sendDrawState(sh, model, pull, sunModel, sway)
+  return true
+end
+
+-- One mesh of a batch begun above. No uniforms: the caller promised they
+-- are the same for every mesh in the batch, which is the whole point.
+-- Texture binding stays with the caller for the same reason drawGroup keeps
+-- it per chunk -- re-binding the same atlas on every mesh was measured at
+-- 66 to 86 redundant calls a pass.
+function Voxel3D.batchDraw(mesh)
+  if not (active and mesh) then return end
   love.graphics.draw(mesh)
 end
 
@@ -5832,6 +6160,17 @@ end
 
 function Voxel3D.canvas()
   return canvas
+end
+
+-- What the 3D pass actually RASTERISED at, which is not what canvas()
+-- returns: that one is the presentation canvas and is always the window's
+-- size, because the whole point of the RES row is to render small and blit
+-- back up. A probe that reports canvas() as "the scene" therefore reads the
+-- same number at every rung of the row and cannot see the row working at
+-- all -- which is exactly what tests/mali_cost_probe.lua did, for every
+-- number it ever logged, until this existed.
+function Voxel3D.renderSize()
+  return renderW, renderH
 end
 
 -- Drop the GPU objects (window resize, hot reload).

@@ -83,6 +83,51 @@ function Device.mobile()
   return isMobile
 end
 
+-- ------- IS THIS A GPU THAT CANNOT AFFORD THE EXTRAS
+--
+-- Device.mobile() asks a narrow question -- is this a tile-based mobile GPU
+-- -- and three separate defaults were reading it as if it asked a wider one:
+-- can this machine afford the expensive optional passes. It cannot, and the
+-- gap has a name: an INTEGRATED DESKTOP GPU. On an Intel UHD every one of
+-- the mobile() tests is false (a desktop GL context, a vendor string with no
+-- "mali" or "adreno" in it), so the machine this mod was developed and
+-- measured on takes the DESKTOP preset:
+--
+--   * lib/RayFX.lua:1141-1143 -- SCREEN FX on AUTO resolves to "rt", the
+--     most expensive rung on the ladder, instead of off.
+--   * main.lua:751 -- the FULL preset pins the tilt-shift at its TOP level.
+--   * main.lua:1888 -- and then takes the T-SHIFT row off the OPTIONS page,
+--     so there is no switch left to reach.
+--
+-- The comment at main.lua:744-749 describes fixing exactly this, and fixes
+-- it only for phones. This is the same bug on the other kind of weak GPU.
+--
+-- The substrings are deliberately the INTEGRATED families and nothing else.
+-- "intel" alone would catch Arc, which is a discrete card; "radeon" alone
+-- would catch every AMD card there is. A false positive here costs a player
+-- a cheaper default on a row they can still see and turn back up -- which is
+-- the point of also un-dropping the row.
+local WEAK_GPUS = {
+  "uhd graphics",         -- Intel UHD (Gen9.5/Gen12), the target machine
+  "hd graphics",          -- older Intel integrated, same family
+  "iris",                 -- Iris / Iris Plus / Iris Xe, still integrated
+  "vega 3", "vega 6", "vega 7", "vega 8", "vega 11",  -- AMD APU parts
+  "radeon graphics",      -- AMD's current APU string ("AMD Radeon(TM) Graphics")
+  "gma ", "llvmpipe", "softpipe", "swiftshader", "basic render",
+}
+
+local isWeak = nil
+function Device.weak()
+  if isWeak ~= nil then return isWeak end
+  if Device.mobile() then isWeak = true; return true end
+  local all = renderer().all
+  isWeak = false
+  for _, needle in ipairs(WEAK_GPUS) do
+    if all:find(needle, 1, true) then isWeak = true; break end
+  end
+  return isWeak
+end
+
 -- The panel, in real framebuffer pixels.  This is the number that decides
 -- everything downstream and the number the mod was getting wrong by
 -- inference: the machine this was written on is 1536x864 and the phone that

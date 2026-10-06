@@ -1251,15 +1251,26 @@ local function emit(m, sp, atlasW, atlasH)
           local i = ci(x, y, z)
           if i and i >= 0 and not ci(x + d, y, z) then
             local n = 1
+            -- `stripSides` (lib/CeladonTowerKit.lua): a flank may be a STRIP
+            -- too -- texels marching along the sheet as the run marches
+            -- along z -- so a tower's whole course is one quad on every face
+            local strip = nil
             while z + n <= zmax do
               local j = ci(x, y, z + n)
-              if (j ~= i and not (loose and j and j >= 0))
-                 or ci(x + d, y, z + n) then
+              if not j or j < 0 or ci(x + d, y, z + n) then break end
+              if loose then
+                -- any texel carries on
+              elseif m.stripSides and strip ~= false and j == i + n
+                     and sp.ay[j] == sp.ay[i] then
+                strip = true
+              elseif strip ~= true and j == i then
+                strip = false
+              else
                 break
               end
               n = n + 1
             end
-            local u0, u1, v0, v1 = uvOf(i, false, n)
+            local u0, u1, v0, v1 = uvOf(i, strip == true, n)
             local xf = d == 1 and (x + 1) or x
             -- corner AO in the layer the face looks into
             local xo = x + d
@@ -1500,6 +1511,58 @@ function Buildings.build(S, map, data, perRow)
                 end
               end
               if models[key] then built = models[key] end
+            end
+            -- Celadon's skyline (lib/CeladonTowerKit.lua): landmarks as towers.
+            -- Cached per placement. A kit that will not build leaves the
+            -- classic box standing.
+            local mapId = map.def.id or map.def.name
+            if mapId == "CELADON_CITY" then
+              local okK, Kit = pcall(V.require, "CeladonTowerKit")
+              local place = tx .. ":" .. ty
+              local plot = okK and Kit and Kit.PLOTS and Kit.PLOTS[place]
+              if plot then
+                local key = tileset.id .. ":" .. index .. "@celadon:" .. tx .. ":" .. ty
+                if not models[key] then
+                  local sp = readSprite(Kit.SHEET)
+                  local tex = sp and loadSpriteImage(Kit.SHEET)
+                  local okM, m, why = false, nil, nil
+                  if sp and tex then okM, m, why = pcall(Kit.model, sp, t, tx, ty) end
+                  if okM and m then
+                    local q = emit(m, sp, sp.W, sp.H)
+                    q.tex = Kit.SHEET
+                    models[key] = q
+                  else
+                    Buildings.lastError = "celadon tower " .. tx .. ":" .. ty
+                                          .. ": " .. tostring(why or m or Kit)
+                  end
+                end
+                if models[key] then built = models[key] end
+              end
+            end
+            -- The houses of Cerulean and Celadon (lib/TownHouseKit.lua): every
+            -- one its own, cached per placement, on the same terms -- a kit that
+            -- will not build leaves the classic drawing standing.
+            if mapId == "CERULEAN_CITY" or mapId == "CELADON_CITY" then
+              local okK, Kit = pcall(V.require, "TownHouseKit")
+              local places = okK and Kit and Kit.PLACES and Kit.PLACES[mapId]
+              if places and places[tx .. ":" .. ty] then
+                local key = tileset.id .. ":" .. index .. "@town:" .. mapId .. ":" .. tx .. ":" .. ty
+                if not models[key] then
+                  local sp = readSprite(Kit.SHEET)
+                  local tex = sp and loadSpriteImage(Kit.SHEET)
+                  local okM, m, why = false, nil, nil
+                  if sp and tex then okM, m, why = pcall(Kit.model, sp, t, tx, ty, mapId) end
+                  if okM and m then
+                    local q = emit(m, sp, sp.W, sp.H)
+                    q.tex = Kit.SHEET
+                    models[key] = q
+                  else
+                    Buildings.lastError = "town house " .. mapId .. " " .. tx .. ":" .. ty
+                                          .. ": " .. tostring(why or m or Kit)
+                  end
+                end
+                if models[key] then built = models[key] end
+              end
             end
             -- Vermilion's six houses (lib/VermilionHouseKit.lua): two templates,
             -- six placements, each its own building -- so the model is cached
@@ -1760,6 +1823,38 @@ function Buildings.build(S, map, data, perRow)
                 end
                 built = models["reef@" .. key]
               end
+            elseif t.celroom then
+              -- A room of Celadon's (lib/CeladonRoomKit.lua): the kit reads
+              -- the classes Structures gave this cell's tiles and the eight
+              -- round it, and dresses them from the map's theme. One model
+              -- per signature; an empty one on failure, and the tileset's own
+              -- furniture stands as it always did.
+              built = {}
+              local okK, Kit = pcall(V.require, "CeladonRoomKit")
+              local key = okK and Kit and Kit.spec and Kit.spec(
+                tostring(map.def.id or map.def.name),
+                function(x, y)
+                  local s = S.shapeAt[keyOf(x, y)]
+                  if s then return s.class, s.h end
+                end, tx, ty)
+              if key then
+                if not models["celroom@" .. key] then
+                  local sp = readSprite(Kit.SHEET)
+                  local tex = sp and loadSpriteImage(Kit.SHEET)
+                  local okM, m, why = false, nil, nil
+                  if sp and tex then okM, m, why = pcall(Kit.model, sp, key) end
+                  if okM and m then
+                    local q = emit(m, sp, sp.W, sp.H)
+                    q.tex = Kit.SHEET
+                    q.claimMask = m.claimMask
+                    models["celroom@" .. key] = q
+                  else
+                    Buildings.lastError = "celadon room: " .. tostring(why or m or Kit)
+                    models["celroom@" .. key] = {}
+                  end
+                end
+                built = models["celroom@" .. key]
+              end
             elseif t.fence then
               -- A timber fence (lib/FenceKit.lua): one model per signature
               -- -- which neighbours carry the run on. An empty model on
@@ -1773,17 +1868,19 @@ function Buildings.build(S, map, data, perRow)
                 function(x, y)
                   return (x < 0 and joined.west ~= nil) or (x >= tw and joined.east ~= nil)
                       or (y < 0 and joined.north ~= nil) or (y >= th and joined.south ~= nil)
-                end)
+                end, tostring(map.def.id or map.def.name))
               if sig then
                 local key = "fence@" .. sig
+                -- timber or iron: the signature says, and each has its sheet
+                local sheet = Kit.sheetFor and Kit.sheetFor(sig) or Kit.SHEET
                 if not models[key] then
-                  local sp = readSprite(Kit.SHEET)
-                  local tex = sp and loadSpriteImage(Kit.SHEET)
+                  local sp = readSprite(sheet)
+                  local tex = sp and loadSpriteImage(sheet)
                   local okM, m, why = false, nil, nil
                   if sp and tex then okM, m, why = pcall(Kit.model, sp, sig) end
                   if okM and m then
                     local q = emit(m, sp, sp.W, sp.H)
-                    q.tex = Kit.SHEET
+                    q.tex = sheet
                     models[key] = q
                   else
                     Buildings.lastError = "fence: " .. tostring(why or m or Kit)

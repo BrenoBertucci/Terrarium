@@ -85,6 +85,18 @@ return function(game)
   local ShadowMap   = lib.require("ShadowMap")
   local Pipelines   = require("src.render.Pipelines")
 
+  -- ------- THE INSTRUMENT
+  --
+  -- Without this every line below reads 16.7ms.  A vsynced display hands
+  -- back the same frame time whatever the frame cost, so every condition
+  -- ties, every saving is noise around the refresh interval, and the
+  -- resolution sweep comes out NEGATIVE.  That is not a hypothetical: it is
+  -- what this probe logged on every run before this line existed, and the
+  -- run it produced was read as "nothing costs anything".  Every other cost
+  -- probe in tests/ already did this (grass, buildings, bridge, reef,
+  -- lavground); this one did not, and was the only one anybody trusted.
+  love.window.setVSync(0)
+
   -- ------- the still scene
   --
   -- Everything that moves on its own is pinned or off, so the only thing that
@@ -103,7 +115,17 @@ return function(game)
     DayNight.clock = CLOCK
   end
 
-  local SPOT = { "ROUTE_1", 8, 12, "up" }
+  -- Where to stand.  ROUTE_1 is the original spot and the one every number
+  -- already in this log was taken at, so it stays the default.
+  -- DS_PROBE_SPOT=ROUTE_2 moves to the dense forest -- 862 tree sites
+  -- against ROUTE_1's 364 -- which is the stress case for anything about
+  -- trees and the only honest place to ask what a forest costs.
+  local SPOTS = {
+    ROUTE_1  = { "ROUTE_1", 8, 12, "up" },
+    ROUTE_2  = { "ROUTE_2", 10, 10, "up" },
+    VIRIDIAN = { "VIRIDIAN_CITY", 24, 22, "up" },
+  }
+  local SPOT = SPOTS[os.getenv("DS_PROBE_SPOT") or "ROUTE_1"] or SPOTS.ROUTE_1
   game.overworld:setMap(SPOT[1], SPOT[2], SPOT[3], SPOT[4])
   hold(360)
 
@@ -138,17 +160,32 @@ return function(game)
   -- yield lands on the far side of that, so every field is the count of the
   -- nothing that has happened since.  Count the calls directly instead -- the
   -- probe runs unsandboxed, so it can wrap the real love.graphics.
-  local COUNT = { draw = 0, canvas = 0, shader = 0 }
+  local COUNT = { draw = 0, canvas = 0, shader = 0, verts = 0 }
   do
     local g = love.graphics
     local rawDraw, rawCanvas, rawShader = g.draw, g.setCanvas, g.setShader
-    g.draw = function(...) COUNT.draw = COUNT.draw + 1 return rawDraw(...) end
+    -- VERTICES SUBMITTED, which getStats() does not report and which is the
+    -- number that tells fill-bound from geometry-bound apart.  A frame that
+    -- shrugs at the RES ladder is not paying for pixels; if it is also not
+    -- paying for draw calls then what is left is the vertex stage, and the
+    -- only way to see that is to add up what every mesh handed over.
+    local function tally(a)
+      if type(a) == "userdata" then
+        local ok, n = pcall(function() return a:getVertexCount() end)
+        if ok and type(n) == "number" then COUNT.verts = COUNT.verts + n end
+      end
+    end
+    g.draw = function(a, ...) COUNT.draw = COUNT.draw + 1 tally(a) return rawDraw(a, ...) end
     g.setCanvas = function(...) COUNT.canvas = COUNT.canvas + 1 return rawCanvas(...) end
     g.setShader = function(...) COUNT.shader = COUNT.shader + 1 return rawShader(...) end
     -- meshes go through drawInstanced / draw depending on the call site
     if g.drawInstanced then
       local rawInst = g.drawInstanced
-      g.drawInstanced = function(...) COUNT.draw = COUNT.draw + 1 return rawInst(...) end
+      g.drawInstanced = function(a, n, ...)
+        COUNT.draw = COUNT.draw + 1
+        tally(a)
+        return rawInst(a, n, ...)
+      end
     end
   end
 
@@ -156,11 +193,11 @@ return function(game)
   local function sample()
     local pinned = pin()
     hold(30)
-    local dts, draws, switches, shaders = {}, {}, {}, {}
+    local dts, draws, switches, shaders, verts = {}, {}, {}, {}, {}
     local prev = love.timer.getTime()
     for _ = 1, N do
       DayNight.clock = CLOCK
-      COUNT.draw, COUNT.canvas, COUNT.shader = 0, 0, 0
+      COUNT.draw, COUNT.canvas, COUNT.shader, COUNT.verts = 0, 0, 0, 0
       coroutine.yield()
       local t = love.timer.getTime()
       dts[#dts + 1] = (t - prev) * 1000
@@ -168,17 +205,28 @@ return function(game)
       draws[#draws + 1] = COUNT.draw
       switches[#switches + 1] = COUNT.canvas
       shaders[#shaders + 1] = COUNT.shader
+      verts[#verts + 1] = COUNT.verts
     end
     local m, lo, hi = median(dts)
     -- what the 3D pass actually rasterised this condition, so a condition
     -- that quietly fell back to the flat 2D path is visible as such rather
     -- than as a spectacular saving
+    -- renderSize, NOT canvas(): canvas() is the presentation target and is
+    -- always the window's size, so reporting it made every RES rung print
+    -- an identical "scene=1536x864" and hid the fact that nothing about
+    -- the sweep could be checked.
     local cw, ch = 0, 0
-    local okC, cv = pcall(Voxel3D.canvas)
-    if okC and cv then cw, ch = cv:getDimensions() end
+    local okC, rw, rh = pcall(Voxel3D.renderSize)
+    if okC and rw and rw > 0 then
+      cw, ch = rw, rh
+    else
+      local okV, cv = pcall(Voxel3D.canvas)
+      if okV and cv then cw, ch = cv:getDimensions() end
+    end
     return {
       ms = m, lo = lo, hi = hi, pinned = pinned,
       draws = median(draws), switches = median(switches), shaders = median(shaders),
+      verts = median(verts),
       cw = cw, ch = ch,
       level = Pipelines.level and (Pipelines.level("terrarium_voxel") or -1) or -1,
     }
@@ -207,7 +255,13 @@ return function(game)
   end
   local BASE = saveAll()
   local function restore()
-    Quality.setting:sync(BASE.res)
+    -- 1/2, not BASE.res.  The player's row defaults to AUTO, and AUTO is a
+    -- governor: with vsync off it walks the ladder while the probe runs, so
+    -- "base" would be a different amount of work in every round and every
+    -- delta measured against it would be measured against a moving target.
+    -- The resolution report at the bottom already names index 1 "1/2"; this
+    -- makes that true.  The player's own value goes back at the very end.
+    Quality.setting:sync(2)
     Quality.shadowSetting:sync(BASE.shadow)
     RayFX.setting:sync(BASE.rayfx)
     Sky.cloudSetting:sync(BASE.clouds)
@@ -243,6 +297,12 @@ return function(game)
     { "water=FLAT",  function() Water.setting:sync(0) end },
     { "lamps=OFF",   function() StreetLamps.setting:sync(false) end },
     { "tilt=ON",     function() Pipelines.setLevel("terrarium_tiltshift", 3) end },
+    -- THE FLOOR.  Everything above is a slice off the 3D pass; this is the
+    -- frame without it -- the engine's own 2D game and nothing of this mod
+    -- drawing.  Every other number on this page is only meaningful as a
+    -- distance from here, and without it a 15ms "everything cheap" reads as
+    -- a floor when it may be fifteen times one.
+    { "voxel=OFF",   function() Pipelines.setLevel("terrarium_voxel", 0) end },
     -- everything cheap at once: the ceiling a settings-only fix could reach
     { "ALL-CHEAP",   function()
         Quality.setting:sync(4)
@@ -294,8 +354,8 @@ return function(game)
       hold(45)
       local s = sample()
       acc[i][#acc[i] + 1] = s
-      log(("   %-12s %7.2f ms  [%6.2f..%7.2f]  draws=%-5d canvas=%-3d shader=%-4d scene=%dx%d lvl=%d pin=%s")
-            :format(cond[1], s.ms, s.lo, s.hi, s.draws, s.switches, s.shaders,
+      log(("   %-12s %7.2f ms  [%6.2f..%7.2f]  draws=%-5d verts=%-8d canvas=%-3d scene=%dx%d lvl=%d pin=%s")
+            :format(cond[1], s.ms, s.lo, s.hi, s.draws, s.verts, s.switches,
                     s.cw, s.ch, s.level, tostring(s.pinned)))
     end
   end
@@ -341,6 +401,95 @@ return function(game)
                 (px[1] - px[4]) > 0 and span / ((px[1] - px[4]) / 1e6) or 0))
   log(("   fixed cost that no RES rung removes: about %.2f ms")
         :format(final[4] - (span / math.max(1e-9, (px[1] - px[4]))) * px[4]))
+
+  -- ------- what the TREES cost, paired
+  --
+  -- Not one of the conditions above, and deliberately so.  Forcing the hull
+  -- fallback means emptying Trees3D.SPECIES, dropping the chunk meshes and
+  -- BOUNCING through another map to clear the per-map decision Structures
+  -- caches -- seconds of rebuild, which inside the round-robin would be
+  -- charged as drift to whichever condition happened to run next.
+  --
+  -- So it runs on its own, and it runs PAIRED: voxel and hulls alternating
+  -- inside a round, the reported number the median of the per-round
+  -- DIFFERENCES.  Sequential blocks of A then B measure the machine warming
+  -- up, not the trees -- that mistake is on the record twice in this repo
+  -- (tests/trees_probe.lua, and the wind measurements before them).
+  log("")
+  log("== trees: the authored forest against the classic hulls (paired) ==")
+  local Structures  = lib.require("Structures")
+  local ChunkMesher = lib.require("ChunkMesher")
+
+  -- Settled means the mesher's queue is empty AND this map has either built
+  -- its combined tree meshes or decided on hulls -- held for 45 consecutive
+  -- frames.  Counting frames instead photographs a half-built map, which is
+  -- the loudest single source of noise in this repo's A/Bs.
+  local function settle(maxTicks)
+    local quiet = 0
+    for _ = 1, (maxTicks or 2400) do
+      DayNight.clock = CLOCK
+      coroutine.yield()
+      local map = game.overworld and game.overworld.map
+      local done, state = Trees3D.ready(map)
+      if ChunkMesher.pending() == 0 and (done or state == "hulls") then
+        quiet = quiet + 1
+        if quiet >= 45 then return true end
+      else
+        quiet = 0
+      end
+    end
+    return false
+  end
+
+  local KEEP = Trees3D.SPECIES
+  local function setTrees(on)
+    Trees3D.SPECIES = on and KEEP or {}
+    pcall(Trees3D.reload)
+    pcall(Trees3D.invalidate)
+    pcall(function() ChunkMesher.invalidate() end)
+    -- Structures caches the hull-vs-site decision per map, so returning to
+    -- the same map without leaving it would measure the old decision.
+    pcall(function() game.overworld:setMap("PALLET_TOWN", 10, 8, "up") end)
+    settle(1200)
+    pcall(function() game.overworld:setMap(SPOT[1], SPOT[2], SPOT[3], SPOT[4]) end)
+    return settle(2400)
+  end
+
+  local function treeSample(tag)
+    local ok = settle(1200)
+    local s = sample()
+    local st = Structures.forMap(game.overworld.map)
+    local sites = st and #(st.treeSites or {}) or 0
+    local hulls = st and #(st.roundStamps or {}) or 0
+    log(("   %-6s %7.2f ms  [%6.2f..%7.2f]  draws=%-5d sites=%-4d hulls=%-4d settled=%s")
+          :format(tag, s.ms, s.lo, s.hi, s.draws, sites, hulls, tostring(ok)))
+    return s.ms
+  end
+
+  local diffs = {}
+  for round = 1, 3 do
+    log(("-- round %d"):format(round))
+    restore()
+    setTrees(true)
+    local on = treeSample("voxel")
+    setTrees(false)
+    local off = treeSample("hulls")
+    diffs[#diffs + 1] = on - off
+  end
+  setTrees(true)
+  local dmed, dlo, dhi = median(diffs)
+  log(("   TREES COST %+.2f ms   rounds %s")
+        :format(dmed, table.concat({ ("%+.2f"):format(diffs[1] or 0),
+                                     ("%+.2f"):format(diffs[2] or 0),
+                                     ("%+.2f"):format(diffs[3] or 0) }, " / ")))
+  log(("   spread across rounds %.2f ms -- bigger than the number above means"):format(dhi - dlo))
+  log( "   this is not a small measurement, it is not a measurement")
+
+  -- Hand the machine back the way it was found: the probe runs inside the
+  -- player's own install, and a left-behind uncapped frame rate is a laptop
+  -- fan that never stops.
+  Quality.setting:sync(BASE.res)
+  love.window.setVSync(1)
 
   log("")
   log("done")

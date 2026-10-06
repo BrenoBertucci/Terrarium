@@ -40,6 +40,24 @@ function ModSetting.new(key, label, values, labels)
   }, ModSetting)
 end
 
+-- The Portuguese face of the row, shown when LANGUAGE is PORTUGUES (see
+-- lib/Lang.lua). Stored values never change with it -- only the words.
+-- Returns self so it chains onto ModSetting.new.
+function ModSetting:translate(label, labels)
+  self.pt = { label = label, labels = labels }
+  return self
+end
+
+-- the row's words in the language the LANGUAGE row asks for; Lang is
+-- asked lazily because it is itself built on this file
+local function words(self)
+  local pt = self.pt
+  if pt and V.require("Lang").isPT() then
+    return pt.label or self.label, pt.labels or self.labels
+  end
+  return self.label, self.labels
+end
+
 local function indexOf(self, value)
   for i, v in ipairs(self.values) do
     if v == value then return i end
@@ -108,8 +126,11 @@ function ModSetting:row()
   local self_ = self
   return {
     id = modId() .. ":" .. self.key,
-    label = self.label,
-    value = function() return self_.labels[self_:read()] end,
+    label = (words(self)),
+    value = function()
+      local _, labels = words(self_)
+      return labels[self_:read()]
+    end,
     step = function(game, dir)
       self_:cycle(game, dir)
       return true
@@ -119,13 +140,14 @@ end
 
 -- The row the mod manager's own settings page builds for this mod.
 function ModSetting:schema(help)
+  local label, labels = words(self)
   local choices = {}
-  for i, v in ipairs(self.values) do choices[i] = { self.labels[i], v } end
+  for i, v in ipairs(self.values) do choices[i] = { labels[i], v } end
   if #self.values == 2 and self.values[1] == false then
-    return { key = self.key, type = "toggle", label = self.label,
+    return { key = self.key, type = "toggle", label = label,
              default = self.values[1], help = help }
   end
-  return { key = self.key, type = "choice", label = self.label,
+  return { key = self.key, type = "choice", label = label,
            choices = choices, default = self.values[1], help = help }
 end
 

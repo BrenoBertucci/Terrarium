@@ -209,20 +209,46 @@ end
 BattleArena.SAMPLE_STEP = 4      -- world pixels along the line
 BattleArena.MON_H = 16           -- how tall a mon stands, in world pixels
 BattleArena.CLEAR_EPS = 1.5      -- slack, so a flush kerb is not an obstacle
+-- A kit model no taller than this is floor, for the grass note's reason: a
+-- painted ground's turf stands a voxel or three proud of its own stones.
+BattleArena.KIT_ANKLE = 4
 
-local function heightAt(map, wx, wz)
+-- The kits' own models over a cell -- houses, towers, fences, the painted
+-- ground (Buildings.stamp). The mesher paints flat ground under a stamped
+-- model, so groundAt reports a house's footprint at ankle height; the
+-- model's real top is in Buildings.tallAt, which the SM64 camera's
+-- occluderHeight asks for the same line-of-sight reason. Once the arena
+-- drew those models (BattleScene's drawSheets), a spot this test called
+-- clear could stand a Lavender house between the camera and the mon.
+local Buildings = nil
+local function kitHeight(map, cx, cy)
+  if Buildings == nil then
+    local ok, B = pcall(V.require, "Buildings")
+    Buildings = (ok and B) or false
+  end
+  if not Buildings then return 0 end
+  local ok, t = pcall(Buildings.tallAt, map, cx, cy)
+  t = (ok and tonumber(t)) or 0
+  return (t > BattleArena.KIT_ANKLE) and t or 0
+end
+
+-- `kitOnly`: the kit models alone -- what an authored spot is re-checked
+-- against, since its author judged the terrain by eye and never saw these.
+local function heightAt(map, wx, wz, kitOnly)
   local cx, cy = math.floor(wx / CELL), math.floor(wz / CELL)
   if not map:inBounds(cx, cy) then
     -- off the map the border ring is drawn, and on most outdoor maps that
     -- ring is trees; treat it as solid so an arena is never framed through it
-    return 32
+    return kitOnly and 0 or 32
   end
+  local kit = kitHeight(map, cx, cy)
+  if kitOnly then return kit end
   local ok, h = pcall(V.require("VoxelScene").groundAt, map, cx, cy)
-  return (ok and h) or 0
+  return math.max((ok and h) or 0, kit)
 end
 
 -- Whether the segment from `eye` to (tx, ty, tz) clears the terrain.
-local function lineClear(map, eye, tx, ty, tz)
+local function lineClear(map, eye, tx, ty, tz, kitOnly)
   local dx, dy, dz = tx - eye[1], ty - eye[2], tz - eye[3]
   local len = math.sqrt(dx * dx + dy * dy + dz * dz)
   if len <= 1 then return true end
@@ -234,13 +260,15 @@ local function lineClear(map, eye, tx, ty, tz)
     local wx = eye[1] + dx * t
     local wy = eye[2] + dy * t
     local wz = eye[3] + dz * t
-    if heightAt(map, wx, wz) > wy + BattleArena.CLEAR_EPS then return false end
+    if heightAt(map, wx, wz, kitOnly) > wy + BattleArena.CLEAR_EPS then
+      return false
+    end
   end
   return true
 end
 
 -- Whether both mons would be in plain view from the battle camera.
-function BattleArena.clearance(map, arena)
+function BattleArena.clearance(map, arena, kitOnly)
   local BattleCam = V.require("BattleCam")
   local ok, rig = pcall(BattleCam.rig, arena, 0)
   if not (ok and rig and rig.eye) then return true end
@@ -248,7 +276,9 @@ function BattleArena.clearance(map, arena)
   local H = BattleArena.MON_H
   for _, mark in ipairs({ arena.player, arena.enemy }) do
     for _, hy in ipairs({ 1, H * 0.5, H }) do
-      if not lineClear(map, eye, mark[1], hy, mark[2]) then return false end
+      if not lineClear(map, eye, mark[1], hy, mark[2], kitOnly) then
+        return false
+      end
     end
   end
   return true
@@ -305,7 +335,9 @@ function BattleArena.find(map, fromX, fromY, surfing)
         -- which camera rig this spot is framed for; nil is the default long
         -- lens, "close" the short one small rooms need (see BattleCam)
         arena.cam = pick.cam
-        return arena
+        -- ...unless a kit model the author never saw now stands in the
+        -- line of sight: then the search below finds a clear one
+        if BattleArena.clearance(host, arena, true) then return arena end
       end
     end
   end
