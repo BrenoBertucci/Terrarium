@@ -65,7 +65,10 @@ return function(game)
   end
   log("ground quads=" .. n)
   check(not Buildings.lastError, "building error=" .. tostring(Buildings.lastError))
-  check(n > 8000 and n < 40000, "the ground is laid, within budget: " .. n)
+  -- 18k quads for the first slabs (2026-09-20); the plaza repainted from the
+  -- map's own tile on 2026-09-22 lays ~44k -- about 25 a cell over the 50x36
+  -- map, under the 33 a cell Cerulean's town ground takes.
+  check(n > 8000 and n < 50000, "the ground is laid, within budget: " .. n)
   check(Voxel.shader() ~= nil and not Voxel.shaderError, "voxel shader compiled")
   check(Scene.groundAt(map, 37, 12) == 1, "a walker stands ON the rose: " .. tostring(Scene.groundAt(map, 37, 12)))
   shot("rose_player")

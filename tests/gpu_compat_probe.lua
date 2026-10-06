@@ -69,6 +69,17 @@ return function(game)
     logf:close(); love.event.quit(); return
   end
   local Voxel3D = lib.require("Voxel3D")
+  -- Refused SQUARES, not log lines: with GLOW wanted each square is tried
+  -- with the glow field and then without it, and a refusal for any other
+  -- reason fails both (lib/Voxel3D.lua) -- two lines, one square. The
+  -- glow-less attempt is the one every square ends on.
+  local function refused()
+    local n = 0
+    for _, e in ipairs(Voxel3D.compileLog) do
+      if not e.glow then n = n + 1 end
+    end
+    return n
+  end
 
   -- ------- 1. the device report, verbatim
   --
@@ -104,8 +115,8 @@ return function(game)
   check(Voxel3D.rung == 1,
         "settled on rung 1 (" .. tostring(Voxel3D.rungName())
         .. ") -- a desktop GL should need no fallback")
-  check(#Voxel3D.compileLog == 0,
-        "no refusals recorded (" .. #Voxel3D.compileLog .. ")")
+  check(refused() == 0,
+        "no refusals recorded (" .. refused() .. ")")
 
   -- ------- 4. THE FAKE ADRENO
   --
@@ -155,9 +166,9 @@ return function(game)
             .. c.expect .. " (got " .. Voxel3D.rung .. " "
             .. tostring(Voxel3D.rungName()) .. ")")
       check(Voxel3D.available(), "[" .. c.name .. "] available() stays true")
-      check(#Voxel3D.compileLog == c.rung - 1,
+      check(refused() == c.rung - 1,
             "[" .. c.name .. "] " .. (c.rung - 1) .. " refusal(s) recorded, "
-            .. "not swallowed (" .. #Voxel3D.compileLog .. ")")
+            .. "not swallowed (" .. refused() .. ")")
       local rep = Voxel3D.report()
       check(rep:find("fake driver", 1, true) ~= nil,
             "[" .. c.name .. "] the driver's own words reach report()")
@@ -219,9 +230,9 @@ return function(game)
     -- TWO fragment rungs carry that define now -- the raised default and
     -- the named list -- so a driver that refuses the define refuses both:
     -- two modes at each of two uniform precisions at each of four rungs.
-    check(#Voxel3D.compileLog == 16,
+    check(refused() == 16,
           "[no fragment highp] all sixteen refused squares are on record ("
-          .. #Voxel3D.compileLog .. ")")
+          .. refused() .. ")")
   end)
 
   -- ------- THE RAISED DEFAULT REFUSED, THE NAMED LIST KEPT
@@ -241,9 +252,9 @@ return function(game)
           "[no raised default] and gave up nothing else (got rung "
           .. Voxel3D.rung .. " / " .. tostring(Voxel3D.precName()) .. ")")
     check(Voxel3D.available(), "[no raised default] available() stays true")
-    check(#Voxel3D.compileLog == 8,
+    check(refused() == 8,
           "[no raised default] the eight refused squares are on record ("
-          .. #Voxel3D.compileLog .. ")")
+          .. refused() .. ")")
   end)
 
   -- Blocked on a line the SHADER source ALWAYS carries, not on a define. The
@@ -265,9 +276,9 @@ return function(game)
     -- walked twice -- with it, then again without it -- before the mode is
     -- given up (Voxel3D.animeWaterRefused): forty-eight.
     local expected = Voxel3D.animeWaterRefused and 48 or 24
-    check(#Voxel3D.compileLog == expected,
+    check(refused() == expected,
           "[nothing builds] all " .. expected .. " refusals on record ("
-          .. #Voxel3D.compileLog .. ")")
+          .. refused() .. ")")
     local rep = Voxel3D.report()
     check(rep:find("OFF", 1, true) ~= nil,
           "[nothing builds] report() says the mode is off")
