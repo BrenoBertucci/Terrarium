@@ -20,11 +20,29 @@ The old `-mobile` channel is retired. Historical tags keep it (`v1.28.0-mobile` 
 
 Tags and packages:
 
-- Git tag: `v1.39.0-beta`
-- Zip asset: `TERRARIUM-1.39.0-beta.zip`
-- `manifest.json` / catalog `version` field: `1.39.0-beta`
+- Git tag: `v1.40.0-beta`
+- Zip asset: `TERRARIUM-1.40.0-beta.zip`
+- `manifest.json` / catalog `version` field: `1.40.0-beta`
 
 ## Unreleased
+
+Nothing yet.
+
+## 1.40.0-beta
+
+> **⚠️ BETA -- still full of bugs. / BETA -- ainda cheia de bugs.**
+>
+> 1.39.0-beta plus everything that had been waiting in the working tree:
+> painted ground across western and central Kanto, Cerulean's and Celadon's
+> houses, the MIST, GLOW and FOLLOW rows, and the pixel-art move cards. None
+> of it ran on a phone. Known: MIST costs about 1.5 ms a frame on an Intel
+> UHD; the persistent mesh cache ships OFF; and changing maps with 3D on still
+> grows the Lua heap by 100-280 MB a visit, which ends in frames of a second
+> or more on a long session -- closing the game clears it. Every rough edge
+> listed under 1.37.0-beta still stands.
+>
+> Um erro em tempo de desenho derruba o modo 3D para o 2D até fechar o jogo
+> (`mod_storage/.../TERRARIUM/errors.lua` diz qual). Guarde uma cópia do save.
 
 ### The move cards, in pixel art (COMBAT DINAMICA)
 

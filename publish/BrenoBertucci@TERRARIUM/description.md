@@ -38,6 +38,28 @@ Upstream Dramatic Shape still uses `3` / `5` / `6` / `7` / `8` / `9`.
 - Wild Pokemon visible in the grass; ecology / shelter / city life systems
 - Tuned defaults for lower-end / mobile hardware
 
+## New in 1.40.0-beta
+
+1.39.0-beta plus everything that was still waiting -- same rough edges, still
+BETA.
+
+- **Painted ground across Kanto.** Pallet, Viridian, Pewter, Cerulean,
+  Celadon, Saffron, Fuchsia and Cinnabar, and the roads between them, stand
+  on paving, lawns, flower beds and mosaics painted voxel by voxel.
+- **Cerulean's and Celadon's houses, every one its own**, with Celadon's
+  towers and rooms.
+- **MIST row:** ground mist that follows the hour -- thick at dawn, gone by
+  noon, back in the evening.
+- **GLOW row:** light that comes from things and stops at walls -- a
+  Charmander's tail, a Pikachu's sparks, a town's doorways at night, a
+  Flamethrower in the arena; caves go dark so it shows. **FOLLOW row:** your lead Pokemon walks
+  behind you.
+- **The move menu is a hand of pixel-art cards** (COMBAT DINAMICA): the raised
+  card wears its element, and a confirmed move is thrown at the foe.
+- Known: MIST costs about 1.5 ms a frame on weak GPUs; long sessions hopping
+  between maps with 3D on still slow down over time -- closing the game clears
+  it.
+
 ## New in 1.39.0-beta
 
 The 1.38.0-beta test build with the water and the wind redone -- same rough
