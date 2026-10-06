@@ -1,0 +1,212 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>CRT lab</title>
+<style>
+  body { margin: 0; background: #111; color: #ccc; font: 12px monospace; }
+  canvas { display: block; max-width: 100vw; height: auto; }
+  #log { position: fixed; bottom: 0; left: 0; right: 0; max-height: 30vh; overflow: auto;
+         background: #000c; white-space: pre-wrap; }
+</style></head>
+<body>
+<canvas id="c"></canvas>
+<div id="log"></div>
+<script>
+// The lab runs the mod's own crt.glsl through the same chain lib/CRT.lua
+// drives (SIGNAL -> GLOW x2 -> TUBE, BEZEL once), with LOVE's preamble around
+// every pass, in WebGL 1. Driven from the console / an agent:
+//   await lab.load('probe_out_x/shot.png'); lab.run(preset, opts); await lab.save('name.png')
+// `preset` is a plain table of the numbers lib/CRT.lua sends (see lab.uniforms).
+const logEl = document.getElementById('log');
+function log(s) { logEl.textContent += s + '\n'; }
+const cv = document.getElementById('c');
+const gl = cv.getContext('webgl', { preserveDrawingBuffer: true, antialias: false, premultipliedAlpha: false });
+const lab = window.lab = { programs: {}, errors: [] };
+
+async function boot() {
+  lab.pre = await (await fetch('/preamble.json')).json();
+  lab.glsl = await (await fetch('/glsl')).text();
+  log('preamble keys: ' + Object.keys(lab.pre).join(' '));
+}
+
+function wrap(code) {
+  const P = lab.pre;
+  return ['#version 100', '#define PIXEL PIXEL', P.SYNTAX, P.PIXEL_HEADER, P.UNIFORMS,
+          P.FUNCTIONS, P.PIXEL_FUNCTIONS, P.PIXEL_MAIN, '#line 1', code].join('\n');
+}
+
+const VS = `
+attribute vec4 VertexPosition;
+attribute vec4 VertexTexCoord;
+varying highp vec4 VaryingTexCoord;
+varying mediump vec4 VaryingColor;
+uniform float flipY;
+void main() {
+  VaryingTexCoord = VertexTexCoord;
+  VaryingColor = vec4(1.0);
+  float y = VertexTexCoord.y * 2.0 - 1.0;
+  gl_Position = vec4(VertexTexCoord.x * 2.0 - 1.0, flipY > 0.5 ? -y : y, 0.0, 1.0);
+}`;
+
+function compile(type, src) {
+  const s = gl.createShader(type);
+  gl.shaderSource(s, src); gl.compileShader(s);
+  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+    const e = gl.getShaderInfoLog(s);
+    throw new Error(e + '\n' + src.split('\n').map((l, i) => (i + 1) + ': ' + l).filter((l, i) => /ERROR: 0:(\d+)/.test(e) ? Math.abs(i + 1 - (+e.match(/ERROR: 0:(\d+)/)[1] + src.split('\n').indexOf('#line 1') )) < 4 : false).join('\n'));
+  }
+  return s;
+}
+
+lab.program = function (defines) {
+  const key = defines.join(',');
+  if (lab.programs[key]) return lab.programs[key];
+  const code = defines.map(d => '#define ' + d).join('\n') + '\n' + lab.glsl;
+  const p = gl.createProgram();
+  gl.attachShader(p, compile(gl.VERTEX_SHADER, VS));
+  gl.attachShader(p, compile(gl.FRAGMENT_SHADER, wrap(code)));
+  gl.bindAttribLocation(p, 0, 'VertexPosition');
+  gl.bindAttribLocation(p, 1, 'VertexTexCoord');
+  gl.linkProgram(p);
+  if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error('link: ' + gl.getProgramInfoLog(p));
+  lab.programs[key] = p;
+  return p;
+};
+
+const quad = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, quad);
+gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([0,0, 1,0, 0,1, 1,1]), gl.STATIC_DRAW);
+
+function tex(w, h, filter, wrapMode, data) {
+  const t = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, t);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, filter);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, filter);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, wrapMode);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, wrapMode);
+  if (data instanceof HTMLImageElement) gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, data);
+  else gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, data || null);
+  return { t, w, h };
+}
+function target(w, h) {
+  const T = tex(w, h, gl.LINEAR, gl.CLAMP_TO_EDGE);
+  T.fb = gl.createFramebuffer();
+  gl.bindFramebuffer(gl.FRAMEBUFFER, T.fb);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, T.t, 0);
+  return T;
+}
+
+lab.noise = (() => {
+  const n = new Uint8Array(256 * 256 * 4);
+  let s = 12345;
+  for (let i = 0; i < n.length; i++) { s = (s * 1103515245 + 12345) >>> 0; n[i] = (s >>> 16) & 255; }
+  return tex(256, 256, gl.NEAREST, gl.REPEAT, n);
+})();
+
+lab.noiseL = (() => {
+  const n = new Uint8Array(256 * 256 * 4);
+  let s = 12345;
+  for (let i = 0; i < n.length; i++) { s = (s * 1103515245 + 12345) >>> 0; n[i] = (s >>> 16) & 255; }
+  return tex(256, 256, gl.LINEAR, gl.REPEAT, n);
+})();
+
+lab.load = function (path) {
+  return new Promise((res, rej) => {
+    const im = new Image();
+    im.onload = () => { lab.src = tex(im.width, im.height, gl.LINEAR, gl.CLAMP_TO_EDGE, im); lab.srcN = tex(im.width, im.height, gl.NEAREST, gl.CLAMP_TO_EDGE, im); lab.W = im.width; lab.H = im.height; lab.targets = null; res([im.width, im.height]); };
+    im.onerror = rej;
+    im.src = '/frames/' + path;
+  });
+};
+
+// draw one pass: program, uniforms {name: value}, samplers [[name, texture]], into target (null = screen)
+function pass(prog, uni, samplers, into) {
+  gl.useProgram(prog);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, into ? into.fb : null);
+  gl.viewport(0, 0, into ? into.w : lab.W, into ? into.h : lab.H);
+  gl.uniform1f(gl.getUniformLocation(prog, 'flipY'), into ? 0 : 1);
+  const ss = gl.getUniformLocation(prog, 'love_ScreenSize');
+  if (ss) gl.uniform4f(ss, into ? into.w : lab.W, into ? into.h : lab.H, 1, 0);
+  samplers.forEach(([name, T], i) => {
+    gl.activeTexture(gl.TEXTURE0 + i);
+    gl.bindTexture(gl.TEXTURE_2D, T.t);
+    const loc = gl.getUniformLocation(prog, name);
+    if (loc) gl.uniform1i(loc, i);
+  });
+  for (const k in uni) {
+    const loc = gl.getUniformLocation(prog, k);
+    if (!loc) continue;
+    const v = uni[k];
+    if (typeof v === 'number') gl.uniform1f(loc, v);
+    else if (v.length === 2) gl.uniform2fv(loc, v);
+    else if (v.length === 3) gl.uniform3fv(loc, v);
+    else gl.uniform4fv(loc, v);
+  }
+  gl.bindBuffer(gl.ARRAY_BUFFER, quad);
+  gl.enableVertexAttribArray(1);
+  gl.vertexAttribPointer(1, 2, gl.FLOAT, false, 0, 0);
+  gl.disableVertexAttribArray(0);
+  gl.vertexAttrib4f(0, 0, 0, 0, 1);
+  gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+}
+
+// lab.frames(u): the sizes and uniforms for one frame, from `u` -- the table
+// lib/CRT.lua builds (CRT.uniforms), passed straight through.
+lab.run = function (u, frames) {
+  frames = frames || 1;
+  cv.width = lab.W; cv.height = lab.H;
+  const key = [u.RW, u.RH, u.GW, u.GH, lab.W, lab.H].join('x');
+  if (!lab.targets || lab.targets.key !== key) {
+    lab.targets = { key, R: [target(u.RW, u.RH), target(u.RW, u.RH)],
+                    G: [target(u.GW, u.GH), target(u.GW, u.GH)], Z: target(lab.W, lab.H), cur: 0 };
+  }
+  const T = lab.targets;
+  const t0 = performance.now();
+  if (u.frame && !T.bezelDone) {
+    pass(lab.program(['PASS_BEZEL']), u.bezel, [['noiseTex', lab.noiseL]], T.Z);
+    T.bezelDone = true;
+  }
+  for (let f = 0; f < frames; f++) {
+    const cur = T.R[T.cur], prev = T.R[1 - T.cur];
+    pass(lab.program(['PASS_SIGNAL'].concat(u.signalDefines)), u.signal,
+         [['MainTex', lab.src], ['prevTex', prev], ['noiseTex', lab.noise]], cur);
+    pass(lab.program(['PASS_GLOW']), { dir: [1 / u.GW, 0] }, [['MainTex', cur]], T.G[0]);
+    pass(lab.program(['PASS_GLOW']), { dir: [0, 1 / u.GH] }, [['MainTex', T.G[0]]], T.G[1]);
+    const samp = [['MainTex', cur], ['glowTex', T.G[1]], ['noiseTex', lab.noise], ['srcTex', lab.srcN]];
+    if (u.frame) samp.push(['bezelTex', T.Z]);
+    pass(lab.program(['PASS_TUBE'].concat(u.tubeDefines)), u.tube, samp, null);
+    T.cur = 1 - T.cur;
+  }
+  gl.finish();
+  return performance.now() - t0;
+};
+
+lab.save = function (name) {
+  return new Promise(res => cv.toBlob(b => fetch('/save/' + name, { method: 'POST', body: b }).then(() => res(name)), 'image/png'));
+};
+
+// one frame of the game through one set, saved: `q` is the /uniforms query
+// (preset=home&sp=6&...), `n` frames run first so the persistence settles
+lab.shot = async function (frame, q, name, n) {
+  await lab.load(frame);
+  const u = await (await fetch('/uniforms?w=' + lab.W + '&h=' + lab.H + '&' + q)).json();
+  if (u.error) return 'ERR ' + u.error;
+  let ms;
+  try { ms = lab.run(u, n || 3); } catch (e) { return 'GL ' + e.message.slice(0, 3000); }
+  await lab.save(name);
+  return name + ' ' + ms.toFixed(1) + 'ms';
+};
+
+// every scene through every set: lab.batch('probe_out_crt', ['map2d','map3d'], ['home'], '&room=day')
+lab.batch = async function (dir, scenes, sets, extra) {
+  const r = [];
+  for (const sc of scenes) for (const p of sets) {
+    lab.targets = null;
+    const sp = /boot/.test(sc) ? 7 : 6;
+    r.push(await lab.shot(dir + '/' + sc + '_off.png', 'preset=' + p + '&sp=' + sp + (extra || ''), sc + '_' + p + '.png', 4));
+  }
+  return r.join(' | ');
+};
+
+boot().then(() => { lab.ready = true; log('ready'); }).catch(e => log('BOOT FAIL ' + e));
+window.onerror = (m) => log('ERR ' + m);
+</script>
+</body></html>

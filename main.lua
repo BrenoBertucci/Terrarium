@@ -42,7 +42,8 @@ local V = { mod = mod, path = mod.path }
 -- beside us without overwriting the same pipeline / transition slots.
 local PIPE_VOXEL = "terrarium_voxel"
 local PIPE_TILT  = "terrarium_tiltshift"
-V.PIPE_VOXEL, V.PIPE_TILT = PIPE_VOXEL, PIPE_TILT
+local PIPE_CRT   = "terrarium_crt"
+V.PIPE_VOXEL, V.PIPE_TILT, V.PIPE_CRT = PIPE_VOXEL, PIPE_TILT, PIPE_CRT
 
 -- Letter keys: free of engine 2-5 and of upstream DRAMATIC_SHAPE's 3/5/6/7/8/9,
 -- so both mods can be enabled without fighting for the same presses.
@@ -82,6 +83,12 @@ local KEY_CAMZ  = "f"   -- C-down: the zoom ladder
 -- engine's DEFAULT_GAMEPAD_BINDINGS claims only a/b/start/back and the
 -- shoulders -- and is wired through the input.gamepad hook below.
 local KEY_PARRY = "y"
+-- CRT: L for "liga" -- what you say to a television. Free of the engine's
+-- bindings and 1-4, of upstream DRAMATIC_SHAPE's 3/5/6/7/8/9 and of every
+-- letter above (i and l were the two left that no Game Boy button, camera
+-- control or editor key claims). Walks OFF -> AUTO -> PVM -> TRINITRON ->
+-- HOME -> RF -> OFF, anywhere a screen is not taking the keyboard itself.
+local KEY_CRT = "l"
 V.KEYS = {
   voxel = KEY_VOXEL, grid = KEY_GRID, tilt = KEY_TILT,
   curve = KEY_CURVE, battle = KEY_BATTLE, wild = KEY_WILD, map = KEY_MAP,
@@ -212,6 +219,7 @@ local Comforts = V.require("Comforts")
 local MiniMap = V.require("MiniMap")
 local StartMenuXY = V.require("StartMenuXY")
 local MarioCam = V.require("MarioCam")
+local CRT = V.require("CRT")
 
 -- Forward declaration: the voxel pipeline's update hook (registered below)
 -- calls this, and it is defined further down with the settings it drives.
@@ -744,6 +752,47 @@ mod.content.render_pipelines:register(PIPE_TILT, {
   end,
 })
 
+-- ------- the television
+--
+-- A `present` pass: the whole finished frame, world and UI, menus, battles
+-- and the title screen alike -- a CRT is a fact about the screen, not about
+-- the map. Lowest priority, so it is the last thing done to the frame: any
+-- other mod's colour grade lands on the picture BEFORE it reaches the tube.
+--
+-- The level is the engine's, but nobody steps it: the CRT row (a ModSetting,
+-- so it can speak Portuguese and walk five sets) decides, and the update below
+-- holds the level at 1 while a set is on screen -- including the second its
+-- power-off moment takes -- and at 0 otherwise. Level 0 is no present pass at
+-- all, so OFF does not even cost the engine its present canvas. No `hotkey`
+-- here: the L key is this mod's own (see the hotkey block), and the engine's
+-- row for this record is taken off the menu in favour of the CRT row.
+mod.content.render_pipelines:register(PIPE_CRT, {
+  label = "CRT",
+  priority = -100,
+
+  update = function(dt)
+    local Game = require("src.core.Game")
+    local Pipelines = require("src.render.Pipelines")
+    CRT.update(dt, Game)
+    local want = CRT.active() and 1 or 0
+    if Pipelines.level(PIPE_CRT) ~= want then Pipelines.setLevel(PIPE_CRT, want) end
+  end,
+
+  -- asked only while the level is 1: the shaders are built the first time a
+  -- set is switched on, never for a player who leaves the row OFF
+  available = function()
+    return CRT.available()
+  end,
+
+  present = function(canvas, ctx)
+    return CRT.present(canvas, ctx)
+  end,
+
+  invalidate = function()
+    CRT.invalidate()
+  end,
+})
+
 -- ------- this mod's own settings
 --
 -- Neither of these is a pipeline: they own no pass of the frame, they
@@ -842,6 +891,54 @@ local function stagedBattles()
 end
 
 local SETTINGS = {
+  -- The television (lib/CRT.lua). First, so it lands right under T-SHIFT with
+  -- the other things that decide what the picture looks like. `full` on both:
+  -- FULL is a preset for the diorama, and what the diorama is shown ON is not
+  -- part of it.
+  { CRT.setting,
+    "Shows the whole game on a television -- the map, the battles, the menus "
+    .. "and the title. Not a stripe overlay: each set is a signal and a tube. "
+    .. "PVM is Sony's studio monitor on RGB, sharp, with black between every "
+    .. "line. TRINITRON is a living-room Trinitron on S-Video: an aperture "
+    .. "grille, a tube curved one way, the two damper wires, colour a little "
+    .. "too good. HOME is the family set on the composite jack: a slot mask, "
+    .. "warm whites, and NTSC doing what NTSC did -- the Game Boy's dithering "
+    .. "melts into flat colour and a faint rainbow, the way a waterfall did on "
+    .. "a Mega Drive. RF is an older set on the aerial: snow, a ghost, a hum "
+    .. "bar, lines that will not quite hold. AUTO picks for the machine (HOME, "
+    .. "or a light TRINITRON on a phone). Every line swells with brightness, "
+    .. "the phosphor glows on for a moment, the glass reflects the room -- the "
+    .. "window by day, the lamp at night when GLOW is on -- and lightning "
+    .. "lights it. The set comes on with a line that opens, goes off to a "
+    .. "dot, and degausses when you change it. Key L. OFF costs nothing.",
+    pt = "Mostra o jogo inteiro numa TV de tubo -- o mapa, as batalhas, os "
+    .. "menus e a tela de titulo. Nao e uma camada de listras: cada aparelho "
+    .. "e um sinal e um tubo. PVM e o monitor de estudio da Sony em RGB, "
+    .. "nitido, com preto entre todas as linhas. TRINITRON e uma Trinitron de "
+    .. "sala em S-Video: grade de abertura, tubo curvo num sentido so, os "
+    .. "dois fios estabilizadores, cor um pouco boa demais. CASA e a TV da "
+    .. "familia no cabo amarelo (composto): mascara de fendas, branco quente, "
+    .. "e o NTSC fazendo o que o NTSC fazia -- o pontilhado do Game Boy derrete "
+    .. "em cor lisa e um arco-iris leve, como a cachoeira do Mega Drive. RF e "
+    .. "uma TV mais velha na antena: chuvisco, fantasma, uma faixa de zumbido "
+    .. "rolando, linhas que nao param quietas. AUTO escolhe pela maquina "
+    .. "(CASA, ou uma TRINITRON leve no celular). Cada linha engorda com o "
+    .. "brilho, o fosforo fica aceso um instante, o vidro reflete a sala -- a "
+    .. "janela de dia, o abajur a noite com o GLOW ligado -- e o relampago "
+    .. "acende o vidro. Liga com uma linha que se abre, desliga num ponto, e "
+    .. "desmagnetiza quando voce troca. Tecla L. DESLIGADO nao custa nada.",
+    full = true },
+  { CRT.frameSetting,
+    "Draws the television around the picture: each set its own cabinet -- the "
+    .. "PVM's grey, the Trinitron's black, the family set's graphite, the old "
+    .. "aerial set's wood -- with the picture's light spilling onto the bevel "
+    .. "around the glass. Shrinks the picture to fit the cabinet.",
+    pt = "Desenha a TV em volta da imagem: cada aparelho com o seu gabinete -- "
+    .. "o cinza do PVM, o preto da Trinitron, o grafite da TV de casa, a "
+    .. "madeira da TV antiga de antena -- com a luz da imagem respingando na "
+    .. "borda em volta do vidro. Diminui a imagem para caber no gabinete.",
+    full = true,
+    when = function() return CRT.setting:get() ~= "off" end },
   -- `full` on both: FULL owns the rows that describe the LOOK, and what
   -- this device can afford to draw is not one of them. A preset that took
   -- the performance rows off the menu would be a preset a player on a slow
@@ -1631,6 +1728,8 @@ local HOTKEYS = {
   [KEY_CAMR]   = "cam:right",
   [KEY_CAMR2]  = "cam:alt",
   [KEY_CAMZ]   = "cam:zoom",
+  -- the television: any screen that does not take the keyboard itself
+  [KEY_CRT]    = "crt",
 }
 
 -- ------- the shot editor, which players never see
@@ -1869,6 +1968,12 @@ do
           end
         end
         return
+      elseif claim == "crt" then
+        -- Not behind the free-roam gate: a television is switched on and
+        -- off whatever is on it -- a fight, a menu, the title. The moments
+        -- (power, degauss) are the answer to the press.
+        CRT.setting:cycle(self)
+        return
       elseif claim == "vfxdemo" then
         -- Behind the voxel pass's own free-roam gate like every key below:
         -- these draw through Voxel3D.project, so firing one with no camera
@@ -2001,6 +2106,9 @@ mod.hooks:wrap("ui.options.rows", function(next, game, rows)
   pinEngineFx(game)
   dropRow(out, "tilt")
   dropRow(out, "gbcfx")
+  -- the engine's own OFF/ON row for the CRT record: the CRT row below is the
+  -- one that speaks for it (see the record)
+  dropRow(out, "pipeline:" .. PIPE_CRT)
   -- BATTLE LAYOUT is the ENGINE's row, and this is the one place the mod takes
   -- one away. While a fight can be staged on the map, OG is the only layout it
   -- can be composed in (OverworldBattle.forceOG), so the value is pinned there
@@ -2205,6 +2313,7 @@ do
       local hadBattles = OverworldBattle.enabled()
       local hadWild = WildRoamers.enabled()
       local hadWeather = Weather.enabled()
+      local hadCRT = CRT.setting:get() ~= "off"
       local wasOn = idAt(self, self.index)
       inner(self, dt)
       local after = Pipelines.level(PIPE_VOXEL)
@@ -2215,7 +2324,9 @@ do
          -- WEATHER arriving at or leaving OFF takes GROUND with it, for the
          -- same reason WILD takes W-COUNT: with no sky there is never a
          -- puddle for that row to decide anything about
-         or Weather.enabled() ~= hadWeather then
+         or Weather.enabled() ~= hadWeather
+         -- CRT arriving at or leaving OFF takes CRT FRAME with it
+         or (CRT.setting:get() ~= "off") ~= hadCRT then
         local rebuilt = OptionsMenu.new(self.game)
         self.rows = rebuilt.rows
         -- Follow the row the cursor was ON rather than the slot it was in:
@@ -2634,5 +2745,5 @@ mod.exports.version = mod.version or "1.40.0-beta"
 -- exposed so a companion mod can pin its own tiles' shapes or read the
 -- camera without reaching into this mod's file layout
 mod.exports.lib = V
-mod.exports.pipelines = { voxel = PIPE_VOXEL, tiltshift = PIPE_TILT }
+mod.exports.pipelines = { voxel = PIPE_VOXEL, tiltshift = PIPE_TILT, crt = PIPE_CRT }
 mod.exports.keys = V.KEYS
