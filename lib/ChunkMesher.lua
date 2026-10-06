@@ -516,24 +516,37 @@ local function runGeometry(map, bodyOnly, masks, sink, waterSink)
   -- ...and it thins TOWARD a garden rather than at its edge: the value
   -- spreads CLEAR_REACH tiles out, a tile further from the bank each step,
   -- so lagoon water fades into the deep instead of stopping in a square.
+  --
+  -- The spread is EUCLIDEAN: every tile remembers which clear tile its value
+  -- came from and measures the straight line back to it. A plain step-per-
+  -- neighbour BFS is a Manhattan distance, whose contours are diamonds; the
+  -- CLASSIC sheet blends it smoothly and never showed them, but the ANIME
+  -- sheet cuts hard depth bands and drew every diamond as a pale polygon
+  -- over open water (Route 21, 2026-09-29).
   local clear = {}
   do
     local CLEAR_MAX, CLEAR_STEP = 5.6, 1.2
     local queue, head = {}, 1
+    local from = {}
+    local function xy(k) return k % 4096, math.floor(k / 4096) end
     for k, c in pairs(S.clearWater or {}) do
       clear[k] = c
+      from[k] = k
       queue[#queue + 1] = k
     end
     while queue[head] do
       local k = queue[head]
       head = head + 1
-      local c = clear[k] + CLEAR_STEP
-      if c <= CLEAR_MAX then
-        for _, m in ipairs({ k - 1, k + 1, k - 4096, k + 4096 }) do
-          if c < (clear[m] or 1e9) then
-            clear[m] = c
-            queue[#queue + 1] = m
-          end
+      local s0 = from[k]
+      local sx, sy = xy(s0)
+      local base = S.clearWater[s0] or clear[s0]
+      for _, m in ipairs({ k - 1, k + 1, k - 4096, k + 4096 }) do
+        local mx, my = xy(m)
+        local c = base + CLEAR_STEP * math.sqrt((mx - sx) ^ 2 + (my - sy) ^ 2)
+        if c <= CLEAR_MAX and c < (clear[m] or 1e9) - 1e-6 then
+          clear[m] = c
+          from[m] = s0
+          queue[#queue + 1] = m
         end
       end
     end

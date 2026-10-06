@@ -498,6 +498,32 @@ local SHADER = [[
   uniform float aoRange;    // and how far a neighbour still shades, world px
   uniform float aoPower;
 
+  // ------- THE WATER SHEET TAKES NO AO AND NO RIM
+  //
+  // Both read the normal this pass rebuilds out of four depths, and on the
+  // water sheet that normal is flat PER TRIANGLE of an 8 px grid lifted by
+  // the swell -- so the rim's threshold on N.V and the AO's taps across a
+  // translucent plane land on whole facets at once. On open water that drew
+  // pale polygons with straight edges, drifting with the swell, over the
+  // painted sheet (Route 21, every rung from AO up; found filming the ANIME
+  // water, 2026-09-29). The sheet has its own light: it takes none of this.
+  //
+  // Identified the way the SSR block identifies it -- the band below zero in
+  // the FLAT world, facing up -- with its own copy of the band and the bend,
+  // because those uniforms live behind RT_SSR and AO runs without it.
+  uniform vec2 sheetBand;   // x = ceiling, y = floor, FLAT world
+  uniform vec3 sheetCurve;  // the V-CURVE: xy = focus, z = k (as curveK)
+  uniform float sheetDebug; // probes: paint what onSheet takes, red
+  bool onSheet(vec3 P, vec3 N) {
+    float drop = 0.0;
+    if (sheetCurve.z > 0.0) {
+      vec2 cd = P.xz - sheetCurve.xy;
+      drop = dot(cd, cd) * sheetCurve.z;
+    }
+    float fy = P.y + drop;
+    return fy < sheetBand.x && fy > sheetBand.y && N.y > 0.6;
+  }
+
   // The surface normal, out of four neighbouring depths rather than out of
   // fwidth().
   //
@@ -1009,14 +1035,19 @@ local SHADER = [[
       vec3 P = worldAt(tc, d);
 #ifdef RT_AO
       vec3 N = normalAt(tc, d, P);
-      rgb *= ambient(tc, P, N);
+      // not on the water sheet (see onSheet)
+      bool sheetPx = onSheet(P, N);
+      rgb = mix(rgb, vec3(1.0, 0.0, 0.0), sheetDebug * (sheetPx ? 1.0 : 0.0));
+      if (!sheetPx) {
+        rgb *= ambient(tc, P, N);
 #ifdef RT_ANIME
-      // ADDED, not multiplied, and before the water: a rim is a light drawn
-      // ON the surface at one brightness, so it must not take the material's
-      // colour -- and a rim on the bank beside a pond should still be there
-      // in the pond's reflection of it.
-      rgb += animeRimAt(P, N) * animeRimColor;
+        // ADDED, not multiplied, and before the water: a rim is a light
+        // drawn ON the surface at one brightness, so it must not take the
+        // material's colour -- and a rim on the bank beside a pond should
+        // still be there in the pond's reflection of it.
+        rgb += animeRimAt(P, N) * animeRimColor;
 #endif
+      }
 #endif
 #ifdef RT_SSR
       // Water, identified geometrically and not by a flag: it is the only
@@ -1316,6 +1347,15 @@ function RayFX.apply(o)
   send("aoRadius", radius)
   send("aoRange", o.aoRange or RayFX.AO_RANGE)
   send("aoPower", o.aoPower or RayFX.AO_POWER)
+  -- the water sheet's band, which AO and the rim stay off (see onSheet):
+  -- the same band and bend the SSR block is sent below
+  send("sheetBand", { RayFX.WATER_Y, RayFX.WATER_BASE - (Water.swell() or 0)
+                                     - RayFX.WATER_SLACK })
+  do
+    local c = o.curve
+    send("sheetCurve", { c and c[1] or 0, c and c[2] or 0, c and c[3] or 0 })
+  end
+  send("sheetDebug", RayFX.SHEET_DEBUG and 1 or 0)
 
   -- The anime rung rides on AO's own normal, so it is sent here beside it
   -- rather than in a block of its own. Guarded on the rung to keep a frame

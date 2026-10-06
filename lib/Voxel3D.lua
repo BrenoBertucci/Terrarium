@@ -2759,18 +2759,28 @@ precision highp sampler2D;
       vec3 midC = mix(vec3(0.19, 0.46, 0.63), tileC, 0.30);
       vec3 deepC = mix(vec3(0.13, 0.31, 0.52), tileC * 0.75, 0.25);
       vec3 lightC = mix(vec3(0.45, 0.77, 0.85), tileC, 0.20);
-      // depth in three hard bands off the bank distance, not a ramp
-      float b1 = step(1.0, vShore);
-      float b2 = step(3.0, vShore);
+      // THE PATCHES' noise, first: the depth bands below borrow it
+      VXFP vec2 pq = patchSpace(vWorld.xz, at);
+      float nA = vnoise(pq);
+      float nB = vnoise(pq * 2.03 + vec2(5.2, 1.3) - waterCurrent * (at * 0.04));
+      // DEPTH is a soft ramp off the bank distance -- the one soft thing on
+      // this sheet, on purpose. vShore is not only the bank: over a reef
+      // garden ReefKit stamps it to 0.8 (lagoon water, to see the garden
+      // through), cell by cell, and it is interpolated linearly across the
+      // 8 px tile triangles. Cut into hard bands it drew the garden's
+      // footprint as pale polygons in the middle of the sea (found filming
+      // the GIF, 2026-09-29). The cel hardness lives in the patches, the
+      // glints, the rings and the foam; the depth only tints under them.
+      float wob = (vnoise(vWorld.xz * vec2(0.045, 0.07) + 11.0) - 0.5) * 1.6;
+      float dz = vShore + wob * 0.6;
+      float b1 = smoothstep(0.5, 1.9, dz);
+      float b2 = smoothstep(2.2, 4.4, dz);
       vec3 bodyC = mix(mix(shoalC, midC, b1), deepC, b2);
       vec3 shadeC = mix(mix(midC, deepC, b1), deepC * 0.80, b2);
       // THE PATCHES: two octaves of value noise in patch space, lifted on
       // the swell's crests and by the rings, and leaning toward the sky on
       // the far water where the view grazes it. Light where a facet catches
       // the sky, shadow where it turns away -- and nothing in between.
-      VXFP vec2 pq = patchSpace(vWorld.xz, at);
-      float nA = vnoise(pq);
-      float nB = vnoise(pq * 2.03 + vec2(5.2, 1.3) - waterCurrent * (at * 0.04));
       float n = nA * 0.64 + nB * 0.36
               + vSwellH * min(swell, 1.2) * 0.12
               + rip.x * 0.30
@@ -2786,7 +2796,10 @@ precision highp sampler2D;
       // the shoal is mostly bed, the open water half body -- a lake with a
       // garden in it (lib/ReefKit.lua) has to keep showing the garden -- and
       // a light patch mostly light
-      float alpha = mix(mix(0.30, 0.52, b1), 0.66, b2);
+      // (a RAMP, not the bands: coverage is what lets the bed through, and
+      // a hard step in it drew the band edges a second time as a see-through
+      // seam)
+      float alpha = mix(0.30, 0.66, smoothstep(0.3, 3.8, dz));
       alpha = max(alpha, lightP * 0.72);
       // THE RINGS, drawn the way a cel ring is drawn: the raised band light,
       // a white crescent on the flank of each crest that turns toward the
@@ -3053,9 +3066,11 @@ precision highp sampler2D;
       // and the line of the next wave coming in: a thin white contour that
       // walks toward the bank and melts into the foam there, one every few
       // seconds, staggered along the shore so a long beach does not pulse
-      // in step
+      // in step. It stays under 0.75 tiles: a reef garden's lagoon reads 0.8
+      // (ReefKit.CLEAR), and a line walking the contour of THAT drew the
+      // garden's outline in the middle of the sea.
       float surge = fract(foamPhase * 0.09 + (vWorld.x + vWorld.z) * 0.0021);
-      float lineD = waterShoreFoam + 1.5 - surge * 1.3;
+      float lineD = waterShoreFoam + 0.42 - surge * 0.34;
       float shoreLine = (1.0 - step(0.07, abs(vShore - lineD))) * surge
                       * (1.0 - freeze);
       rgb = mix(rgb, waterFoam * light, shoreLine * 0.85);
