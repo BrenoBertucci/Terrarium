@@ -20,11 +20,28 @@ The old `-mobile` channel is retired. Historical tags keep it (`v1.28.0-mobile` 
 
 Tags and packages:
 
-- Git tag: `v1.38.0-beta`
-- Zip asset: `TERRARIUM-1.38.0-beta.zip`
-- `manifest.json` / catalog `version` field: `1.38.0-beta`
+- Git tag: `v1.39.0-beta`
+- Zip asset: `TERRARIUM-1.39.0-beta.zip`
+- `manifest.json` / catalog `version` field: `1.39.0-beta`
 
 ## Unreleased
+
+Nothing yet.
+
+## 1.39.0-beta
+
+> **⚠️ BETA -- still full of bugs. / BETA -- ainda cheia de bugs.**
+>
+> The 1.38.0-beta test build with the water and the wind redone on top: a
+> WATER STYLE row (ANIME / CLASSIC) over a real wave equation, AUTO swell, a
+> fishing float, and the visible wind drawn as strokes and leaves. Every rough
+> edge listed under 1.37.0-beta below still stands, and none of this ran on a
+> phone. Known: changing maps with 3D on grows the Lua heap by 100-280 MB a
+> visit on a long session, which ends in frames of a second or more; closing
+> the game clears it.
+>
+> Um erro em tempo de desenho derruba o modo 3D para o 2D até fechar o jogo
+> (`mod_storage/.../TERRARIUM/errors.lua` diz qual). Guarde uma cópia do save.
 
 ### The wind you can see, rebuilt -- strokes, twelve leaves, three depths
 
@@ -78,8 +95,8 @@ Tags and packages:
   sleep, recentre, encoding, and ROUND -- the five-point stencil made
   octagons, and the check fails on it).
 - **feat: WATER STYLE row -- ANIME / CLASSIC.** ANIME is a compile-time
-  variant of the sheet (`ANIME_WATER`), painted like a cel background: three
-  depth bands, drifting light/shadow patches in patch space, star glints on the
+  variant of the sheet (`ANIME_WATER`), painted like a cel background: a soft
+  depth tint under hard-edged light/shadow patches drifting in patch space, star glints on the
   light patches while the sun is up and it is dry, rings as a light band with a
   white crescent on the flank that faces the sun, ring caustics on the bed
   displaced along the sun ray by the depth, whitecap scribbles once the chop is
@@ -103,6 +120,15 @@ Tags and packages:
   costs ~0.35 ms a frame of CPU while awake, spikes of ~3 ms on a grid
   recentre; the whole-frame A/B on this i3 + UHD was inside its own noise
   (+-3 ms s.e.), so no whole-frame claim is made.
+- **fix: pale polygons on open ANIME water.** Straight-edged light shapes
+  drifted with the swell in the middle of the sea (Route 21). Three causes,
+  all fixed: the ANIME depth was cut into hard bands off `vShore`, which a reef
+  garden stamps to 0.8 cell by cell -- now a soft ramp with a wobble, and the
+  incoming shore line stays under 0.75 tiles; the mesher spread that value by
+  a Manhattan BFS, whose contours are diamonds -- now Euclidean
+  (`lib/ChunkMesher.lua`); and SCREEN FX's AO and the ANIME rim read a normal
+  that is flat per triangle on the swell's grid -- the water sheet now takes
+  neither (`RayFX` `onSheet`; `RayFX.SHEET_DEBUG` paints what it skips).
 - Known: `tests/water_spectrum_offline.lua` "open water is unchanged" was
   already failing before this change.
 

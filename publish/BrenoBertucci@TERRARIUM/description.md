@@ -38,6 +38,28 @@ Upstream Dramatic Shape still uses `3` / `5` / `6` / `7` / `8` / `9`.
 - Wild Pokemon visible in the grass; ecology / shelter / city life systems
 - Tuned defaults for lower-end / mobile hardware
 
+## New in 1.39.0-beta
+
+The 1.38.0-beta test build with the water and the wind redone -- same rough
+edges, still BETA.
+
+- **WATER STYLE row -- ANIME / CLASSIC.** ANIME paints the sea like a cel
+  background: drifting light and shadow patches, star glints in the sun, ring
+  highlights with a white crescent, ring caustics on the bed, whitecaps in a
+  chop and a shore line walking in. CLASSIC is the old dithered sheet.
+- **Rings that remember.** A real wave equation runs on the water round the
+  player: surfing in, the bow wake, sitting still, raindrops and the fishing
+  float all throw rings that travel, cross, and reflect off the bank.
+- **WATER gains AUTO** (the new default): the weather picks the swell.
+- **A fishing float.** Cast, plop, bob, bite, strike -- read off the engine's
+  own fishing, which still rolls the catch.
+- **The visible wind, redrawn.** The old puffs read as gas; the air is now
+  drawn as strokes (loops in a breeze, long flows in a gale) with twelve
+  leaves at three depths, some passing right past the lens.
+- **Fixed:** pale straight-edged polygons drifting on open ANIME water.
+- Known: a long session hopping between maps with 3D on slowly fills the Lua
+  heap and the frame rate falls; closing the game clears it.
+
 ## New in 1.38.0-beta
 
 Four merged pull requests on top of 1.37.0-beta -- the same test build, same rough
