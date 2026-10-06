@@ -261,9 +261,12 @@ return function(game)
     -- to give up, and a bug report written from here should show all of
     -- them.  (Eight, then sixteen, now twenty-four; the number is spelled
     -- out rather than computed so that adding a rung and not thinking about
-    -- it fails this test.)
-    check(#Voxel3D.compileLog == 24,
-          "[nothing builds] all twenty-four refusals on record ("
+    -- it fails this test.)  With the ANIME water sheet on, the ladder is
+    -- walked twice -- with it, then again without it -- before the mode is
+    -- given up (Voxel3D.animeWaterRefused): forty-eight.
+    local expected = Voxel3D.animeWaterRefused and 48 or 24
+    check(#Voxel3D.compileLog == expected,
+          "[nothing builds] all " .. expected .. " refusals on record ("
           .. #Voxel3D.compileLog .. ")")
     local rep = Voxel3D.report()
     check(rep:find("OFF", 1, true) ~= nil,
